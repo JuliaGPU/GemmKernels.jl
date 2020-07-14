@@ -2,5 +2,5 @@ using GemmKernels
 using Test
 
 @testset "GemmKernels.jl" begin
-    # Write your tests here.
+    include("tiling.jl")
 end
