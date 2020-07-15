@@ -5,7 +5,16 @@ using Statistics
 
 pyplot()
 
-convert_to_array(str) = parse.(Float64, split(str, ','))
+function convert_to_array(str)
+    els = split(str, ',')
+
+    if "n/a" in els
+        @warn "Benchmark contains 'n/a' values. These will be ignored."
+        filter!(el -> el != "n/a", els)
+    end
+
+    return parse.(Float64, els)
+end
 
 titles = Dict(
               "wmma" => "Performance of mixed-precision GEMM",
