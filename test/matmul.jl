@@ -33,7 +33,7 @@ using GemmKernels
     #= end =#
 
     @testset "WMMA GEMM (TT)" begin
-        @testset "(M = $M, N = $N, K = $K)" for M in [16],
+        @testset "(M = $M, N = $N, K = $K)" for M in [32],
             N in [16],
             K in [16]
 
@@ -61,8 +61,8 @@ using GemmKernels
                 shared_d_layout = Layout.AlignedColMajor{Float32},
 
                 warps_per_block = 1,
-                compute_warp = (M = 16, N = 16, K = 16),
-                block_shape = (M = 16, N = 16, K = 16),
+                compute_warp = (M = 32, N = 16, K = 16),
+                block_shape = (M = 32, N = 16, K = 16),
                                     )
 
             GemmKernels.matmul(a, b, c, d, conf)
