@@ -11,6 +11,11 @@ LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
+CUDA = "1.1"
+ForwardDiff = "0.10"
+GPUifyLoops = "0.2"
+LLVM = "2.0"
+StaticArrays = "0.12"
 julia = "1.5"
 
 [extras]
