@@ -38,7 +38,7 @@ end
 abstract type LayoutBase{T} end
 
 @inline eltype(::Type{<:LayoutBase{T}}) where {T} = T
-@inline size(::Type{<:LayoutBase{T}}, logical_size::NamedTuple) where {T} = Tuple(logical_size)
+@inline physical_size(::Type{<:LayoutBase{T}}, logical_size::NamedTuple) where {T} = Tuple(logical_size)
 
 # --------------
 # Padded layouts
@@ -52,7 +52,7 @@ struct Padded{L, P} end
 end
 
 @inline eltype(::Type{Padded{L, P}}) where {L, P} = eltype(L)
-@inline size(::Type{Padded{L, P}}, logical_size::NamedTuple) where {L, P} = size(L, pad_logical_coord(Padded{L, P}, logical_size))
+@inline physical_size(::Type{Padded{L, P}}, logical_size::NamedTuple) where {L, P} = physical_size(L, pad_logical_coord(Padded{L, P}, logical_size))
 @inline load(::Type{Padded{L, P}}, workspace, tile::Tile, logical_size::NamedTuple) where {L, P} = load(L, workspace, tile)
 @inline store!(::Type{Padded{L, P}}, workspace, value, tile::Tile) where {L, P} = store!(L, workspace, value, tile::Tile)
 
@@ -133,7 +133,7 @@ end
 
 struct SplitComplex{T} <: LayoutBase{T} end
 
-@inline function size(::Type{SplitComplex{T}}, logical_size::NamedTuple) where {T}
+@inline function physical_size(::Type{SplitComplex{T}}, logical_size::NamedTuple) where {T}
     t = Tuple(logical_size)
     return (t..., 2)
 end
