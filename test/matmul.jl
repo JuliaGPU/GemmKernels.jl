@@ -36,6 +36,9 @@ using GemmKernels
 
                 global_c_layout = Layout.AlignedColMajor{Float32},
                 global_d_layout = Layout.AlignedColMajor{Float32},
+
+                is_a_col_major = !transpose_a,
+                is_b_col_major = !transpose_b,
                                     )
 
             GemmKernels.matmul(a, b, c, d, conf;
