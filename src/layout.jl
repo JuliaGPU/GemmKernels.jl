@@ -97,6 +97,49 @@ end
     end
 end
 
+# ---------------
+# AlignedRowMajor
+# ---------------
+
+struct AlignedRowMajor{T} <: LayoutBase{T} end
+
+@inline physical_size(::Type{AlignedRowMajor{T}}, logical_size::NamedTuple) where {T} = reverse(Tuple(logical_size))
+
+# TODO: cleanup vectorisation
+@inline function load(::Type{AlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+    vec_len = 16 ÷ sizeof(T)
+    N = (sizeof(T) * vec_len) ÷ sizeof(Float32)
+    res = MArray{Tuple{size[1], size[2] ÷ vec_len}, NTuple{N, VecElement{Float32}}}(undef)
+
+    @unroll for i = 1 : size[1]
+        @unroll for j = 1 : vec_len : size[2]
+            t = translate(tile, (i - 1, j - 1))
+
+            linear_base = linearise(reverse(Tuple(t.base)), Base.size(workspace))
+            linear_offset = linearise(reverse(Tuple(t.offset)), Base.size(workspace))
+
+            @inbounds res[i, j] = vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1)
+        end
+    end
+
+    return res
+end
+
+@inline function store!(::Type{AlignedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+    vec_len = 16 ÷ sizeof(T)
+
+    @unroll for i = 1 : size[1]
+        @unroll for j = 1 : vec_len : size[2]
+            t = translate(tile, (i - 1, j - 1))
+
+            linear_base = linearise(reverse(Tuple(t.base)), Base.size(workspace))
+            linear_offset = linearise(reverse(Tuple(t.offset)), Base.size(workspace))
+
+            @inbounds vstorea!(Vec{vec_len, T}, pointer(workspace), value[i, j], linear_base + linear_offset - 1)
+        end
+    end
+end
+
 # ------------------
 # InterleavedComplex
 # ------------------

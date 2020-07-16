@@ -1,5 +1,4 @@
 using CUDA
-using GemmKernels
 
 M = parse(Int, ARGS[1])
 N = parse(Int, ARGS[2])
@@ -7,13 +6,8 @@ K = parse(Int, ARGS[3])
 
 function benchmark_matmul(a, b, c, d)
     CUDA.@sync begin
-        conf = GemmKernels.get_config(
-            gemm_shape = (M = M, N = N, K = K),
-            operator = Operator.WMMAOp{16, 16, 16},
-            global_a_layout = Layout.AlignedColMajor{Float16},
-            global_c_layout = Layout.AlignedColMajor{Float32},
-                                )
-        GemmKernels.matmul(a, b, c, d, conf)
+        CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
+        CUBLAS.cublasGemmEx(CUBLAS.handle(), CUBLAS.CUBLAS_OP_N, CUBLAS.CUBLAS_OP_T, M, N, K, [Float32(1)], a, CUDA.R_16F, M, b, CUDA.R_16F, K, [Float32(1)], c, CUDA.R_32F, M, CUDA.R_32F, CUBLAS.CUBLAS_GEMM_DEFAULT)
     end
 end
 

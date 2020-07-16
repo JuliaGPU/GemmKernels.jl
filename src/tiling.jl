@@ -114,6 +114,11 @@ end
 
 @inline linearise(coord::NamedTuple{names, T}, dims::Tuple) where {names, T} = linearise(coord, NamedTuple{names}(dims))
 
+@inline function linearise(coord::Tuple, dims::Tuple)
+    ind = coord .+ 1
+    @inbounds return LinearIndices(dims)[ind...]
+end
+
 export translate
 
 """

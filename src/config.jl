@@ -80,9 +80,14 @@ end
 
 # Helper function that returns the logical size of a set of adjacent elements, taking care not
 # to make the size larger than the parent tile
-function adjacent_elements(num, parent_size)
+function adjacent_elements(num, parent_size, is_col_major)
     p = Tuple(parent_size)
-    t = (min(num, p[1]), num ÷ min(num, p[1]))
+
+    if is_col_major
+        t = (min(num, p[1]), num ÷ min(num, p[1]))
+    else
+        t = (num ÷ min(num, p[2]), min(num, p[2]))
+    end
 
     return typeof(parent_size)(t)
 end
@@ -116,23 +121,29 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
+    # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
+    # TODO: Let the layouts handle this?
+    is_a_col_major = get(params, :is_a_col_major, true)
+    is_b_col_major = get(params, :is_b_col_major, true)
+    is_cd_col_major = get(params, :is_cd_col_major, true)
+
     # Heuristics for memory tiling sizes:
     # 1) The tiles should encompass 128 bits (16 bytes) to enable vectorisation.
     # 2) The tiles should be as small as possible (i.e. each thread exactly 128 bits) to enable coalescing.
 
     mem_a_warp = get(params, :mem_a_warp,
-        adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K)))
+        adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K), is_a_col_major))
     mem_b_warp = get(params, :mem_b_warp,
-        adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N)))
+        adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N), is_b_col_major))
     mem_cd_warp = get(params, :mem_cd_warp,
-        adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N)))
+        adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
 
     mem_a_thread = get(params, :mem_a_thread,
-        adjacent_elements(16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K)))
+        adjacent_elements(16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K), is_a_col_major))
     mem_b_thread = get(params, :mem_b_thread,
-        adjacent_elements(16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N)))
+        adjacent_elements(16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N), is_b_col_major))
     mem_cd_thread = get(params, :mem_cd_thread,
-        adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N)))
+        adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
 
     return Config{
         #= Params =#
