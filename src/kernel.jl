@@ -26,7 +26,7 @@ function matmul_impl(a, b, c, d,
     block_tile = Tile(BLOCK_SHAPE)
 
     # (1) Cooperatively load a BLOCK_SHAPE.M x BLOCK_SHAPE.N tile of C from global to shared memory within one threadblock
-    shmem_c = @cuDynamicSharedMem(Layout.eltype(SHARED_C_LAYOUT), Layout.size(SHARED_C_LAYOUT, block_tile.MN.size))
+    shmem_c = @cuDynamicSharedMem(Layout.eltype(SHARED_C_LAYOUT), Layout.physical_size(SHARED_C_LAYOUT, block_tile.MN.size))
 
     @unroll for warp_tile = parallellise(block_tile.MN, Tile(MEM_CD_WARP), warpId, WARPS_PER_BLOCK)
         @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_CD_THREAD), laneId, 32)
@@ -53,8 +53,8 @@ function matmul_impl(a, b, c, d,
     sync_threads()
 
     # (3) Compute a BLOCK_SHAPE.M x BLOCK_SHAPE.N x BLOCK_SHAPE.K matrix product within one threadblock
-    shmem_a = @cuDynamicSharedMem(Layout.eltype(SHARED_A_LAYOUT), Layout.size(SHARED_A_LAYOUT, block_tile.MK.size))
-    shmem_b = @cuDynamicSharedMem(Layout.eltype(SHARED_B_LAYOUT), Layout.size(SHARED_B_LAYOUT, block_tile.KN.size),
+    shmem_a = @cuDynamicSharedMem(Layout.eltype(SHARED_A_LAYOUT), Layout.physical_size(SHARED_A_LAYOUT, block_tile.MK.size))
+    shmem_b = @cuDynamicSharedMem(Layout.eltype(SHARED_B_LAYOUT), Layout.physical_size(SHARED_B_LAYOUT, block_tile.KN.size),
                                     length(shmem_a) * sizeof(Layout.eltype(SHARED_A_LAYOUT)))
 
     @unroll for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
@@ -108,7 +108,7 @@ function matmul_impl(a, b, c, d,
     end
 
     # (4) Store the COMPUTE_WARP.M x COMPUTE_WARP.N tile of D from registers to shared memory
-    shmem_d = @cuDynamicSharedMem(Layout.eltype(SHARED_D_LAYOUT), Layout.size(SHARED_D_LAYOUT, block_tile.MN.size))
+    shmem_d = @cuDynamicSharedMem(Layout.eltype(SHARED_D_LAYOUT), Layout.physical_size(SHARED_D_LAYOUT, block_tile.MN.size))
 
     warp_tile = subdivide(block_tile.MN, Tile(COMPUTE_WARP).MN, warpId, WARPS_PER_BLOCK)
 

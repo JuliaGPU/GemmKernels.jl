@@ -52,10 +52,10 @@ function heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout
     # 4) The size in the K dimension is limited by the fact that both a M x K tile
     #    of A and a K x N tile of B must fit in shared memory, at the same time.
 
-    num_bytes_A(M, N, K) = prod(Layout.size(shared_a_layout, (M = M, K = K))) * sizeof(Layout.eltype(shared_a_layout))
-    num_bytes_B(M, N, K) = prod(Layout.size(shared_b_layout, (K = K, N = N))) * sizeof(Layout.eltype(shared_b_layout))
-    num_bytes_C(M, N, K) = prod(Layout.size(shared_c_layout, (M = M, N = N))) * sizeof(Layout.eltype(shared_c_layout))
-    num_bytes_D(M, N, K) = prod(Layout.size(shared_d_layout, (M = M, N = N))) * sizeof(Layout.eltype(shared_d_layout))
+    num_bytes_A(M, N, K) = prod(Layout.physical_size(shared_a_layout, (M = M, K = K))) * sizeof(Layout.eltype(shared_a_layout))
+    num_bytes_B(M, N, K) = prod(Layout.physical_size(shared_b_layout, (K = K, N = N))) * sizeof(Layout.eltype(shared_b_layout))
+    num_bytes_C(M, N, K) = prod(Layout.physical_size(shared_c_layout, (M = M, N = N))) * sizeof(Layout.eltype(shared_c_layout))
+    num_bytes_D(M, N, K) = prod(Layout.physical_size(shared_d_layout, (M = M, N = N))) * sizeof(Layout.eltype(shared_d_layout))
 
     next_MN(M, N, K) = M == N ? (2 * M, N, K) : (M, 2 * N, K)
     next_K(M, N, K) = (M, N, 2 * K)
