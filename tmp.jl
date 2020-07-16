@@ -3,9 +3,9 @@ using GemmKernels
 using Test
 
 function benc()
-    M = 32
-    N = 16
-    K = 16
+    M = 128
+    N = 128
+    K = 128
 
     a_h = transpose(rand(Float16, (M, K)) / sqrt(Float16(K)))
     b_h = transpose(rand(Float16, (K, N)) / sqrt(Float16(K)))
@@ -22,17 +22,9 @@ function benc()
 
                                 global_a_layout = Layout.AlignedRowMajor{Float16},
                                 global_b_layout = Layout.AlignedRowMajor{Float16},
+
                                 global_c_layout = Layout.AlignedColMajor{Float32},
                                 global_d_layout = Layout.AlignedColMajor{Float32},
-
-                                shared_a_layout = Layout.AlignedRowMajor{Float16},
-                                shared_b_layout = Layout.AlignedRowMajor{Float16},
-                                shared_c_layout = Layout.AlignedColMajor{Float32},
-                                shared_d_layout = Layout.AlignedColMajor{Float32},
-
-                                warps_per_block = 1,
-                                compute_warp = (M = 32, N = 16, K = 16),
-                                block_shape = (M = 32, N = 16, K = 16),
                                 )
 
     GemmKernels.matmul(a, b, c, d, conf)

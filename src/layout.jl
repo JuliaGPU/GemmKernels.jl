@@ -103,6 +103,8 @@ end
 
 struct AlignedRowMajor{T} <: LayoutBase{T} end
 
+@inline physical_size(::Type{AlignedRowMajor{T}}, logical_size::NamedTuple) where {T} = reverse(Tuple(logical_size))
+
 # TODO: add vectorisation
 @inline function load(::Type{AlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     res = MArray{Tuple{size[1], size[2]}, T}(undef)
@@ -111,8 +113,8 @@ struct AlignedRowMajor{T} <: LayoutBase{T} end
         @unroll for i = 1 : size[1]
             t = translate(tile, (i - 1, j - 1))
 
-            linear_base = linearise(t.base, Base.size(workspace))
-            linear_offset = linearise(t.offset, Base.size(workspace))
+            linear_base = linearise(reverse(Tuple(t.base)), Base.size(workspace))
+            linear_offset = linearise(reverse(Tuple(t.offset)), Base.size(workspace))
 
             @inbounds res[i, j] = unsafe_load(pointer(workspace), linear_base + linear_offset - 1)
         end
@@ -126,8 +128,8 @@ end
         @unroll for i = 1 : size[1]
             t = translate(tile, (i - 1, j - 1))
 
-            linear_base = linearise(t.base, Base.size(workspace))
-            linear_offset = linearise(t.offset, Base.size(workspace))
+            linear_base = linearise(reverse(Tuple(t.base)), Base.size(workspace))
+            linear_offset = linearise(reverse(Tuple(t.offset)), Base.size(workspace))
 
             @inbounds unsafe_store!(pointer(workspace), value[i, j], linear_base + linear_offset - 1)
         end
