@@ -145,9 +145,6 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     mem_cd_thread = get(params, :mem_cd_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
 
-    @show mem_a_warp
-    @show mem_a_thread
-
     return Config{
         #= Params =#
         gemm_shape,
