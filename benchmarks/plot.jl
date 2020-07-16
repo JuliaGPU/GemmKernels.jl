@@ -22,9 +22,13 @@ titles = Dict(
 
 labels = Dict(
               "cublas-nn" => "cuBLAS (NN)",
-              "gemmkernels-nn" => "Our implementation (NN)",
               "cublas-tt" => "cuBLAS (TT)",
+              "cublas-tn" => "cuBLAS (TN)",
+              "cublas-nt" => "cuBLAS (NT)",
+              "gemmkernels-nn" => "Our implementation (NN)",
               "gemmkernels-tt" => "Our implementation (TT)",
+              "gemmkernels-tn" => "Our implementation (TN)",
+              "gemmkernels-nt" => "Our implementation (NT)",
              )
 
 dir = ARGS[1]
