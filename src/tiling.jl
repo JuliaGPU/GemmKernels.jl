@@ -164,7 +164,7 @@ A [`TileIterator`](@ref) represents an iterator over a set of [`Tile`](@ref)s.
 
 See also: [`subdivide`](@ref), [`parallellise`](@ref).
 """
-struct TileIterator{tile_size, parent_size, names, T, S}
+struct TileIterator{tile_size, parent_size, names, T, S, col_major}
     parent::Tile{parent_size, names, T}
     subtile_indices::S
     idx::Int32
@@ -192,7 +192,11 @@ the calling entity.
 - `idx`: The identity of the calling entity.
 - `count`: The number of cooperating entities.
 """
-@inline function parallellise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count) where {names, T, size, tile_sz}
+@inline function parallellise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count, col_major::Bool=true) where {names, T, size, tile_sz}
+    # Transpose
+    tile = col_major ? tile : transpose(tile)
+    tiling_size = col_major ? tiling_size : transpose(tiling_size)
+
     # Number of tiles along each dimension
     num_tiles = map(div, Tuple(size), Tuple(tile_sz))
 
@@ -200,7 +204,7 @@ the calling entity.
     subtile_indices = CartesianIndices(num_tiles)
     step = count
 
-    return TileIterator{tile_sz, size, names, T, typeof(subtile_indices)}(parent, subtile_indices, convert(Int32, idx), convert(Int32, step))
+    return TileIterator{tile_sz, size, names, T, typeof(subtile_indices), col_major}(parent, subtile_indices, convert(Int32, idx), convert(Int32, step))
 end
 
 export subdivide
@@ -226,7 +230,7 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
     return iterate(parallellise(tile, tiling_size, idx, count))[1]
 end
 
-@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S}, state = 1) where {tile_size, parent_size, names, T, S}
+@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S, col_major}, state = 1) where {tile_size, parent_size, names, T, S, col_major}
     if state > length(it.subtile_indices)
         return nothing
     end
@@ -237,6 +241,9 @@ end
 
     # Create tile
     tile = Tile{tile_size, names, T}(NamedTuple{names, T}(base), NamedTuple{names, T}(offset))
+
+    # Transpose
+    tile = col_major ? tile : transpose(tile)
 
     return (tile, state + it.step)
 end
