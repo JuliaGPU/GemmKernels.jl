@@ -35,6 +35,9 @@ struct Tile{size, names, T}
     offset::NamedTuple{names, T}
 end
 
+@inline _size(tile::Tile{size, names, T}) where {size, names, T} = size
+@inline _names(tile::Tile{size, names, T}) where {size, names, T} = names
+
 function Base.show(io::IO, tile::Tile{size, names, T}) where {size, names, T}
     print(io, "base:   ", tile.base, '\n')
     print(io, "offset: ", tile.offset, '\n')
@@ -198,13 +201,13 @@ the calling entity.
     tiling_size = col_major ? tiling_size : transpose(tiling_size)
 
     # Number of tiles along each dimension
-    num_tiles = map(div, Tuple(size), Tuple(tile_sz))
+    num_tiles = map(div, Tuple(_size(tile)), Tuple(_size(tiling_size)))
 
     parent = tile
     subtile_indices = CartesianIndices(num_tiles)
     step = count
 
-    return TileIterator{tile_sz, size, names, T, typeof(subtile_indices), col_major}(parent, subtile_indices, convert(Int32, idx), convert(Int32, step))
+    return TileIterator{_size(tiling_size), _size(tile), _names(tile), T, typeof(subtile_indices), col_major}(parent, subtile_indices, convert(Int32, idx), convert(Int32, step))
 end
 
 export subdivide
