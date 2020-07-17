@@ -12,6 +12,8 @@ function benchmark_matmul(a, b, c, d)
             operator = Operator.WMMAOp{16, 16, 16},
             global_a_layout = Layout.AlignedColMajor{Float16},
             global_c_layout = Layout.AlignedRowMajor{Float32},
+            transform_shared_to_regs_a = Transform.Elementwise(x -> x * 2),
+            transform_shared_to_regs_c = Transform.Elementwise(x -> x * 3),
             is_a_col_major = true,
             is_b_col_major = false,
                                 )
