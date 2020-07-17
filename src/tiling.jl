@@ -93,6 +93,11 @@ GemmKernels.Tiling.Tile((M = 24, N = 16, K = 4))
     end
 end
 
+@generated function Base.transpose(tile::Tile{size, names, T}) where {names, T, size}
+    new_names = reverse(names)
+    return :( projection_impl(NamedTuple{$new_names}(tile.base), NamedTuple{$new_names}(tile.offset), NamedTuple{$new_names}(size)) )
+end
+
 @inline Base.getproperty(tile::Tile{size, names, T}, sym::Symbol) where {names, T, size} = getproperty_impl(tile, Val(sym))
 
 export linearise

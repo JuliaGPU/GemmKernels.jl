@@ -15,6 +15,11 @@ using GemmKernels.Tiling
             @test Tile(M = 1, N = 2, K = 3).KMN == Tile(K = 3, M = 1, N = 2)
         end
 
+        @testset "Transposition" begin
+            @test transpose(Tile(M = 1, N = 2)) == Tile(N = 2, M = 1)
+            @test transpose(Tile(M = 1, N = 2, K = 3)) == Tile(K = 3, N = 2, M = 1)
+        end
+
         @testset "Translate" begin
             tile = translate(Tile(M = 10, N = 20), (M = 1, N = 2))
             @test tile.size == (M = 10, N = 20)
