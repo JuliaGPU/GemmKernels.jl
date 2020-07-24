@@ -62,6 +62,8 @@ end
 
 struct AlignedColMajor{T} <: LayoutBase{T} end
 
+@inline physical_size(::Type{Padded{AlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
+
 # TODO: cleanup vectorisation
 @inline function load(::Type{AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     vec_len = 16 ÷ sizeof(T)
@@ -103,7 +105,7 @@ end
 
 struct AlignedRowMajor{T} <: LayoutBase{T} end
 
-@inline physical_size(::Type{AlignedRowMajor{T}}, logical_size::NamedTuple) where {T} = reverse(Tuple(logical_size))
+@inline physical_size(::Type{Padded{AlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
 # TODO: cleanup vectorisation
 @inline function load(::Type{AlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
