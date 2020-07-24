@@ -35,22 +35,22 @@ for (layout_type, wmma_layout_type, convert_tile_func) in [
             conf = WMMA.Config{M, N, K, Float32}
             tile = $convert_tile_func(tile)
 
-            linear_base = linearise(tile.base, size(workspace))
-            linear_offset = linearise(tile.offset, size(workspace))
+            linear_base = linearise(tile.base, (128 + 8, 64))
+            linear_offset = linearise(tile.offset, (128 + 8, 64))
 
             ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(Float16)
-            return WMMA.load_a(ptr, size(workspace, 1), $wmma_layout_type, conf)
+            return WMMA.load_a(ptr, 128 + 8, $wmma_layout_type, conf)
         end
 
         @inline function load_b(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K}
             conf = WMMA.Config{M, N, K, Float32}
             tile = $convert_tile_func(tile)
 
-            linear_base = linearise(tile.base, size(workspace))
-            linear_offset = linearise(tile.offset, size(workspace))
+            linear_base = linearise(tile.base, (64 + 8, 128))
+            linear_offset = linearise(tile.offset, (64 + 8, 128))
 
             ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(Float16)
-            return WMMA.load_b(ptr, size(workspace, 1), $wmma_layout_type, conf)
+            return WMMA.load_b(ptr, 64 + 8, $wmma_layout_type, conf)
         end
 
         @inline function load_c(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float32}}, workspace, tile::Tile) where {M, N, K}
