@@ -118,18 +118,24 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     # 8 warps in a 2 x 4 arrangement usually works well
     warps_per_block = get(params, :warps_per_block, 8)
     op_shape = Operator.shape(operator)
-    compute_warp = get(params, :compute_warp,
-                       map(*, op_shape, (M = 2, N = 4, K = 1)))
-
-    # Apply heuristic for block shape
-    block_shape = get(params, :block_shape,
-        heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
     # TODO: Let the layouts handle this?
     is_a_col_major = get(params, :is_a_col_major, true)
     is_b_col_major = get(params, :is_b_col_major, true)
     is_cd_col_major = get(params, :is_cd_col_major, true)
+
+    if is_a_col_major
+        compute_warp = get(params, :compute_warp,
+                           map(*, op_shape, (M = 2, N = 4, K = 1)))
+    else
+        compute_warp = get(params, :compute_warp,
+                           map(*, op_shape, (M = 4, N = 2, K = 1)))
+    end
+
+    # Apply heuristic for block shape
+    block_shape = get(params, :block_shape,
+        heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
     # Heuristics for memory tiling sizes:
     # 1) The tiles should encompass 128 bits (16 bytes) to enable vectorisation.
