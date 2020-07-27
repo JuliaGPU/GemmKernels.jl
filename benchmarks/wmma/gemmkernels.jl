@@ -26,9 +26,7 @@ function benchmark_matmul(a, b, c, d)
             is_b_col_major = !transpose_b,
                                 )
 
-        GemmKernels.matmul(a, b, c, d, conf;
-                           transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
-                           transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta))
+        GemmKernels.matmul(a, b, c, d, conf)
     end
 end
 
