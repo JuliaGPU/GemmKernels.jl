@@ -97,16 +97,12 @@ using GemmKernels
 
                         block_shape = (M = 64, N = 64, K = 32),
 
-                        #= mem_a_warp = transpose_a ? (M = 4, K = 32) : (M = 64, K = 2), =#
-                        mem_a_warp = transpose_a ? (M = 64, K = 2) : (M = 64, K = 2),
-                        #= mem_b_warp = transpose_b ? (K = 1, N = 128) : (K = 32, N = 4), =#
-                        mem_b_warp = transpose_b ? (K = 32, N = 4) : (K = 32, N = 4),
+                        mem_a_warp = transpose_a ? (M = 4, K = 32) : (M = 64, K = 2),
+                        mem_b_warp = transpose_b ? (K = 2, N = 64) : (K = 32, N = 4),
                         mem_cd_warp = (M = 64, N = 1),
 
-                        #= mem_a_thread = transpose_a ? (M = 1, K = 4) : (M = 4, K = 1), =#
-                        mem_a_thread = transpose_a ? (M = 4, K = 1) : (M = 4, K = 1),
-                        #= mem_b_thread = transpose_b ? (K = 1, N = 4) : (K = 4, N = 1), =#
-                        mem_b_thread = transpose_b ? (K = 4, N = 1) : (K = 4, N = 1),
+                        mem_a_thread = transpose_a ? (M = 1, K = 4) : (M = 4, K = 1),
+                        mem_b_thread = transpose_b ? (K = 1, N = 4) : (K = 4, N = 1),
                         mem_cd_thread = (M = 2, N = 1),
 
                         is_a_col_major = !transpose_a,
