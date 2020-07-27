@@ -53,17 +53,19 @@ using GemmKernels
     #=     end =#
     #= end =#
 
-    @testset "WMMA Complex GEMM ($( !conjugate_a ? 'N' : 'C' )$( !conjugate_b ? 'N' : 'C' ))" for conjugate_a = [false, true],
-        conjugate_b = [false, true]
+    @testset "WMMA Complex GEMM ($( !conjugate_a ? 'N' : 'C' )$( !conjugate_b ? 'N' : 'C' ))" for conjugate_a = [false],
+        conjugate_b = [false]
         @testset "Transpose A: $(transpose_a), Transpose B: $(transpose_b)" for transpose_a = [false, true],
             transpose_b = [false, true]
 
-            @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
-                N in [128, 256],
-                K in [128, 256]
+            #= if transpose_a != transpose_b continue end =#
 
-                a_h = ones(Complex{Float16}, (M, K)) / sqrt(Float16(K));
-                b_h = ones(Complex{Float16}, (K, N)) / sqrt(Float16(K));
+            @testset "(M = $M, N = $N, K = $K)" for M in [128],
+                N in [128],
+                K in [128]
+
+                a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
+                b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
                 c_h = rand(Complex{Float32}, (M, N));
 
                 # Transpose input if necessary
@@ -95,12 +97,16 @@ using GemmKernels
 
                         block_shape = (M = 64, N = 64, K = 32),
 
-                        mem_a_warp = transpose_a ? (M = 4, K = 32) : (M = 64, K = 2),
-                        mem_b_warp = transpose_b ? (K = 1, N = 128) : (K = 32, N = 4),
+                        #= mem_a_warp = transpose_a ? (M = 4, K = 32) : (M = 64, K = 2), =#
+                        mem_a_warp = transpose_a ? (M = 64, K = 2) : (M = 64, K = 2),
+                        #= mem_b_warp = transpose_b ? (K = 1, N = 128) : (K = 32, N = 4), =#
+                        mem_b_warp = transpose_b ? (K = 32, N = 4) : (K = 32, N = 4),
                         mem_cd_warp = (M = 64, N = 1),
 
-                        mem_a_thread = transpose_a ? (M = 1, K = 4) : (M = 4, K = 1),
-                        mem_b_thread = transpose_b ? (K = 1, N = 4) : (K = 4, N = 1),
+                        #= mem_a_thread = transpose_a ? (M = 1, K = 4) : (M = 4, K = 1), =#
+                        mem_a_thread = transpose_a ? (M = 4, K = 1) : (M = 4, K = 1),
+                        #= mem_b_thread = transpose_b ? (K = 1, N = 4) : (K = 4, N = 1), =#
+                        mem_b_thread = transpose_b ? (K = 4, N = 1) : (K = 4, N = 1),
                         mem_cd_thread = (M = 2, N = 1),
 
                         is_a_col_major = !transpose_a,
