@@ -53,7 +53,7 @@ using GemmKernels
         end
     end
 
-    @testset "WMMA Complex GEMM ($( !conjugate_a ? 'N' : 'C' )$( !conjugate_b ? 'N' : 'C' )" for conjugate_a = [false, true],
+    @testset "WMMA Complex GEMM ($( !conjugate_a ? 'N' : 'C' )$( !conjugate_b ? 'N' : 'C' ))" for conjugate_a = [false, true],
         conjugate_b = [false, true]
 
         @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
