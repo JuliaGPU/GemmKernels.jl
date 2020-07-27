@@ -86,8 +86,11 @@ struct WMMAComplexOp{M, N, K} end
 
 @inline shape(::Type{WMMAComplexOp{M, N, K}}) where {M, N, K} = (M = M, N = N, K = K)
 
-for (layout_type, wmma_layout_type) in [
-                                        (Layout.SplitColMajor, WMMA.ColMajor)
+# cont_dim: contiguous dimension (i.e. the rows -- first dimension -- for a column major layout)
+# noncont_dim: non-contiguous dimension (i.e. the columns -- second dimension -- for a row major layout)
+for (layout_type, wmma_layout_type, cont_dim, noncont_dim) in [
+                                        (Layout.SplitColMajor, WMMA.ColMajor, 1, 2),
+                                        (Layout.SplitRowMajor, WMMA.RowMajor, 2, 1),
                                        ]
     @eval begin
         @inline fragtype_a(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{$layout_type{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixA}}
@@ -96,34 +99,34 @@ for (layout_type, wmma_layout_type) in [
 
         @inline function load_a(::Type{WMMAComplexOp{M, N, K}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K}
             conf = WMMA.Config{16, 16, 16, Float32}
-            ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+            ind = linearise(tile.index, (size(workspace)[$cont_dim], size(workspace)[$noncont_dim]))
 
-            return (WMMA.load_a(pointer(workspace, ind), size(workspace)[1], $wmma_layout_type, conf),
-                    WMMA.load_a(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], $wmma_layout_type, conf))
+            return (WMMA.load_a(pointer(workspace, ind), size(workspace)[$cont_dim], $wmma_layout_type, conf),
+                    WMMA.load_a(pointer(workspace, ind + size(workspace)[$cont_dim] * size(workspace)[$noncont_dim]), size(workspace)[$cont_dim], $wmma_layout_type, conf))
         end
 
         @inline function load_b(::Type{WMMAComplexOp{M, N, K}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K}
             conf = WMMA.Config{16, 16, 16, Float32}
-            ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+            ind = linearise(tile.index, (size(workspace)[$cont_dim], size(workspace)[$noncont_dim]))
 
-            return (WMMA.load_b(pointer(workspace, ind), size(workspace)[1], $wmma_layout_type, conf),
-                    WMMA.load_b(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], $wmma_layout_type, conf))
+            return (WMMA.load_b(pointer(workspace, ind), size(workspace)[$cont_dim], $wmma_layout_type, conf),
+                    WMMA.load_b(pointer(workspace, ind + size(workspace)[$cont_dim] * size(workspace)[$noncont_dim]), size(workspace)[$cont_dim], $wmma_layout_type, conf))
         end
 
         @inline function load_c(::Type{WMMAComplexOp{M, N, K}}, ::Type{$layout_type{Float32}}, workspace, tile::Tile) where {M, N, K}
             conf = WMMA.Config{M, N, K, Float32}
-            ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+            ind = linearise(tile.index, (size(workspace)[$cont_dim], size(workspace)[$noncont_dim]))
 
-            return (WMMA.load_c(pointer(workspace, ind), size(workspace)[1], $wmma_layout_type, conf),
-                    WMMA.load_c(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], $wmma_layout_type, conf))
+            return (WMMA.load_c(pointer(workspace, ind), size(workspace)[$cont_dim], $wmma_layout_type, conf),
+                    WMMA.load_c(pointer(workspace, ind + size(workspace)[$cont_dim] * size(workspace)[$noncont_dim]), size(workspace)[$cont_dim], $wmma_layout_type, conf))
         end
 
         @inline function store_d(::Type{WMMAComplexOp{M, N, K}}, ::Type{$layout_type{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
             conf = WMMA.Config{M, N, K, Float32}
-            ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+            ind = linearise(tile.index, (size(workspace)[$cont_dim], size(workspace)[$noncont_dim]))
 
-            WMMA.store_d(pointer(workspace, ind), frag[1], size(workspace)[1], $wmma_layout_type, conf)
-            WMMA.store_d(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), frag[2], size(workspace)[1], $wmma_layout_type, conf)
+            WMMA.store_d(pointer(workspace, ind), frag[1], size(workspace)[$cont_dim], $wmma_layout_type, conf)
+            WMMA.store_d(pointer(workspace, ind + size(workspace)[$cont_dim] * size(workspace)[$noncont_dim]), frag[2], size(workspace)[$cont_dim], $wmma_layout_type, conf)
         end
     end
 end
