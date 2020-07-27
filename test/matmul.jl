@@ -78,10 +78,10 @@ using GemmKernels
                     global_c_layout = Layout.InterleavedColMajor{Float32},
                     global_d_layout = Layout.InterleavedColMajor{Float32},
 
-                    shared_a_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
-                    shared_b_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
-                    shared_c_layout = Layout.SplitComplex{Float32},
-                    shared_d_layout = Layout.SplitComplex{Float32},
+                    shared_a_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+                    shared_b_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+                    shared_c_layout = Layout.SplitColMajor{Float32},
+                    shared_d_layout = Layout.SplitColMajor{Float32},
 
                     warps_per_block = 8,
 
@@ -137,10 +137,10 @@ using GemmKernels
                     global_c_layout = Layout.InterleavedColMajor{Float32},
                     global_d_layout = Layout.InterleavedColMajor{Float32},
 
-                    shared_a_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
-                    shared_b_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
-                    shared_c_layout = Layout.SplitComplex{Float32},
-                    shared_d_layout = Layout.SplitComplex{Float32},
+                    shared_a_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+                    shared_b_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+                    shared_c_layout = Layout.SplitColMajor{Float32},
+                    shared_d_layout = Layout.SplitColMajor{Float32},
 
                     warps_per_block = 8,
 
