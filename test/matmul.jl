@@ -62,7 +62,7 @@ using GemmKernels
 
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
-            c_h = rand(Complex{Float32}, (M, N));
+            c_h = rand(Complex{Float32}, (M, N)) / sqrt(Float32(K));
 
             a = CuArray(a_h);
             b = CuArray(b_h);
