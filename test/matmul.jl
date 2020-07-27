@@ -5,7 +5,7 @@ using GemmKernels
 ################################################################################
 
 @testset "Matmul API" begin
-    @testset "WMMA GEMM ($( transpose_a ? 'N' : 'T' )$( transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
+    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
 
         @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
