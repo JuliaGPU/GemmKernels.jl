@@ -1,12 +1,12 @@
 using CUDA
 using GemmKernels
 
-transpose_a = false
-transpose_b = false
-
 M = parse(Int, ARGS[1])
 N = parse(Int, ARGS[2])
 K = parse(Int, ARGS[3])
+
+transpose_a = (ARGS[4] == "n" ? false : ARGS[4] == "t" ? true : error("Invalid memory layout for A: $(ARGS[4])"))
+transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid memory layout for B: $(ARGS[5])"))
 
 function benchmark_matmul(a, b, c, d)
     CUDA.@sync begin
