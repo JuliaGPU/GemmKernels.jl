@@ -96,7 +96,7 @@ using GemmKernels
                         block_shape = (M = 64, N = 64, K = 32),
 
                         mem_a_warp = transpose_a ? (M = 4, K = 32) : (M = 64, K = 2),
-                        mem_b_warp = transpose_b ? (K = 1, N = 128): (K = 32, N = 4),
+                        mem_b_warp = transpose_b ? (K = 1, N = 128) : (K = 32, N = 4),
                         mem_cd_warp = (M = 64, N = 1),
 
                         mem_a_thread = transpose_a ? (M = 1, K = 4) : (M = 4, K = 1),
