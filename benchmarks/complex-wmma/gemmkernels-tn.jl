@@ -1,7 +1,7 @@
 using CUDA
 using GemmKernels
 
-transpose_a = false
+transpose_a = true
 transpose_b = false
 
 M = parse(Int, ARGS[1])
