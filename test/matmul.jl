@@ -58,8 +58,6 @@ using GemmKernels
         @testset "Transpose A: $(transpose_a), Transpose B: $(transpose_b)" for transpose_a = [false, true],
             transpose_b = [false, true]
 
-            #= if transpose_a != transpose_b continue end =#
-
             @testset "(M = $M, N = $N, K = $K)" for M in [128],
                 N in [128],
                 K in [128]
