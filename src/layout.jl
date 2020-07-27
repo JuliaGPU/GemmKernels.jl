@@ -172,9 +172,9 @@ end
     end
 end
 
-# ------------
+# -------------
 # SplitColMajor
-# ------------
+# -------------
 
 struct SplitColMajor{T} <: LayoutBase{T} end
 
