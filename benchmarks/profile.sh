@@ -17,15 +17,20 @@ fi
 cd "$( dirname "${BASH_SOURCE[0]}" )"
 
 SCRIPT="$1"
-OUTPUT_FILE="${SCRIPT%.*}.csv"
 
-printf "N,runtime\n" >$OUTPUT_FILE
+for a_layout in n t; do
+    for b_layout in n t; do
+        OUTPUT_FILE="${SCRIPT%.*}-${a_layout}${b_layout}.csv"
 
-for i in {7..14}; do
-    N=$((2**i))
+        printf "N,runtime\n" >$OUTPUT_FILE
 
-    # runtime is in nanoseconds
-    runtime=$(LD_LIBRARY_PATH=${JULIA_PATH}/usr/lib nv-nsight-cu-cli --profile-from-start off -f --csv --units base --metrics 'gpu__time_duration.avg' ${JULIA_PATH}/julia $SCRIPT $N $N $N 2>/dev/null | grep 'gpu__time_duration' | awk -F',' '{print $NF}' | sed 's/"//g' | paste -sd ',')
+        for i in {7..14}; do
+            N=$((2**i))
 
-    printf "$N,\"$runtime\"\n" >>$OUTPUT_FILE
+            # runtime is in nanoseconds
+            runtime=$(LD_LIBRARY_PATH=${JULIA_PATH}/usr/lib nv-nsight-cu-cli --profile-from-start off -f --csv --units base --metrics 'gpu__time_duration.avg' ${JULIA_PATH}/julia $SCRIPT $N $N $N $a_layout $b_layout 2>/dev/null | grep 'gpu__time_duration' | awk -F',' '{print $NF}' | sed 's/"//g' | paste -sd ',')
+
+            printf "$N,\"$runtime\"\n" >>$OUTPUT_FILE
+        done
+    done
 done
