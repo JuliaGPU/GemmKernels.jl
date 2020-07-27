@@ -53,7 +53,9 @@ using GemmKernels
         end
     end
 
-    @testset "WMMA Complex GEMM" begin
+    @testset "WMMA Complex GEMM ($( !conjugate_a ? 'N' : 'C' )$( !conjugate_b ? 'N' : 'C' )" for conjugate_a = [false, true],
+        conjugate_b = [false, true]
+
         @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
             N in [128, 256],
             K in [128, 256]
@@ -96,9 +98,17 @@ using GemmKernels
                     mem_cd_thread = (M = 2, N = 1)
                 )
 
-            GemmKernels.matmul(a, b, c, d, conf)
+            trans_a = conjugate_a ? Transform.Elementwise(conj) : Transform.Elementwise()
+            trans_b = conjugate_b ? Transform.Elementwise(conj) : Transform.Elementwise()
 
-            @test all(isapprox.(a_h * b_h + c_h, Array(d); rtol=sqrt(eps(Float16))));
+            GemmKernels.matmul(a, b, c, d, conf;
+                              transform_global_to_shared_a = trans_a,
+                              transform_global_to_shared_b = trans_b)
+
+            new_a_h = conjugate_a ? conj.(a_h) : a_h
+            new_b_h = conjugate_b ? conj.(b_h) : b_h
+
+            @test all(isapprox.(new_a_h * new_b_h + c_h, Array(d); rtol=sqrt(eps(Float16))));
         end
     end
 
