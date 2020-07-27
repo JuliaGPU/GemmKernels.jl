@@ -119,7 +119,7 @@ using GemmKernels
 
                 # Transpose outputs, if necessary
                 new_a_h = transpose_a ? transpose(new_a_h) : new_a_h
-                new_b_h = transpose_b ? tranpose(new_b_h) : new_b_h
+                new_b_h = transpose_b ? transpose(new_b_h) : new_b_h
 
                 # TODO: Figure out why changing this to a * b + c = d instead of a * b = d - c
                 # makes tests fail for CC (see #19).
