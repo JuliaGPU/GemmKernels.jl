@@ -172,6 +172,36 @@ end
     end
 end
 
+# -------------------
+# InterleavedRowMajor
+# -------------------
+
+struct InterleavedRowMajor{T} <: LayoutBase{T} end
+
+@inline function load(::Type{InterleavedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+    res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
+
+    @unroll for i = 1 : tile.size[1]
+        @unroll for j = 1 : tile.size[2]
+            t = translate(tile, (i - 1, j - 1))
+
+            @inbounds res[i, j] = workspace[t.index[2] + 1, t.index[1] + 1]
+        end
+    end
+
+    return res
+end
+
+@inline function store!(::Type{InterleavedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+    @unroll for i = 1 : size[1]
+        @unroll for j = 1 : size[2]
+            t = translate(tile, (i - 1, j - 1))
+
+            @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = value[i, j]
+        end
+    end
+end
+
 # -------------
 # SplitColMajor
 # -------------
@@ -204,6 +234,42 @@ end
 
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = value[i, j].re
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = value[i, j].im
+        end
+    end
+end
+
+# -------------
+# SplitRowMajor
+# -------------
+
+struct SplitRowMajor{T} <: LayoutBase{T} end
+
+@inline function physical_size(::Type{SplitRowMajor{T}}, logical_size::NamedTuple) where {T}
+    t = reverse(Tuple(logical_size))
+    return (t..., 2)
+end
+
+@inline function load(::Type{SplitRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+    res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
+
+    @unroll for i = 1 : tile.size[1]
+        @unroll for j = 1 : tile.size[2]
+            t = translate(tile, (i - 1, j - 1))
+
+            @inbounds res[i,j] = workspace[t.index[2] + 1, t.index[1] + 1, 1] + workspace[t.index[2] + 1, t.index[1] + 1, 2] * im
+        end
+    end
+
+    return res
+end
+
+@inline function store!(::Type{SplitRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+    @unroll for i = 1 : tile.size[1]
+        @unroll for j = 1 : tile.size[2]
+            t = translate(tile, (i - 1, j - 1))
+
+            @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 1] = value[i, j].re
+            @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 2] = value[i, j].im
         end
     end
 end
