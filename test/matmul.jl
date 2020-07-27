@@ -73,10 +73,10 @@ using GemmKernels
                     gemm_shape = (M = M, N = N, K = K),
                     operator = Operator.WMMAComplexOp{16, 16, 16},
 
-                    global_a_layout = Layout.InterleavedComplex{Float16},
-                    global_b_layout = Layout.InterleavedComplex{Float16},
-                    global_c_layout = Layout.InterleavedComplex{Float32},
-                    global_d_layout = Layout.InterleavedComplex{Float32},
+                    global_a_layout = Layout.InterleavedColMajor{Float16},
+                    global_b_layout = Layout.InterleavedColMajor{Float16},
+                    global_c_layout = Layout.InterleavedColMajor{Float32},
+                    global_d_layout = Layout.InterleavedColMajor{Float32},
 
                     shared_a_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
                     shared_b_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
@@ -132,10 +132,10 @@ using GemmKernels
                     gemm_shape = (M = M, N = N, K = K),
                     operator = Operator.WMMADualOp{16, 16, 16},
 
-                    global_a_layout = Layout.InterleavedComplex{Float16},
-                    global_b_layout = Layout.InterleavedComplex{Float16},
-                    global_c_layout = Layout.InterleavedComplex{Float32},
-                    global_d_layout = Layout.InterleavedComplex{Float32},
+                    global_a_layout = Layout.InterleavedColMajor{Float16},
+                    global_b_layout = Layout.InterleavedColMajor{Float16},
+                    global_c_layout = Layout.InterleavedColMajor{Float32},
+                    global_d_layout = Layout.InterleavedColMajor{Float32},
 
                     shared_a_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},
                     shared_b_layout = Layout.Padded{Layout.SplitComplex{Float16}, 8},

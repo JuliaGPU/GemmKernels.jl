@@ -86,11 +86,11 @@ struct WMMAComplexOp{M, N, K} end
 
 @inline shape(::Type{WMMAComplexOp{M, N, K}}) where {M, N, K} = (M = M, N = N, K = K)
 
-@inline fragtype_a(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{Layout.SplitComplex{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixA}}
-@inline fragtype_b(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{Layout.SplitComplex{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixB}}
-@inline fragtype_accum(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{Layout.SplitComplex{Float32}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 8, Float32, WMMA.Unspecified, WMMA.Accumulator}}
+@inline fragtype_a(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{Layout.SplitColMajor{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixA}}
+@inline fragtype_b(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{Layout.SplitColMajor{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixB}}
+@inline fragtype_accum(::Type{WMMAComplexOp{16, 16, 16}}, ::Type{Layout.SplitColMajor{Float32}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 8, Float32, WMMA.Unspecified, WMMA.Accumulator}}
 
-@inline function load_a(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitComplex{Float16}}, workspace, tile::Tile) where {M, N, K}
+@inline function load_a(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float16}}, workspace, tile::Tile) where {M, N, K}
     conf = WMMA.Config{16, 16, 16, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -98,7 +98,7 @@ struct WMMAComplexOp{M, N, K} end
             WMMA.load_a(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
 end
 
-@inline function load_b(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitComplex{Float16}}, workspace, tile::Tile) where {M, N, K}
+@inline function load_b(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float16}}, workspace, tile::Tile) where {M, N, K}
     conf = WMMA.Config{16, 16, 16, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -106,7 +106,7 @@ end
             WMMA.load_b(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
 end
 
-@inline function load_c(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitComplex{Float32}}, workspace, tile::Tile) where {M, N, K}
+@inline function load_c(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float32}}, workspace, tile::Tile) where {M, N, K}
     conf = WMMA.Config{M, N, K, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -114,7 +114,7 @@ end
             WMMA.load_c(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
 end
 
-@inline function store_d(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitComplex{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
+@inline function store_d(::Type{WMMAComplexOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
     conf = WMMA.Config{M, N, K, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -160,11 +160,11 @@ struct WMMADualOp{M, N, K} end
 
 @inline shape(::Type{WMMADualOp{M, N, K}}) where {M, N, K} = (M = M, N = N, K = K)
 
-@inline fragtype_a(::Type{WMMADualOp{16, 16, 16}}, ::Type{Layout.SplitComplex{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixA}}
-@inline fragtype_b(::Type{WMMADualOp{16, 16, 16}}, ::Type{Layout.SplitComplex{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixB}}
-@inline fragtype_accum(::Type{WMMADualOp{16, 16, 16}}, ::Type{Layout.SplitComplex{Float32}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 8, Float32, WMMA.Unspecified, WMMA.Accumulator}}
+@inline fragtype_a(::Type{WMMADualOp{16, 16, 16}}, ::Type{Layout.SplitColMajor{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixA}}
+@inline fragtype_b(::Type{WMMADualOp{16, 16, 16}}, ::Type{Layout.SplitColMajor{Float16}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 16, Float16, WMMA.ColMajor, WMMA.MatrixB}}
+@inline fragtype_accum(::Type{WMMADualOp{16, 16, 16}}, ::Type{Layout.SplitColMajor{Float32}}) = NTuple{2, WMMA.Fragment{16, 16, 16, 8, Float32, WMMA.Unspecified, WMMA.Accumulator}}
 
-@inline function load_a(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitComplex{Float16}}, workspace, tile::Tile) where {M, N, K}
+@inline function load_a(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float16}}, workspace, tile::Tile) where {M, N, K}
     conf = WMMA.Config{16, 16, 16, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -172,7 +172,7 @@ struct WMMADualOp{M, N, K} end
             WMMA.load_a(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
 end
 
-@inline function load_b(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitComplex{Float16}}, workspace, tile::Tile) where {M, N, K}
+@inline function load_b(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float16}}, workspace, tile::Tile) where {M, N, K}
     conf = WMMA.Config{16, 16, 16, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -180,7 +180,7 @@ end
             WMMA.load_b(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
 end
 
-@inline function load_c(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitComplex{Float32}}, workspace, tile::Tile) where {M, N, K}
+@inline function load_c(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float32}}, workspace, tile::Tile) where {M, N, K}
     conf = WMMA.Config{M, N, K, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 
@@ -188,7 +188,7 @@ end
             WMMA.load_c(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
 end
 
-@inline function store_d(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitComplex{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
+@inline function store_d(::Type{WMMADualOp{M, N, K}}, ::Type{Layout.SplitColMajor{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
     conf = WMMA.Config{M, N, K, Float32}
     ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
 

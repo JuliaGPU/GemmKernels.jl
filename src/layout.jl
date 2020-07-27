@@ -142,13 +142,13 @@ end
     end
 end
 
-# ------------------
-# InterleavedComplex
-# ------------------
+# -------------------
+# InterleavedColMajor
+# -------------------
 
-struct InterleavedComplex{T} <: LayoutBase{T} end
+struct InterleavedColMajor{T} <: LayoutBase{T} end
 
-@inline function load(::Type{InterleavedComplex{T}}, workspace, tile::Tile{size}) where {T, size}
+@inline function load(::Type{InterleavedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
 
     @unroll for j = 1 : tile.size[2]
@@ -162,7 +162,7 @@ struct InterleavedComplex{T} <: LayoutBase{T} end
     return res
 end
 
-@inline function store!(::Type{InterleavedComplex{T}}, workspace, value, tile::Tile{size}) where {T, size}
+@inline function store!(::Type{InterleavedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for j = 1 : size[2]
         @unroll for i = 1 : size[1]
             t = translate(tile, (i - 1, j - 1))
@@ -173,17 +173,17 @@ end
 end
 
 # ------------
-# SplitComplex
+# SplitColMajor
 # ------------
 
-struct SplitComplex{T} <: LayoutBase{T} end
+struct SplitColMajor{T} <: LayoutBase{T} end
 
-@inline function physical_size(::Type{SplitComplex{T}}, logical_size::NamedTuple) where {T}
+@inline function physical_size(::Type{SplitColMajor{T}}, logical_size::NamedTuple) where {T}
     t = Tuple(logical_size)
     return (t..., 2)
 end
 
-@inline function load(::Type{SplitComplex{T}}, workspace, tile::Tile{size}) where {T, size}
+@inline function load(::Type{SplitColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
 
     @unroll for j = 1 : tile.size[2]
@@ -197,7 +197,7 @@ end
     return res
 end
 
-@inline function store!(::Type{SplitComplex{T}}, workspace, value, tile::Tile{size}) where {T, size}
+@inline function store!(::Type{SplitColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
             t = translate(tile, (i - 1, j - 1))
