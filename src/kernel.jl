@@ -64,17 +64,14 @@ function matmul_impl(a, b, c, d,
                 bx = blockIdx().x - 1
                 by = div(block_k, block_tile.size.K)
 
-                x = MArray{Tuple{thread_tile.size[1] ÷ 8, thread_tile.size[2]}, NTuple{4, VecElement{Float32}}}(undef)
+                # cond is true iff we should load from global memory
+                cond = (by == 2 * bx) || (by == 2 * bx + 1)
+                #= cond = (thread_tile.offset.M == thread_tile.offset.K) =#
+                #= cond = true =#
 
-                @unroll for j = 1 : thread_tile.size[2]
-                    @unroll for i = 1 : 8 : thread_tile.size[1]
-                        @inbounds x[i, j] = ntuple(i -> VecElement{Float32}(0), Val(4))
-                    end
-                end
-
-                if (by == 2 * bx) || (by == 2 * bx + 1)
-                    x = Layout.load(GLOBAL_A_LAYOUT, a, translate(thread_tile, (M = block_i, K = block_k)))
-                end
+                x = cond ?
+                    Layout.load(GLOBAL_A_LAYOUT, a, translate(thread_tile, (M = block_i, K = block_k))) :
+                    Layout.dummy_load(GLOBAL_A_LAYOUT, a, translate(thread_tile, (M = block_i, K = block_k)))
 
                 x = transf_gl2sh_a(x, thread_tile)
                 Layout.store!(SHARED_A_LAYOUT, shmem_a, x, thread_tile)
