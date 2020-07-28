@@ -84,6 +84,32 @@ struct AlignedColMajor{T} <: LayoutBase{T} end
     return res
 end
 
+@inline function dummy_load(::Type{AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+    vec_len = 16 ÷ sizeof(T)
+    N = (sizeof(T) * vec_len) ÷ sizeof(Float32)
+    res = MArray{Tuple{size[1] ÷ vec_len, size[2]}, NTuple{N, VecElement{Float32}}}(undef)
+
+    @unroll for j = 1 : size[2]
+        @unroll for i = 1 : vec_len : size[1]
+            t = translate(tile, (i - 1, j - 1))
+
+            linear_base = linearise(t.base, Base.size(workspace))
+            linear_offset = linearise(t.offset, Base.size(workspace))
+
+            is_on_diagonal = abs(t.index.M - t.index.K) < 8 # We load 8 elements at a time, and the diagonal may fall anywhere inside these 8 elements.
+            #= is_on_diagonal = true =#
+
+            #= real_value = vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) =#
+            #= dummy_value = ntuple(i -> VecElement{Float32}(0), Val(4)) =#
+            #= @inbounds res[i, j] = is_on_diagonal ? real_value : dummy_value =#
+
+            @inbounds res[i, j] = is_on_diagonal ? vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) : ntuple(i -> VecElement{Float32}(0), Val(4))
+        end
+    end
+
+    return res
+end
+
 @inline function store!(::Type{AlignedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     vec_len = 16 ÷ sizeof(T)
 
