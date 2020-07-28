@@ -65,9 +65,10 @@ function matmul_impl(a, b, c, d,
                 by = div(block_k, block_tile.size.K)
 
                 # cond is true iff we should load from global memory
-                cond = (by == 2 * bx) || (by == 2 * bx + 1)
+                #= cond = (by == 2 * bx) || (by == 2 * bx + 1) =#
                 #= cond = (thread_tile.offset.M == thread_tile.offset.K) =#
                 #= cond = true =#
+                cond = false
 
                 x = cond ?
                     Layout.load(GLOBAL_A_LAYOUT, a, translate(thread_tile, (M = block_i, K = block_k))) :
