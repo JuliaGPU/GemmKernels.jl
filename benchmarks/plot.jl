@@ -18,7 +18,13 @@ end
 
 titles = Dict(
               "wmma" => "Performance of mixed-precision GEMM",
+              "complex-wmma" => "Performance of mixed-precision complex GEMM",
              )
+
+flops_factors = Dict(
+                     "wmma" => 2,
+                     "complex-wmma" => 8,
+                    )
 
 labels = Dict(
               "cublas-nn" => "cuBLAS (NN)",
@@ -42,7 +48,7 @@ for file in readdir()
 
         N = df[!, :N]
         runtime_arr = convert_to_array.(df[!, :runtime]) .* 1e3 # in ps
-        tflops = [2 * N[i] ^ 3 ./ runtime_arr[i] for i = 1 : length(N)]
+        tflops = [flops_factors[dir] * N[i] ^ 3 ./ runtime_arr[i] for i = 1 : length(N)]
 
         plot!(N, mean.(tflops), label=label, xscale=:log2, markershape=:circle, ribbon=std.(tflops), fillalpha=.5)
     end

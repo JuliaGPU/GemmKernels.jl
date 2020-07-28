@@ -4,10 +4,13 @@ M = parse(Int, ARGS[1])
 N = parse(Int, ARGS[2])
 K = parse(Int, ARGS[3])
 
+transpose_a = (ARGS[4] == "n" ? false : ARGS[4] == "t" ? true : error("Invalid memory layout for A: $(ARGS[4])"))
+transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid memory layout for B: $(ARGS[5])"))
+
 function benchmark_matmul(a, b, c, d)
     CUDA.@sync begin
         CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
-        CUBLAS.cublasGemmEx(CUBLAS.handle(), CUBLAS.CUBLAS_OP_T, CUBLAS.CUBLAS_OP_N, M, N, K, [Float32(2)], a, CUDA.R_16F, M, b, CUDA.R_16F, K, [Float32(3)], c, CUDA.R_32F, M, CUDA.R_32F, CUBLAS.CUBLAS_GEMM_DEFAULT)
+        CUBLAS.cublasGemmEx(CUBLAS.handle(), transpose_a ? CUBLAS.CUBLAS_OP_T : CUBLAS.CUBLAS_OP_N, transpose_b ? CUBLAS.CUBLAS_OP_T : CUBLAS.CUBLAS_OP_N, M, N, K, [Float32(2)], a, CUDA.R_16F, M, b, CUDA.R_16F, K, [Float32(3)], c, CUDA.R_32F, M, CUDA.R_32F, CUBLAS.CUBLAS_GEMM_DEFAULT)
     end
 end
 
