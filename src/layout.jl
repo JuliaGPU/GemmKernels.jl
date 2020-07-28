@@ -244,9 +244,8 @@ end
 
 struct SplitRowMajor{T} <: LayoutBase{T} end
 
-@inline function physical_size(::Type{SplitRowMajor{T}}, logical_size::NamedTuple) where {T}
-    t = reverse(Tuple(logical_size))
-    return (t..., 2)
+@inline function physical_size(::Type{Padded{SplitRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P}
+    return (logical_size[2] + P, logical_size[1], 2)
 end
 
 @inline function load(::Type{SplitRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
