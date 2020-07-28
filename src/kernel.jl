@@ -61,15 +61,7 @@ function matmul_impl(a, b, c, d,
         # (3.1) Cooperatively load a BLOCK_SHAPE.M x BLOCK_SHAPE.K tile of A from global to shared memory within one threadblock
         @unroll for warp_tile = parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR)
             @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR)
-                #= x = Layout.load(GLOBAL_A_LAYOUT, a, translate(thread_tile, (M = block_i, K = block_k))) =#
-                x = MArray{Tuple{thread_tile.size[1] ÷ 8, thread_tile.size[2]}, NTuple{4, VecElement{Float32}}}(undef)
-
-                @unroll for j = 1 : thread_tile.size[2]
-                    @unroll for i = 1 : 8 : thread_tile.size[1]
-                        @inbounds x[i, j] = ntuple(i -> VecElement{Float32}(0), Val(4))
-                    end
-                end
-
+                x = Layout.load(GLOBAL_A_LAYOUT, a, translate(thread_tile, (M = block_i, K = block_k)))
                 x = transf_gl2sh_a(x, thread_tile)
                 Layout.store!(SHARED_A_LAYOUT, shmem_a, x, thread_tile)
             end
@@ -78,15 +70,7 @@ function matmul_impl(a, b, c, d,
         # (3.2) Cooperatively load a BLOCK_SHAPE.K x BLOCK_SHAPE.N tile of B from global to shared memory within one threadblock
         @unroll for warp_tile = parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR)
             @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR)
-                #= x = Layout.load(GLOBAL_B_LAYOUT, b, translate(thread_tile, (K = block_k, N = block_j))) =#
-                x = MArray{Tuple{thread_tile.size[1] ÷ 8, thread_tile.size[2]}, NTuple{4, VecElement{Float32}}}(undef)
-
-                @unroll for j = 1 : thread_tile.size[2]
-                    @unroll for i = 1 : 8 : thread_tile.size[1]
-                        @inbounds x[i, j] = ntuple(i -> VecElement{Float32}(0), Val(4))
-                    end
-                end
-
+                x = Layout.load(GLOBAL_B_LAYOUT, b, translate(thread_tile, (K = block_k, N = block_j)))
                 x = transf_gl2sh_b(x, thread_tile)
                 Layout.store!(SHARED_B_LAYOUT, shmem_b, x, thread_tile)
             end
