@@ -97,11 +97,12 @@ end
             linear_offset = linearise(t.offset, Base.size(workspace))
 
             is_on_diagonal = abs(t.index.M - t.index.K) < 8 # We load 8 elements at a time, and the diagonal may fall anywhere inside these 8 elements.
+            #= is_on_diagonal = true =#
 
             #= real_value = vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) =#
             #= dummy_value = ntuple(i -> VecElement{Float32}(0), Val(4)) =#
+            #= @inbounds res[i, j] = is_on_diagonal ? real_value : dummy_value =#
 
-            #= @inbounds res[i, j] = condition ? real_value : dummy_value =#
             @inbounds res[i, j] = is_on_diagonal ? vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) : ntuple(i -> VecElement{Float32}(0), Val(4))
         end
     end
