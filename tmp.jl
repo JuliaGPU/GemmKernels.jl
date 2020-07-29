@@ -21,11 +21,11 @@ function run_gemm()
         end
     end
 
-    for i = 1 : K, j = 1 : N
-        if i != j
-            b_h[i, j] = 0
-        end
-    end
+    #= for i = 1 : K, j = 1 : N =#
+    #=     if i != j =#
+    #=         b_h[i, j] = 0 =#
+    #=     end =#
+    #= end =#
 
     # Transpose input if necessary
     a_h = transpose_a ? transpose(a_h) : a_h
