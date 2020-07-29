@@ -129,21 +129,36 @@ end
             linear_base = linearise(t.base, Base.size(workspace))
             linear_offset = linearise(t.offset, Base.size(workspace))
 
-            is_on_diagonal = abs(t.index[1] - t.index[2]) < 8 # We load 8 elements at a time, and the diagonal may fall anywhere inside these 8 elements.
+            # Scenario 1: not loading A at all
+            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(0), Val(4)) =#
+
+            # Scenario 2: always 'false' predicated load (adds overhead of the extra ld.global.v4 instructions (although they are not executed) compared to 1)
             #= is_on_diagonal = false =#
+            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
+            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
+
+            # Scenario 3: opaque 'false' predicated load (adds overhead to calculate the predicate compared to 2)
+            #= is_on_diagonal = abs(t.index[1] - t.index[2]) > 10000 =#
+            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
+            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
+
+            # Scenario 4: correct predicate (adds memory accesses to global memory compared to 3)
+            #= is_on_diagonal = abs(t.index[1] - t.index[2]) < 8 # We load 8 elements at a time, and the diagonal may fall anywhere inside these 8 elements. =#
+            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
+            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
+
+            # Scenario 5: opaque true (adds memory accesses outside diagonal compared to 4)
             #= is_on_diagonal = abs(t.index[1] - t.index[2]) < 10000 =#
+            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
+            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
+
+            # Scenario 6: true predicate (removes overhead of calculating the predicate compared to 5)
             #= is_on_diagonal = true =#
+            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
+            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
 
-            #= real_value = vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) =#
-            #= dummy_value = ntuple(i -> VecElement{Float32}(0), Val(4)) =#
-            #= @inbounds res[i, j] = is_on_diagonal ? real_value : dummy_value =#
-
-            #= @inbounds res[i, j] = is_on_diagonal ? vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) : ntuple(i -> VecElement{Float32}(0), Val(4)) =#
-            #= @inbounds res[i, j] = is_on_diagonal ? vloada(Vec{vec_len, T}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2), 1) : ntuple(i -> VecElement{Float32}(0), Val(4)) =#
-            #= pred_res = predicated_vectorised_load(pointer(workspace) + linear_base + linear_offset - 2, is_on_diagonal) =#
-
-            pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal)
-            @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4))
+            # Scenario 7: default implementation (removes overhead of the predicated instruction compared to 6)
+            @inbounds res[i, j] = vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1)
         end
     end
 
