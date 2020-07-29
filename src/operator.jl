@@ -76,6 +76,8 @@ end
 function mma(::Type{WMMAOp{M, N, K}}, a_frag, b_frag, c_frag) where {M, N, K}
     conf = WMMA.Config{M, N, K, Float32}
     return WMMA.mma(a_frag, b_frag, c_frag, conf)
+
+    #= return WMMA.Fragment{16, 16, 16, 8, Float32, WMMA.Unspecified, WMMA.Accumulator}(ntuple(i -> Float32(0), Val(8))) =#
 end
 
 # -----------
