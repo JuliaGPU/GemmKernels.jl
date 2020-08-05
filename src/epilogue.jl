@@ -41,7 +41,7 @@ struct Bias{B}
     bias_pointer::B
 end
 
-@inline function apply_bias(x, bias_pointer::CuPtr{Float32}, thread_tile)
+@inline function apply_bias!(x, bias_pointer::CuPtr{Float32}, thread_tile)
     dev_ptr = reinterpret(Core.LLVMPtr{Float32, AS.Global}, bias_pointer)
 
     @unroll for i = 1 : size(x, 1)
@@ -70,10 +70,8 @@ end
     @unroll for warp_tile = parallellise(block_tile.MN, Tile(MEM_CD_WARP), warpId, WARPS_PER_BLOCK)
         @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_CD_THREAD), laneId, 32)
             x = Layout.load(SHARED_D_LAYOUT, shmem_d, thread_tile)
+            apply_bias!(x, ep.bias_pointer, translate(thread_tile, (M = block_i, N = block_j)))
             x = transform(x, thread_tile)
-
-            apply_bias(x, ep.bias_pointer, translate(thread_tile, (M = block_i, N = block_j)))
-
             Layout.store!(GLOBAL_D_LAYOUT, d, x, translate(thread_tile, (M = block_i, N = block_j)))
         end
     end
