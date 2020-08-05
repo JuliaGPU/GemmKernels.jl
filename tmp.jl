@@ -30,7 +30,9 @@ function run_gemm()
     #= bias = CuArray(rand(Float32, (1, N))) =#
     bias = CuArray(ones(Float32, (1, N)));
 
-    ep = Epilogue.Bias(nothing)
+    ep = Epilogue.Bias(pointer(bias));
+
+    println(typeof(ep));
 
     conf = GemmKernels.get_config(
                                   gemm_shape = (M = M, N = N, K = K),
