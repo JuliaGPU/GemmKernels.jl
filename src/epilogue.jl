@@ -47,7 +47,7 @@ end
     @unroll for i = 1 : size(x, 1)
         @unroll for j = 1 : size(x, 2)
             # Load bias value for this column
-            col = thread_tile.index.N + 1
+            col = thread_tile.index.N + j
             b = unsafe_load(dev_ptr, col)
 
             @inbounds x[i, j] = ntuple(k -> VecElement{Float32}(x[i, j][k].value + b), Val(4))
