@@ -14,7 +14,6 @@ function run_gemm()
     b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
     c_h = rand(Float32, (M, N))
 
-
     # Transpose input if necessary
     a_h = transpose_a ? transpose(a_h) : a_h
     b_h = transpose_b ? transpose(b_h) : b_h
@@ -27,12 +26,9 @@ function run_gemm()
 
     # bias vector: 1 element per column
     # so for an M x N matrix, we need a 1 x N vector
-    #= bias = CuArray(rand(Float32, (1, N))) =#
-    bias = CuArray(ones(Float32, (1, N)));
+    bias = CuArray(rand(Float32, (1, N)))
 
     ep = Epilogue.Bias(pointer(bias));
-
-    println(typeof(ep));
 
     conf = GemmKernels.get_config(
                                   gemm_shape = (M = M, N = N, K = K),
@@ -49,7 +45,6 @@ function run_gemm()
 
     GemmKernels.matmul(a, b, c, d, conf;
                        epilogue = ep)
-
 
     # Transpose outputs, if necessary
     new_a_h = transpose_a ? transpose(a_h) : a_h
