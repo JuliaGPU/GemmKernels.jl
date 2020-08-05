@@ -53,7 +53,7 @@ using GemmKernels
         end
     end
 
-    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias + activation function" for transpose_a = [false, true],
+    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
         transpose_b = [false, true]
 
         @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
@@ -81,9 +81,6 @@ using GemmKernels
             # Custom epilogue to add bias
             ep = Epilogue.Bias(pointer(bias))
 
-            # Activation function
-            act_func = tanh
-
             conf = GemmKernels.get_config(
                 gemm_shape = (M = M, N = N, K = K),
                 operator = Operator.WMMAOp{16, 16, 16},
@@ -98,14 +95,13 @@ using GemmKernels
                                     )
 
             GemmKernels.matmul(a, b, c, d, conf;
-                               transform_shared_to_global_d = Transform.Elementwise(act_func),
                                epilogue = ep)
 
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            @test all(isapprox.(act_func.(Float32.(new_a_h) * Float32.(new_b_h) + c_h .+ Array(bias)), Array(d); rtol = sqrt(eps(Float16))))
+            @test all(isapprox.(Float32.(new_a_h) * Float32.(new_b_h) + c_h .+ Array(bias), Array(d); rtol = sqrt(eps(Float16))))
         end
     end
 
