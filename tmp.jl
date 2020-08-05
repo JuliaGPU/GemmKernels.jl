@@ -3,11 +3,11 @@ using GemmKernels
 using Test
 
 function run_gemm()
-    M = 2048;
-    N = 2048;
-    K = 2048;
+    M = 256;
+    N = 128;
+    K = 128;
 
-    transpose_a = false;
+    transpose_a = true;
     transpose_b = false;
 
     a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
@@ -50,5 +50,5 @@ function run_gemm()
     new_a_h = transpose_a ? transpose(a_h) : a_h
     new_b_h = transpose_b ? transpose(b_h) : b_h
 
-    @test all(isapprox.((Float32.(new_a_h) * Float32.(new_b_h) + c_h) .+ Array(bias), Array(d); rtol = sqrt(eps(Float16))))
+    @test all(isapprox.(Float32.(new_a_h) * Float32.(new_b_h) + c_h .+ Array(bias), Array(d); rtol = sqrt(eps(Float16))))
 end
