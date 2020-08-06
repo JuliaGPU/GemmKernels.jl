@@ -117,6 +117,12 @@ struct AlignedColMajor{T} <: LayoutBase{T} end
     return res
 end
 
+@inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
+    "
+    %ret = bitcast <8 x i16> %0 to <4 x float>
+    ret <4 x float> %ret
+    ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
+
 @inline function dummy_load(::Type{AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     vec_len = 16 ÷ sizeof(T)
     N = (sizeof(T) * vec_len) ÷ sizeof(Float32)
@@ -126,39 +132,11 @@ end
         @unroll for i = 1 : vec_len : size[1]
             t = translate(tile, (i - 1, j - 1))
 
-            linear_base = linearise(t.base, Base.size(workspace))
-            linear_offset = linearise(t.offset, Base.size(workspace))
-
-            # Scenario 1: not loading A at all
-            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(0), Val(4)) =#
-
-            # Scenario 2: always 'false' predicated load (adds overhead of the extra ld.global.v4 instructions (although they are not executed) compared to 1)
-            #= is_on_diagonal = false =#
-            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
-            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
-
-            # Scenario 3: opaque 'false' predicated load (adds overhead to calculate the predicate compared to 2)
-            #= is_on_diagonal = abs(t.index[1] - t.index[2]) > 10000 =#
-            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
-            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
-
-            # Scenario 4: correct predicate (adds memory accesses to global memory compared to 3)
-            is_on_diagonal = abs(t.index[1] - t.index[2]) < 8 # We load 8 elements at a time, and the diagonal may fall anywhere inside these 8 elements.
-            pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal)
-            @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4))
-
-            # Scenario 5: opaque true (adds memory accesses outside diagonal compared to 4)
-            #= is_on_diagonal = abs(t.index[1] - t.index[2]) < 10000 =#
-            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
-            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
-
-            # Scenario 6: true predicate (removes overhead of calculating the predicate compared to 5)
-            #= is_on_diagonal = true =#
-            #= pred_res = predicated_vectorised_load(reinterpret(Core.LLVMPtr{Int32, CUDA.AS.Global}, pointer(workspace) + sizeof(Float16) * (linear_base + linear_offset - 2)), is_on_diagonal) =#
-            #= @inbounds res[i, j] = ntuple(i -> VecElement{Float32}(Base.bitcast(Float32, pred_res[i])), Val(4)) =#
-
-            # Scenario 7: default implementation (removes overhead of the predicated instruction compared to 6)
-            #= @inbounds res[i, j] = vloada(Vec{vec_len, T}, pointer(workspace), linear_base + linear_offset - 1) =#
+            # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
+            # Only load on the diagonal, i.e. if row and column are equal.
+            # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
+            # TODO: Remove the <4 x float> everywhere, so we don't have to do this ugly casting all over the place.
+            @inbounds res[i, j] = bitcast_helper(ntuple(k -> VecElement{Float16}(t.index[1] + k - 1 == t.index[2] ? workspace[t.index[2] + 1] : 0), Val(8)))
         end
     end
 

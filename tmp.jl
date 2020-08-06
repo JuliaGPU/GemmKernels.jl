@@ -1,5 +1,6 @@
 using CUDA
 using GemmKernels
+using LinearAlgebra
 using Test
 
 function run_gemm()
@@ -10,22 +11,9 @@ function run_gemm()
     transpose_a = false;
     transpose_b = false;
 
-    a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
+    a_h = rand(Float16, M);
     b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
     c_h = rand(Float32, (M, N))
-
-    # Make a_h and b_h diagonal
-    for i = 1 : M, j = 1 : K
-        if i != j
-            a_h[i, j] = 0
-        end
-    end
-
-    #= for i = 1 : K, j = 1 : N =#
-    #=     if i != j =#
-    #=         b_h[i, j] = 0 =#
-    #=     end =#
-    #= end =#
 
     # Transpose input if necessary
     a_h = transpose_a ? transpose(a_h) : a_h
@@ -55,5 +43,17 @@ function run_gemm()
     new_a_h = transpose_a ? transpose(a_h) : a_h
     new_b_h = transpose_b ? transpose(b_h) : b_h
 
-    @test all(isapprox.(Float32.(new_a_h) * Float32.(new_b_h) + c_h, Array(d); rtol = sqrt(eps(Float16))))
+    # TODO: remove; debug only
+    got = Array(d);
+    expected = Float32.(Diagonal(new_a_h)) * Float32.(new_b_h) + c_h
+
+    xr = 1 : 16
+    yr = 1 : 16
+
+    display("text/plain", got[xr, yr])
+    println()
+    display("text/plain", expected[xr, yr])
+    println()
+
+    @test all(isapprox.(Float32.(Diagonal(new_a_h)) * Float32.(new_b_h) + c_h, Array(d); rtol = sqrt(eps(Float16))))
 end
