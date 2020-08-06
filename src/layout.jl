@@ -136,7 +136,7 @@ end
             # Only load on the diagonal, i.e. if row and column are equal.
             # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
             # TODO: Remove the <4 x float> everywhere, so we don't have to do this ugly casting all over the place.
-            @inbounds res[i, j] = bitcast_helper(ntuple(k -> VecElement{Float16}(t.index[1] + k - 1 == t.index[2] ? workspace[t.index[2] + 1] : 0), Val(8)))
+            @inbounds res[i, j] = bitcast_helper(ntuple(k -> VecElement{Float16}(t.index[1] + k - 1 == t.index[2] ? @inbounds(workspace[t.index[2] + 1]) : 0), Val(8)))
         end
     end
 
