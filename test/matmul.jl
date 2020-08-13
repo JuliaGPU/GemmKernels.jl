@@ -147,7 +147,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            @test all(isapprox.(Float32.(Diagonal(new_a_h)) * Float32.(new_b_h) + c_h .+ Array(bias), Array(d); rtol = sqrt(eps(Float16))))
+            @test all(isapprox.(Float32.(Diagonal(new_a_h)) * Float32.(new_b_h) + c_h, Array(d); rtol = sqrt(eps(Float16))))
         end
     end
 
