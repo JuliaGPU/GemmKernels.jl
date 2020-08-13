@@ -110,6 +110,8 @@ using GemmKernels
             N in [128, 256],
             K in [M]
 
+            transpose_a = false
+
             a_h = rand(Float16, M);
             b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
             c_h = rand(Float32, (M, N))
@@ -138,8 +140,7 @@ using GemmKernels
                 is_b_col_major = !transpose_b,
                                     )
 
-            GemmKernels.matmul(a, b, c, d, conf;
-                               epilogue = ep)
+            GemmKernels.matmul(a, b, c, d, conf)
 
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
