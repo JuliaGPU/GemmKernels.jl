@@ -58,7 +58,7 @@ function matmul_impl(a, b, c, d,
                                     length(shmem_a) * sizeof(Layout.eltype(SHARED_A_LAYOUT)))
 
     @unroll for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
-        if abs(block_i - block_k) <= 64
+        if Layout.threadblock_condition(GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
             # (3.1) Cooperatively load a BLOCK_SHAPE.M x BLOCK_SHAPE.K tile of A from global to shared memory within one threadblock
             @unroll for warp_tile = parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR)
                 @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR)

@@ -6,6 +6,12 @@ using GPUifyLoops: @unroll
 using GemmKernels.Tiling
 using StaticArrays
 
+# ---------------------
+# Customise computation
+# ---------------------
+
+@inline threadblock_condition(layout_a, layout_b, block_i, block_j, block_k, block_tile) = true
+
 # ----------------------
 # Explicit vectorisation
 # ----------------------
@@ -163,6 +169,8 @@ struct Diagonal{T} <: LayoutBase{T} end
 
     return res
 end
+
+@inline threadblock_condition(layout_a::Type{Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
 
 # ---------------
 # AlignedRowMajor
