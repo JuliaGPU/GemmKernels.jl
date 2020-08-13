@@ -13,8 +13,6 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuArray{Float16},
         throw(DimensionMismatch("Dimensions do not match"))
     end
 
-    computeType = Float32
-
     transpose_a = (transA == 'T')
     transpose_b = (transB == 'T')
 
