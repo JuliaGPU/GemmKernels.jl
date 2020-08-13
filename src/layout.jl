@@ -38,38 +38,6 @@ end
     end
 end
 
-@inline predicated_vectorised_load(ptr::Core.LLVMPtr{Int32, CUDA.AS.Global}, predicate::Bool) = Base.llvmcall(
-        """
-        %asmval = call {i32, i32, i32, i32} asm "{
-            .reg .pred p;
-
-            setp.ne.u32 p, \$5, 0;
-
-            mov.u32 \$0, \$6;
-            mov.u32 \$1, \$7;
-            mov.u32 \$2, \$8;
-            mov.u32 \$3, \$9;
-
-            @p ld.global.v4.u32 {\$0, \$1, \$2, \$3}, [\$4];
-        }", "=r,=r,=r,=r,l,r,r,r,r,r"(i64 %0, i32 %1, i32 %2, i32 %3, i32 %4, i32 %5)
-
-        %asmval1 = extractvalue {i32, i32, i32, i32} %asmval, 0
-        %asmval2 = extractvalue {i32, i32, i32, i32} %asmval, 1
-        %asmval3 = extractvalue {i32, i32, i32, i32} %asmval, 2
-        %asmval4 = extractvalue {i32, i32, i32, i32} %asmval, 3
-
-        %ret1 = insertvalue [4 x i32] undef, i32 %asmval1, 0
-        %ret2 = insertvalue [4 x i32] %ret1, i32 %asmval2, 1
-        %ret3 = insertvalue [4 x i32] %ret2, i32 %asmval3, 2
-        %ret4 = insertvalue [4 x i32] %ret3, i32 %asmval4, 3
-
-        ret [4 x i32] %ret4""",
-        Tuple{Int32, Int32, Int32, Int32},
-        Tuple{Int64, Int32, Int32, Int32, Int32, Int32},
-        Base.bitcast(Int64, ptr), convert(Int32, predicate), zero(Int32), zero(Int32), zero(Int32), zero(Int32)
-       )
-
-
 # -----------
 # Layout base
 # -----------
