@@ -11,4 +11,6 @@ include("transform.jl")
 
 include("launch.jl")
 
+include("blas.jl")
+
 end
