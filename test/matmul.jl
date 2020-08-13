@@ -105,6 +105,50 @@ using GemmKernels
         end
     end
 
+    @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
+        @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
+            N in [128, 256],
+            K in [M]
+
+            a_h = rand(Float16, M);
+            b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
+            c_h = rand(Float32, (M, N))
+
+            # Transpose input if necessary
+            a_h = transpose_a ? transpose(a_h) : a_h
+            b_h = transpose_b ? transpose(b_h) : b_h
+
+            a   = CuArray(a_h)
+            b   = CuArray(b_h)
+            c   = CuArray(c_h)
+            d   = similar(c)
+
+            conf = GemmKernels.get_config(
+                gemm_shape = (M = M, N = N, K = K),
+                operator = Operator.WMMAOp{16, 16, 16},
+                global_a_layout = Layout.Diagonal{Float16},
+                global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+
+                global_c_layout = Layout.AlignedColMajor{Float32},
+                global_d_layout = Layout.AlignedColMajor{Float32},
+
+                shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
+
+                is_a_col_major = !transpose_a,
+                is_b_col_major = !transpose_b,
+                                    )
+
+            GemmKernels.matmul(a, b, c, d, conf;
+                               epilogue = ep)
+
+            # Transpose outputs, if necessary
+            new_a_h = transpose_a ? transpose(a_h) : a_h
+            new_b_h = transpose_b ? transpose(b_h) : b_h
+
+            @test all(isapprox.(Float32.(Diagonal(new_a_h)) * Float32.(new_b_h) + c_h .+ Array(bias), Array(d); rtol = sqrt(eps(Float16))))
+        end
+    end
+
     function complex_transform_to_letter(conjugate::Bool, transpose::Bool)
         # key = (conjugate, transpose)
         d = Dict(
