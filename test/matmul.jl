@@ -1,6 +1,7 @@
 using CUDA
 using ForwardDiff
 using GemmKernels
+using LinearAlgebra
 
 ################################################################################
 
