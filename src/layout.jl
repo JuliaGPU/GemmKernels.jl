@@ -117,13 +117,34 @@ struct AlignedColMajor{T} <: LayoutBase{T} end
     return res
 end
 
+@inline function store!(::Type{AlignedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+    vec_len = 16 ÷ sizeof(T)
+
+    @unroll for j = 1 : size[2]
+        @unroll for i = 1 : vec_len : size[1]
+            t = translate(tile, (i - 1, j - 1))
+
+            linear_base = linearise(t.base, Base.size(workspace))
+            linear_offset = linearise(t.offset, Base.size(workspace))
+
+            @inbounds vstorea!(Vec{vec_len, T}, pointer(workspace), value[i, j], linear_base + linear_offset - 1)
+        end
+    end
+end
+
+# --------
+# Diagonal
+# --------
+
+struct Diagonal{T} <: LayoutBase{T} end
+
 @inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
     "
     %ret = bitcast <8 x i16> %0 to <4 x float>
     ret <4 x float> %ret
     ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
 
-@inline function dummy_load(::Type{AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+@inline function load(::Type{Diagonal{T}}, workspace, tile::Tile{size}) where {T, size}
     vec_len = 16 ÷ sizeof(T)
     N = (sizeof(T) * vec_len) ÷ sizeof(Float32)
     res = MArray{Tuple{size[1] ÷ vec_len, size[2]}, NTuple{N, VecElement{Float32}}}(undef)
@@ -141,21 +162,6 @@ end
     end
 
     return res
-end
-
-@inline function store!(::Type{AlignedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    vec_len = 16 ÷ sizeof(T)
-
-    @unroll for j = 1 : size[2]
-        @unroll for i = 1 : vec_len : size[1]
-            t = translate(tile, (i - 1, j - 1))
-
-            linear_base = linearise(t.base, Base.size(workspace))
-            linear_offset = linearise(t.offset, Base.size(workspace))
-
-            @inbounds vstorea!(Vec{vec_len, T}, pointer(workspace), value[i, j], linear_base + linear_offset - 1)
-        end
-    end
 end
 
 # ---------------

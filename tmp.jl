@@ -27,11 +27,14 @@ function run_gemm()
     conf = GemmKernels.get_config(
         gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.Diagonal{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
         global_c_layout = Layout.AlignedColMajor{Float32},
         global_d_layout = Layout.AlignedColMajor{Float32},
+
+        shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
+        shared_b_layout = transpose_b ? Layout.Padded{Layout.AlignedRowMajor{Float16}, 8} : Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,
