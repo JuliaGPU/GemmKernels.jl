@@ -2,6 +2,7 @@ module BLAS
 
 using CUDA
 using GemmKernels
+using LLVM
 using LinearAlgebra
 
 # Global layouts
@@ -19,6 +20,20 @@ shared_layout_cd(typ::Type{CuArray{T, N, P}}, transpose) where {T, N, P} = globa
 # Convert matrix to type compatible with kernel
 convert_matrix(mat) = mat
 convert_matrix(mat::Diagonal{T, A}) where {T, A} = mat.diag
+
+# Workaround for FP16 arithmetic on GPU converted to FP32
+@inline multiply_fp16(a::Float16, b::Float16) =
+    Base.bitcast(Float16,
+                 LLVM.Interop.@asmcall(
+                                       "{mul.f16 \$0,\$1,\$2;}",
+                                       "=h,h,h",
+                                       false,
+                                       Int16,
+                                       Tuple{Int16, Int16},
+                                       Base.bitcast(Int16, a),
+                                       Base.bitcast(Int16, b)
+                                      )
+                )
 
 # Based on https://github.com/JuliaGPU/CUDA.jl/blob/bd5a2a8800e91eb6a7df89eb5dd4bb8fc503541d/lib/cublas/wrappers.jl#L743-L769
 function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, C)
@@ -52,7 +67,7 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
                                 )
 
     GemmKernels.matmul(convert_matrix(A), convert_matrix(B), convert_matrix(C), convert_matrix(C), conf;
-                       transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
+                       transform_shared_to_regs_a = Transform.Elementwise(x -> multiply_fp16(x, alpha)),
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta))
 end
 
