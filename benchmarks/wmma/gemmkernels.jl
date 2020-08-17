@@ -9,6 +9,9 @@ transpose_a = (ARGS[4] == "n" ? false : ARGS[4] == "t" ? true : error("Invalid m
 transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid memory layout for B: $(ARGS[5])"))
 
 function benchmark_matmul(a, b, c, d)
+    alpha = rand(Float32)
+    beta = rand(Float32)
+
     CUDA.@sync begin
         GemmKernels.BLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c_gemmkernels)
     end
