@@ -12,6 +12,7 @@ function benchmark_matmul(a, b, c)
     beta = rand(Float32)
 
     CUDA.@sync begin
+        CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
         CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
     end
 end

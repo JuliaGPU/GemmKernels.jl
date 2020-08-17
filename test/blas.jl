@@ -2,6 +2,8 @@ using CUDA
 using GemmKernels
 using LinearAlgebra
 
+CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
+
 @testset "BLAS API" begin
     @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
