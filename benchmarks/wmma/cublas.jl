@@ -9,8 +9,7 @@ transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid m
 
 function benchmark_matmul(a, b, c, d)
     CUDA.@sync begin
-        CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
-        CUBLAS.cublasGemmEx(CUBLAS.handle(), transpose_a ? CUBLAS.CUBLAS_OP_T : CUBLAS.CUBLAS_OP_N, transpose_b ? CUBLAS.CUBLAS_OP_T : CUBLAS.CUBLAS_OP_N, M, N, K, [Float32(2)], a, CUDA.R_16F, M, b, CUDA.R_16F, K, [Float32(3)], c, CUDA.R_32F, M, CUDA.R_32F, CUBLAS.CUBLAS_GEMM_DEFAULT)
+        CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c_cublas)
     end
 end
 

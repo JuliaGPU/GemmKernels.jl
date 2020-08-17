@@ -9,24 +9,8 @@ transpose_a = (ARGS[4] == "n" ? false : ARGS[4] == "t" ? true : error("Invalid m
 transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid memory layout for B: $(ARGS[5])"))
 
 function benchmark_matmul(a, b, c, d)
-    alpha = 2
-    beta  = 3
-
     CUDA.@sync begin
-        conf = GemmKernels.get_config(
-            gemm_shape = (M = M, N = N, K = K),
-            operator = Operator.WMMAOp{16, 16, 16},
-            global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-            global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-
-            global_c_layout = Layout.AlignedColMajor{Float32},
-            global_d_layout = Layout.AlignedColMajor{Float32},
-
-            is_a_col_major = !transpose_a,
-            is_b_col_major = !transpose_b,
-                                )
-
-        GemmKernels.matmul(a, b, c, d, conf)
+        GemmKernels.BLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c_gemmkernels)
     end
 end
 
