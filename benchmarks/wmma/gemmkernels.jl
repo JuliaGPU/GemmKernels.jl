@@ -8,25 +8,12 @@ K = parse(Int, ARGS[3])
 transpose_a = (ARGS[4] == "n" ? false : ARGS[4] == "t" ? true : error("Invalid memory layout for A: $(ARGS[4])"))
 transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid memory layout for B: $(ARGS[5])"))
 
-function benchmark_matmul(a, b, c, d)
-    alpha = 2
-    beta  = 3
+function benchmark_matmul(a, b, c)
+    alpha = rand(Float32)
+    beta = rand(Float32)
 
     CUDA.@sync begin
-        conf = GemmKernels.get_config(
-            gemm_shape = (M = M, N = N, K = K),
-            operator = Operator.WMMAOp{16, 16, 16},
-            global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-            global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-
-            global_c_layout = Layout.AlignedColMajor{Float32},
-            global_d_layout = Layout.AlignedColMajor{Float32},
-
-            is_a_col_major = !transpose_a,
-            is_b_col_major = !transpose_b,
-                                )
-
-        GemmKernels.matmul(a, b, c, d, conf)
+        GemmKernels.BLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
     end
 end
 
@@ -41,12 +28,11 @@ b_h = transpose_b ? transpose(b_h) : b_h
 a   = CuArray(a_h)
 b   = CuArray(b_h)
 c   = CuArray(c_h)
-d   = similar(c)
 
 # warmup
-benchmark_matmul(a, b, c, d)
+benchmark_matmul(a, b, c)
 
 # profile
 for i = 1 : 10
-    CUDA.@profile benchmark_matmul(a, b, c, d)
+    CUDA.@profile benchmark_matmul(a, b, c)
 end
