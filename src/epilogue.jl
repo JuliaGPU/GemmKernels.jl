@@ -28,7 +28,7 @@ struct Default end
         @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_CD_THREAD), laneId, 32)
             x = Layout.load(SHARED_D_LAYOUT, shmem_d, thread_tile)
             x = transform(x, thread_tile)
-            Layout.store!(GLOBAL_D_LAYOUT, d, x, translate(thread_tile, (M = block_i, N = block_j)))
+            Layout.store!(GLOBAL_D_LAYOUT, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
         end
     end
 end
@@ -70,9 +70,9 @@ end
     @unroll for warp_tile = parallellise(block_tile.MN, Tile(MEM_CD_WARP), warpId, WARPS_PER_BLOCK)
         @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_CD_THREAD), laneId, 32)
             x = Layout.load(SHARED_D_LAYOUT, shmem_d, thread_tile)
-            apply_bias!(x, ep.bias_pointer, translate(thread_tile, (M = block_i, N = block_j)))
+            apply_bias!(x, ep.bias_pointer, translate_base(thread_tile, (M = block_i, N = block_j)))
             x = transform(x, thread_tile)
-            Layout.store!(GLOBAL_D_LAYOUT, d, x, translate(thread_tile, (M = block_i, N = block_j)))
+            Layout.store!(GLOBAL_D_LAYOUT, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
         end
     end
 end
