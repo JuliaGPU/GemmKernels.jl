@@ -79,7 +79,7 @@ struct AlignedColMajor{T} <: LayoutBase{T} end
 
     @unroll for j = 1 : size[2]
         @unroll for i = 1 : vec_len : size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             linear_base = linearise(t.base, Base.size(workspace))
             linear_offset = linearise(t.offset, Base.size(workspace))
@@ -96,7 +96,7 @@ end
 
     @unroll for j = 1 : size[2]
         @unroll for i = 1 : vec_len : size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             linear_base = linearise(t.base, Base.size(workspace))
             linear_offset = linearise(t.offset, Base.size(workspace))
@@ -125,7 +125,7 @@ struct Diagonal{T} <: LayoutBase{T} end
 
     @unroll for j = 1 : size[2]
         @unroll for i = 1 : vec_len : size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
             # Only load on the diagonal, i.e. if row and column are equal.
@@ -156,7 +156,7 @@ struct AlignedRowMajor{T} <: LayoutBase{T} end
 
     @unroll for i = 1 : size[1]
         @unroll for j = 1 : vec_len : size[2]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             linear_base = linearise(reverse(Tuple(t.base)), Base.size(workspace))
             linear_offset = linearise(reverse(Tuple(t.offset)), Base.size(workspace))
@@ -173,7 +173,7 @@ end
 
     @unroll for i = 1 : size[1]
         @unroll for j = 1 : vec_len : size[2]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             linear_base = linearise(reverse(Tuple(t.base)), Base.size(workspace))
             linear_offset = linearise(reverse(Tuple(t.offset)), Base.size(workspace))
@@ -194,7 +194,7 @@ struct InterleavedColMajor{T} <: LayoutBase{T} end
 
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds res[i, j] = workspace[t.index[1] + 1, t.index[2] + 1]
         end
@@ -206,7 +206,7 @@ end
 @inline function store!(::Type{InterleavedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for j = 1 : size[2]
         @unroll for i = 1 : size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = value[i, j]
         end
@@ -224,7 +224,7 @@ struct InterleavedRowMajor{T} <: LayoutBase{T} end
 
     @unroll for i = 1 : tile.size[1]
         @unroll for j = 1 : tile.size[2]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds res[i, j] = workspace[t.index[2] + 1, t.index[1] + 1]
         end
@@ -236,7 +236,7 @@ end
 @inline function store!(::Type{InterleavedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for i = 1 : size[1]
         @unroll for j = 1 : size[2]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = value[i, j]
         end
@@ -259,7 +259,7 @@ end
 
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds res[i,j] = workspace[t.index[1] + 1, t.index[2] + 1, 1] + workspace[t.index[1] + 1, t.index[2] + 1, 2] * im
         end
@@ -271,7 +271,7 @@ end
 @inline function store!(::Type{SplitColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = value[i, j].re
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = value[i, j].im
@@ -294,7 +294,7 @@ end
 
     @unroll for i = 1 : tile.size[1]
         @unroll for j = 1 : tile.size[2]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds res[i,j] = workspace[t.index[2] + 1, t.index[1] + 1, 1] + workspace[t.index[2] + 1, t.index[1] + 1, 2] * im
         end
@@ -306,7 +306,7 @@ end
 @inline function store!(::Type{SplitRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for i = 1 : tile.size[1]
         @unroll for j = 1 : tile.size[2]
-            t = translate(tile, (i - 1, j - 1))
+            t = translate_offset(tile, (i - 1, j - 1))
 
             @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 1] = value[i, j].re
             @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 2] = value[i, j].im
