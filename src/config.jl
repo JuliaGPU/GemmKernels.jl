@@ -115,15 +115,15 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     shared_c_layout = get(params, :shared_c_layout, global_c_layout)
     shared_d_layout = get(params, :shared_d_layout, global_d_layout)
 
-    # 8 warps in a 2 x 4 arrangement usually works well
-    warps_per_block = get(params, :warps_per_block, 8)
-    op_shape = Operator.shape(operator)
-    compute_warp = get(params, :compute_warp,
-                       map(*, op_shape, (M = 2, N = 4, K = 1)))
-
     # Apply heuristic for block shape
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
+
+    # 8 warps in a 4 x 2 arrangement usually works well
+    warps_per_block = get(params, :warps_per_block, 8)
+    op_shape = Operator.shape(operator)
+    compute_warp = get(params, :compute_warp,
+                       (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = op_shape.K))
 
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
     # TODO: Let the layouts handle this?
