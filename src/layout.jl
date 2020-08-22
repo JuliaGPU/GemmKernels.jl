@@ -16,22 +16,6 @@ using StaticArrays
 # Explicit vectorisation
 # ----------------------
 
-@inline _from_float_vec(::Type{NTuple{4, VecElement{Float32}}}, x::NTuple{4, VecElement{Float32}}) = x
-
-@inline _from_float_vec(::Type{NTuple{8, VecElement{Float16}}}, x::NTuple{4, VecElement{Float32}}) = Base.llvmcall(
-    "
-    %ret = bitcast <4 x float> %0 to <8 x i16>
-    ret <8 x i16> %ret
-    ", NTuple{8, VecElement{Float16}}, Tuple{NTuple{4, VecElement{Float32}}}, x)
-
-@inline _to_float_vec(::Type{NTuple{4, VecElement{Float32}}}, x::NTuple{4, VecElement{Float32}}) = x
-
-@inline _to_float_vec(::Type{NTuple{4, VecElement{Float32}}}, x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
-    "
-    %ret = bitcast <8 x i16> %0 to <4 x float>
-    ret <4 x float> %ret
-    ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
-
 struct Vec{N, T} end
 
 @inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, i::Integer = 1) where {N, T, AS}
@@ -40,9 +24,7 @@ struct Vec{N, T} end
 
     return quote
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{$vec_len, VecElement{Float32}}, AS}, ptr)
-        x = unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
-        x = _from_float_vec(NTuple{N, VecElement{T}}, x)
-        return x
+        return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
     end
 end
 
@@ -51,7 +33,6 @@ end
     vec_len = (sizeof(T) * N) ÷ sizeof(Float32)
 
     return quote
-        x = _to_float_vec(NTuple{$vec_len, VecElement{Float32}}, x)
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{$vec_len, VecElement{Float32}}, AS}, ptr)
         return unsafe_store!(vec_ptr, x, (i-1) ÷ N + 1, Val($alignment))
     end

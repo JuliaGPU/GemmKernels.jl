@@ -59,8 +59,8 @@ function matmul_impl(a, b, c, d,
 
     @unroll 1 for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
         if Layout.threadblock_condition(GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
-            a_fragment = MArray{Tuple{4, 1}, NTuple{8, VecElement{Float16}}}(undef)
-            b_fragment = MArray{Tuple{4, 1}, NTuple{8, VecElement{Float16}}}(undef)
+            a_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
+            b_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
 
             @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                 @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
