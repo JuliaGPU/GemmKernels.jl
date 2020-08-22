@@ -91,28 +91,27 @@ function matmul_impl(a, b, c, d,
             sync_threads()
 
             # (3.3) Calculate a COMPUTE_WARP.M x COMPUTE_WARP.N tile of D, using a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K operation
-            a_frags = MArray{Tuple{2, NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
-            b_frags = MArray{Tuple{2, NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
-
-            @unroll for (warp_iteration, warp_tile) = enumerate(parallellise(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK))
-                stage = mod1(warp_iteration, 2)
-
+            @unroll for warp_tile = parallellise(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
                 # (3.3.1) Load a COMPUTE_WARP.M x COMPUTE_WARP.K tile of A from shared memory into registers
+                a_frags = MArray{Tuple{NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
+
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))
-                    @inbounds a_frags[stage, i] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
+                    @inbounds a_frags[i] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
                 end
 
                 # (3.3.2) Load a COMPUTE_WARP.K x COMPUTE_WARP.N tile of B from shared memory into registers
+                b_frags = MArray{Tuple{NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
+
                 @unroll for j = 1 : NUM_FRAGMENTS_N
                     b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*COMPUTE_OP_SHAPE.N))
-                    @inbounds b_frags[stage, j] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
+                    @inbounds b_frags[j] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
                 end
 
                 # (3.3.3) Compute a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K matrix product within one warp
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     @unroll for j = 1 : NUM_FRAGMENTS_N
-                        @inbounds c_frags[i, j] = Operator.mma(OPERATOR, a_frags[stage, i], b_frags[stage, j], c_frags[i, j])
+                        @inbounds c_frags[i, j] = Operator.mma(OPERATOR, a_frags[i], b_frags[j], c_frags[i, j])
                     end
                 end
             end
