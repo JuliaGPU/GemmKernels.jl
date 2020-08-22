@@ -57,7 +57,7 @@ function matmul_impl(a, b, c, d,
     shmem_b = @cuDynamicSharedMem(Layout.eltype(SHARED_B_LAYOUT), Layout.physical_size(SHARED_B_LAYOUT, block_tile.KN.size),
                                     length(shmem_a) * sizeof(Layout.eltype(SHARED_A_LAYOUT)))
 
-    @unroll for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
+    @unroll 1 for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
         if Layout.threadblock_condition(GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
             a_fragment = MArray{Tuple{4, 1, 1, 1}, NTuple{4, VecElement{Float32}}}(undef)
             b_fragment = MArray{Tuple{4, 1, 1, 1}, NTuple{4, VecElement{Float32}}}(undef)
