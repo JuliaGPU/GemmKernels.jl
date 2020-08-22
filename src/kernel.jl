@@ -59,31 +59,31 @@ function matmul_impl(a, b, c, d,
 
     @unroll 1 for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
         if Layout.threadblock_condition(GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
-            a_fragment = MArray{Tuple{4, 1, 1, 1}, NTuple{4, VecElement{Float32}}}(undef)
-            b_fragment = MArray{Tuple{4, 1, 1, 1}, NTuple{4, VecElement{Float32}}}(undef)
+            a_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
+            b_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
 
             @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                 @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
-                    @inbounds a_fragment[i, j, :, :] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k)))[:, :]
+                    @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k)))
                 end
             end
 
             @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
                 @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
-                    @inbounds b_fragment[i, j, :, :] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_k, N = block_j)))[:, :]
+                    @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_k, N = block_j)))
                 end
             end
 
             @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                 @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
-                    @inbounds x = transf_gl2sh_a(a_fragment[i, j, :, :], thread_tile)
+                    @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
                     Layout.store!(SHARED_A_LAYOUT, shmem_a, x, thread_tile)
                 end
             end
 
             @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
                 @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
-                    @inbounds x = transf_gl2sh_b(b_fragment[i, j, :, :], thread_tile)
+                    @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
                     Layout.store!(SHARED_B_LAYOUT, shmem_b, x, thread_tile)
                 end
             end
