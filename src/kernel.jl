@@ -167,12 +167,12 @@ function matmul_impl(a, b, c, d,
 
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))
-                    @inbounds a_frags[i, nxt_stage] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
+                    @inbounds a_frags[nxt_stage, i] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
                 end
 
                 @unroll for j = 1 : NUM_FRAGMENTS_N
                     b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*COMPUTE_OP_SHAPE.N))
-                    @inbounds b_frags[j, nxt_stage] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
+                    @inbounds b_frags[nxt_stage, j] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
                 end
 
                 # mma(cur_stage)
