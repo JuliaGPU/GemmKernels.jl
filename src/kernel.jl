@@ -60,6 +60,8 @@ function matmul_impl(a, b, c, d,
     a_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
     b_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
 
+    warp_tile_mn = subdivide(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
+
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
             @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = 0)))
@@ -107,7 +109,9 @@ function matmul_impl(a, b, c, d,
             end
 
             # (3.3) Calculate a COMPUTE_WARP.M x COMPUTE_WARP.N tile of D, using a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K operation
-            @unroll for warp_tile = parallellise(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
+            @unroll for warp_k = 0 : 16 : 64 - 1
+                warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = warp_k))
+
                 # (3.3.1) Load a COMPUTE_WARP.M x COMPUTE_WARP.K tile of A from shared memory into registers
                 a_frags = MArray{Tuple{NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
 
