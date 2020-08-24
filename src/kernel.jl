@@ -79,40 +79,39 @@ function matmul_impl(a, b, c, d,
 
     @unroll 1 for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
         if Layout.threadblock_condition(GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
-            @unroll for warp_k = 0 : 16 : 64 - 1
-                if warp_k == 0
-                    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
-                        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
-                            @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
-                            Layout.store!(SHARED_A_LAYOUT, shmem_a, x, thread_tile)
-                        end
-                    end
+            @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
+                @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
+                    @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
+                    Layout.store!(SHARED_A_LAYOUT, shmem_a, x, thread_tile)
+                end
+            end
 
-                    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
-                        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
-                            @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
-                            Layout.store!(SHARED_B_LAYOUT, shmem_b, x, thread_tile)
-                        end
-                    end
+            @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
+                @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
+                    @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
+                    Layout.store!(SHARED_B_LAYOUT, shmem_b, x, thread_tile)
+                end
+            end
 
-                    sync_threads()
+            sync_threads()
 
-                    # skip global load in last iteration of block_k loop to avoid reading out-of-bounds
-                    if block_k != gemm_sz.size.K - block_tile.size.K
-                        @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
-                            @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
-                                @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k + block_tile.size.K)))
-                            end
-                        end
-
-                        @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
-                            @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
-                                @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_k + block_tile.size.K, N = block_j)))
-                            end
-                        end
+            # skip global load in last iteration of block_k loop to avoid reading out-of-bounds
+            if block_k != gemm_sz.size.K - block_tile.size.K
+                @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
+                    @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
+                        @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k + block_tile.size.K)))
                     end
                 end
 
+                @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
+                    @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
+                        @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_k + block_tile.size.K, N = block_j)))
+                    end
+                end
+            end
+
+            # (3.3) Calculate a COMPUTE_WARP.M x COMPUTE_WARP.N tile of D, using a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K operation
+            @unroll for warp_k = 0 : 16 : 64 - 1
                 warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = warp_k))
 
                 # (3.3.1) Load a COMPUTE_WARP.M x COMPUTE_WARP.K tile of A from shared memory into registers
