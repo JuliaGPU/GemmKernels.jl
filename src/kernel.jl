@@ -60,11 +60,12 @@ function matmul_impl(a, b, c, d,
     a_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
     b_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
 
-    a_frags = MArray{Tuple{NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
-    b_frags = MArray{Tuple{NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
+    a_frags = MArray{Tuple{2, NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
+    b_frags = MArray{Tuple{2, NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
 
     warp_tile_mn = subdivide(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
 
+    # ld.global(0)
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
             @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = 0)))
@@ -77,10 +78,57 @@ function matmul_impl(a, b, c, d,
         end
     end
 
+    # st.shared()
+    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
+        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
+            @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
+            Layout.store!(SHARED_A_LAYOUT, shmem_a, x, thread_tile)
+        end
+    end
+
+    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
+        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
+            @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
+            Layout.store!(SHARED_B_LAYOUT, shmem_b, x, thread_tile)
+        end
+    end
+
+    sync_threads()
+
+    # ld.shared(0, 1)
+    warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = 0))
+
+    @unroll for i = 1 : NUM_FRAGMENTS_M
+        a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))
+        @inbounds a_frags[1, i] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
+    end
+
+    @unroll for j = 1 : NUM_FRAGMENTS_N
+        b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*COMPUTE_OP_SHAPE.N))
+        @inbounds b_frags[1, j] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
+    end
+
+    # ld.global(64)
+    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
+        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
+            @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = 64)))
+        end
+    end
+
+    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
+        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
+            @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = 64, N = block_j)))
+        end
+    end
+
     @unroll 1 for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
         if Layout.threadblock_condition(GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
-            @unroll for warp_k = 0 : 16 : 64 - 1
-                if warp_k == 0
+            @unroll for (i, warp_k) = enumerate(0 : 16 : 64 - 1)
+                cur_stage = mod1(i, 2)
+                nxt_stage = mod1(i + 1, 2)
+
+                if i == 4 # last iteration
+                    # st.shared()
                     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
                             @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
@@ -97,40 +145,40 @@ function matmul_impl(a, b, c, d,
 
                     sync_threads()
 
-                    # skip global load in last iteration of block_k loop to avoid reading out-of-bounds
-                    if block_k != gemm_sz.size.K - block_tile.size.K
+                    # avoid out of bounds access for global memory
+                    if block_k < (gemm_sz.size.K - 2 * block_tile.size.K)
+                        # ld.global(block_k + 2 * 64)
                         @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                             @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
-                                @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k + block_tile.size.K)))
+                                @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K)))
                             end
                         end
 
                         @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
                             @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
-                                @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_k + block_tile.size.K, N = block_j)))
+                                @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_k + 2 * block_tile.size.K, N = block_j)))
                             end
                         end
                     end
                 end
 
-                warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = warp_k))
+                # ld.shared((warp_k + 16) % 64, nxt_stage)
+                warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = (warp_k + 16) % 64))
 
-                # (3.3.1) Load a COMPUTE_WARP.M x COMPUTE_WARP.K tile of A from shared memory into registers
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))
-                    @inbounds a_frags[i] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
+                    @inbounds a_frags[i, nxt_stage] = transf_sh2rf_a(Operator.load_a(OPERATOR, SHARED_A_LAYOUT, shmem_a, a_tile), a_tile)
                 end
 
-                # (3.3.2) Load a COMPUTE_WARP.K x COMPUTE_WARP.N tile of B from shared memory into registers
                 @unroll for j = 1 : NUM_FRAGMENTS_N
                     b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*COMPUTE_OP_SHAPE.N))
-                    @inbounds b_frags[j] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
+                    @inbounds b_frags[j, nxt_stage] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
                 end
 
-                # (3.3.3) Compute a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K matrix product within one warp
+                # mma(cur_stage)
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     @unroll for j = 1 : NUM_FRAGMENTS_N
-                        @inbounds c_frags[i, j] = Operator.mma(OPERATOR, a_frags[i], b_frags[j], c_frags[i, j])
+                        @inbounds c_frags[i, j] = Operator.mma(OPERATOR, a_frags[cur_stage, i], b_frags[cur_stage, j], c_frags[i, j])
                     end
                 end
             end
