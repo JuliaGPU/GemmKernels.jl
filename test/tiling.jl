@@ -20,17 +20,24 @@ using GemmKernels.Tiling
             @test transpose(Tile(M = 1, N = 2, K = 3)) == Tile(K = 3, N = 2, M = 1)
         end
 
-        @testset "Translate" begin
-            tile = translate(Tile(M = 10, N = 20), (M = 1, N = 2))
+        @testset "Translate base" begin
+            tile = translate_base(Tile(M = 10, N = 20), (M = 1, N = 2))
             @test tile.size == (M = 10, N = 20)
             @test tile.base == (M = 1, N = 2)
             @test tile.offset == (M = 0, N = 0)
         end
 
+        @testset "Translate offset" begin
+            tile = translate_offset(Tile(M = 10, N = 20), (M = 1, N = 2))
+            @test tile.size == (M = 10, N = 20)
+            @test tile.base == (M = 0, N = 0)
+            @test tile.offset == (M = 1, N = 2)
+        end
+
         @testset "Linearise" begin
             tile = Tile(M = 3, N = 5)
             for i = 0 : 2, j = 0 : 4
-                tile_t = translate(tile, (M = i, N = j))
+                tile_t = translate_offset(tile, (M = i, N = j))
                 @test linearise(tile_t.index, (M = 100, N = 200)) == j * 100 + i + 1
                 @test linearise(tile_t.NM.index, (N = 200, M = 100)) == i * 200 + j + 1
             end
