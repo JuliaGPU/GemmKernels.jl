@@ -28,7 +28,9 @@ version = "0.4.1"
 
 [[CUDA]]
 deps = ["AbstractFFTs", "Adapt", "BinaryProvider", "CEnum", "DataStructures", "ExprTools", "GPUArrays", "GPUCompiler", "LLVM", "Libdl", "LinearAlgebra", "Logging", "MacroTools", "NNlib", "Pkg", "Printf", "Random", "Reexport", "Requires", "SparseArrays", "Statistics", "TimerOutputs"]
-git-tree-sha1 = "975399610fdc6aad6c6ce8ff37bab57e299dcc16"
+git-tree-sha1 = "d5e7dfa6947d62bf559b6e7d98930baf3c97533f"
+repo-rev = "master"
+repo-url = "https://github.com/JuliaGPU/CUDA.jl.git"
 uuid = "052768ef-5323-5732-b1bb-66c8b64840ba"
 version = "1.3.0"
 
@@ -94,9 +96,9 @@ version = "5.1.0"
 
 [[GPUCompiler]]
 deps = ["DataStructures", "InteractiveUtils", "LLVM", "Libdl", "TimerOutputs", "UUIDs"]
-git-tree-sha1 = "c5687a4d9ff9fcfce8700b98106d63334dcbb4fe"
+git-tree-sha1 = "10b1a3aa52de30e9219f3ed147cb09e72cf6d2e8"
 uuid = "61eb1bfa-7361-4325-ad38-22787b887f55"
-version = "0.6.0"
+version = "0.7.0"
 
 [[GPUifyLoops]]
 deps = ["Cassette", "Requires", "StaticArrays"]
@@ -110,9 +112,9 @@ uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [[LLVM]]
 deps = ["CEnum", "Libdl", "Printf", "Unicode"]
-git-tree-sha1 = "a662366a5d485dee882077e8da3e1a95a86d097f"
+git-tree-sha1 = "d57affa9580f5e9fb44260e8f9366dc977f01a60"
 uuid = "929cbde3-209d-540e-8aea-75f648917ca0"
-version = "2.0.0"
+version = "3.0.0"
 
 [[LibGit2]]
 deps = ["Printf"]
