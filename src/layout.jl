@@ -102,23 +102,13 @@ struct Diagonal{T} <: LayoutBase{T} end
     ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
 
 @inline function load(::Type{Diagonal{T}}, workspace, tile::Tile{size}) where {T, size}
-    vec_len = 16 ÷ sizeof(T)
-    N = (sizeof(T) * vec_len) ÷ sizeof(Float32)
-    res = MArray{Tuple{size[1] ÷ vec_len, size[2]}, NTuple{N, VecElement{Float32}}}(undef)
+    N = 16 ÷ sizeof(T)
 
-    @unroll for j = 1 : size[2]
-        @unroll for i = 1 : vec_len : size[1]
-            t = translate_offset(tile, (i - 1, j - 1))
-
-            # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
-            # Only load on the diagonal, i.e. if row and column are equal.
-            # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
-            # TODO: Remove the <4 x float> everywhere, so we don't have to do this ugly casting all over the place.
-            @inbounds res[i, j] = bitcast_helper(ntuple(k -> VecElement{Float16}(t.index[1] + k - 1 == t.index[2] ? @inbounds(workspace[t.index[2] + 1]) : 0), Val(8)))
-        end
-    end
-
-    return res
+    # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
+    # Only load on the diagonal, i.e. if row and column are equal.
+    # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
+    # TODO: Remove the <4 x float> everywhere, so we don't have to do this ugly casting all over the place.
+    return bitcast_helper(ntuple(k -> VecElement{Float16}(tile.index[1] + k - 1 == tile.index[2] ? @inbounds(workspace[tile.index[2] + 1]) : 0), Val(8)))
 end
 
 @inline threadblock_condition(layout_a::Type{Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
