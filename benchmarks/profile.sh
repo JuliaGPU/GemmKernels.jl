@@ -9,9 +9,8 @@ fi
 
 # Julia path must be set
 if [[ -z ${JULIA_PATH+x} ]]; then
-    echo "Please set JULIA_PATH to the root path of the Julia repository." 1>&2
-    echo "Example: export JULIA_PATH=~/src/julia/" 1>&2
-    exit 1
+    echo "JULIA_PATH is not set. Using $(which julia)" 1>&2
+    echo "To use a Julia source build, use: export JULIA_PATH=~/src/julia/" 1>&2
 fi
 
 cd "$( dirname "${BASH_SOURCE[0]}" )"
@@ -28,7 +27,11 @@ for a_layout in n t; do
             N=$((2**i))
 
             # runtime is in nanoseconds
-            runtime=$(LD_LIBRARY_PATH=${JULIA_PATH}/usr/lib nv-nsight-cu-cli --profile-from-start off -f --csv --units base --metrics 'gpu__time_duration.avg' ${JULIA_PATH}/julia $SCRIPT $N $N $N $a_layout $b_layout 2>/dev/null | grep 'gpu__time_duration' | awk -F',' '{print $NF}' | sed 's/"//g' | paste -sd ',')
+            if [[ -z ${JULIA_PATH+x} ]]; then
+                runtime=$(nv-nsight-cu-cli --profile-from-start off -f --csv --units base --metrics 'gpu__time_duration.avg' julia $SCRIPT $N $N $N $a_layout $b_layout 2>/dev/null | grep 'gpu__time_duration' | awk -F',' '{print $NF}' | sed 's/"//g' | paste -sd ',')
+            else
+                runtime=$(LD_LIBRARY_PATH=${JULIA_PATH}/usr/lib nv-nsight-cu-cli --profile-from-start off -f --csv --units base --metrics 'gpu__time_duration.avg' ${JULIA_PATH}/julia $SCRIPT $N $N $N $a_layout $b_layout 2>/dev/null | grep 'gpu__time_duration' | awk -F',' '{print $NF}' | sed 's/"//g' | paste -sd ',')
+            fi
 
             printf "$N,\"$runtime\"\n" >>$OUTPUT_FILE
         done
