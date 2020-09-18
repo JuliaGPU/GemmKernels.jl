@@ -19,6 +19,7 @@ end
 titles = Dict(
               "wmma" => "Performance of mixed-precision GEMM",
               "complex-wmma" => "Performance of mixed-precision complex GEMM",
+              "dual-wmma" => "Performance of mixed-precision dual GEMM",
              )
 
 flops_factors = Dict(
@@ -35,6 +36,10 @@ labels = Dict(
               "gemmkernels-tt" => "Our implementation (TT)",
               "gemmkernels-tn" => "Our implementation (TN)",
               "gemmkernels-nt" => "Our implementation (NT)",
+              "cudajl-nn" => "CUDA.jl (NN)",
+              "cudajl-nt" => "CUDA.jl (NT)",
+              "cudajl-tn" => "CUDA.jl (TN)",
+              "cudajl-tt" => "CUDA.jl (TT)",
              )
 
 dir = ARGS[1]
