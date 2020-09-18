@@ -25,29 +25,43 @@ titles = Dict(
 flops_factors = Dict(
                      "wmma" => 2,
                      "complex-wmma" => 8,
+                     "dual-wmma" => 6,
                     )
 
 labels = Dict(
-              "cublas-nn" => "cuBLAS (NN)",
-              "cublas-tt" => "cuBLAS (TT)",
-              "cublas-tn" => "cuBLAS (TN)",
-              "cublas-nt" => "cuBLAS (NT)",
-              "gemmkernels-nn" => "Our implementation (NN)",
-              "gemmkernels-tt" => "Our implementation (TT)",
-              "gemmkernels-tn" => "Our implementation (TN)",
-              "gemmkernels-nt" => "Our implementation (NT)",
-              "cudajl-nn" => "CUDA.jl (NN)",
-              "cudajl-nt" => "CUDA.jl (NT)",
-              "cudajl-tn" => "CUDA.jl (TN)",
-              "cudajl-tt" => "CUDA.jl (TT)",
+              "gemmkernels" => "Our implementation",
+              "cublas" => "cuBLAS",
+              "cutlass" => "CUTLASS",
+              "cudajl" => "CUDA.jl",
              )
 
-dir = ARGS[1]
+seriesnumbers = Dict(
+              "gemmkernels" => 1,
+              "cublas" => 2,
+              "cutlass" => 3,
+              "cudajl" => 4,
+             )
+
+markershapes = Dict(
+                    "nn" => :circle,
+                    "tt" => :cross,
+                    "tn" => :diamond,
+                    "tt" => :dtriangle,
+                   )
+
+dir = ARGS[1] # e.g. wmma
 cd(dir)
 
 for file in readdir()
     if isfile(file) && splitext(basename(file))[2] == ".csv"
-        label = labels[splitext(basename(file))[1]]
+        filename = splitext(basename(file))[1]
+
+        implementation = split(filename, "-")[1] # e.g. gemmkernels
+        layout = split(filename, "-")[2] # e.g. nn
+
+        label = layout == "nn" ? labels[implementation] : ""
+        seriesnr = seriesnumbers[implementation]
+        markershape = markershapes[layout]
 
         df = DataFrame(CSV.File(file))
 
@@ -55,7 +69,7 @@ for file in readdir()
         runtime_arr = convert_to_array.(df[!, :runtime]) .* 1e3 # in ps
         tflops = [flops_factors[dir] * N[i] ^ 3 ./ runtime_arr[i] for i = 1 : length(N)]
 
-        plot!(N, mean.(tflops), label=label, xscale=:log2, markershape=:circle, ribbon=std.(tflops), fillalpha=.5)
+        plot!(N, mean.(tflops), seriescolor=seriesnr, label=label, xscale=:log2, markershape=markershape, ribbon=std.(tflops), fillalpha=.5)
     end
 end
 
