@@ -25,7 +25,33 @@ julia plot.jl wmma
 
 ## Diagonal matrices
 
-TODO
+### Run times
+
+```bash
+cd diagonal/
+
+julia --project=../../
+include("benchmark.jl")
+
+bench = @benchmark bench_cublas($a_cublas, $b, $c, $M, $N, $K, $transpose_a, $transpose_b)
+summarise_bench(bench)
+
+bench = @benchmark bench_gemmkernels($a_gk, $b, $c, $M, $N, $K, $transpose_a, $transpose_b)
+summarise_bench(bench)
+```
+
+### Kernel statistics
+
+```bash
+cd diagonal/
+
+nv-nsight-cu-cli --mode=launch $(which julia) --project=../../
+include("benchmark.jl")
+
+bench_cublas(a_cublas, b, c, M, N, K, transpose_a, transpose_b, 10)
+
+bench_gemmkernels(a_gk, b, c, M, N, K, transpose_a, transpose_b, 10)
+```
 
 ## Operator fusion
 
