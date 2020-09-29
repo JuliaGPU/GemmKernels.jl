@@ -144,21 +144,7 @@ using LinearAlgebra
         end
     end
 
-    function complex_transform_to_letter(conjugate::Bool, transpose::Bool)
-        # key = (conjugate, transpose)
-        d = Dict(
-                 (false, false) => 'N',
-                 (true, false) => 'C',
-                 (false, true) => 'T',
-                 (true, true) => 'H'
-                )
-
-        return d[(conjugate, transpose)]
-    end
-
-    @test_if "complex" @testset "WMMA Complex GEMM ($( complex_transform_to_letter(conjugate_a, transpose_a) )$( complex_transform_to_letter(conjugate_b, transpose_b) ))" for conjugate_a = [false, true],
-        conjugate_b = [false, true],
-        transpose_a = [false, true],
+    @test_if "complex" @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
 
         @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256)]
@@ -207,15 +193,10 @@ using LinearAlgebra
                                           is_b_col_major = !transpose_b
                                          )
 
-            trans_a = conjugate_a ? Transform.Elementwise(conj) : Transform.Elementwise()
-            trans_b = conjugate_b ? Transform.Elementwise(conj) : Transform.Elementwise()
+            GemmKernels.matmul(a, b, c, d, conf;)
 
-            GemmKernels.matmul(a, b, c, d, conf;
-                               transform_global_to_shared_a = trans_a,
-                               transform_global_to_shared_b = trans_b)
-
-            new_a_h = conjugate_a ? conj.(a_h) : a_h
-            new_b_h = conjugate_b ? conj.(b_h) : b_h
+            new_a_h = a_h
+            new_b_h = b_h
 
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(new_a_h) : new_a_h

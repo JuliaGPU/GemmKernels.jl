@@ -4,7 +4,7 @@ using Test
 macro test_if(label, expr)
     return quote
         if isempty(ARGS) || $(label) in ARGS
-            $(expr)
+            $(esc(expr))
         else
             nothing
         end
