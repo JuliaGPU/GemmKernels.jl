@@ -9,6 +9,11 @@ K = parse(Int, ARGS[3])
 transpose_a = (ARGS[4] == "n" ? false : ARGS[4] == "t" ? true : error("Invalid memory layout for A: $(ARGS[4])"))
 transpose_b = (ARGS[5] == "n" ? false : ARGS[5] == "t" ? true : error("Invalid memory layout for B: $(ARGS[5])"))
 
+# Large matrices take way too long
+if N > 4096
+    exit()
+end
+
 function benchmark_matmul(a, b, c, d)
     CUDA.@sync begin
         GPUArrays.generic_matmatmul!(c, b, a, 1, 1)
