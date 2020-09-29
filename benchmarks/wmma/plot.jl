@@ -37,9 +37,6 @@ markershapes = Dict(
                     "tt" => :dtriangle,
                    )
 
-dir = ARGS[1] # e.g. wmma
-cd(dir)
-
 for file in readdir()
     if isfile(file) && splitext(basename(file))[2] == ".csv"
         filename = splitext(basename(file))[1]
