@@ -7,6 +7,7 @@
 # export JULIA_PATH=~/src/julia
 
 export CUTLASS_PROF_PATH=~/src/cutlass/build/tools/profiler/cutlass_profiler
+export CUTLASS_EXAMPLES_BUILD_PATH=~/src/cutlass/build/examples
 ```
 
 ## WMMA
@@ -92,5 +93,14 @@ bench = @benchmark bench_gemmkernels_biasrelutwice($a, $b, $c, $bias, $M, $N, $K
 
 ## Complex and Dual numbers
 
-TODO
+```bash
+cd complex-dual/
 
+for file in gemmkernels_*.jl cudajl_complex.jl; do
+    ./profile-julia.sh $file
+done
+
+./profile-cutlass.sh
+
+julia plot.jl
+```
