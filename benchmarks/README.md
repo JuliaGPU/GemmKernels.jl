@@ -31,13 +31,11 @@ julia plot.jl
 cd diagonal/
 
 julia --project=../../
-include("benchmark.jl")
+include("benchmark.jl");
 
-bench = @benchmark bench_cublas($a_cublas, $b, $c, $M, $N, $K, $transpose_a, $transpose_b)
-summarise_bench(bench)
+bench = @benchmark bench_cublas($a_cublas, $b, $c, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
 
-bench = @benchmark bench_gemmkernels($a_gk, $b, $c, $M, $N, $K, $transpose_a, $transpose_b)
-summarise_bench(bench)
+bench = @benchmark bench_gemmkernels($a_gk, $b, $c, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
 ```
 
 ### Kernel statistics
@@ -48,14 +46,49 @@ cd diagonal/
 nv-nsight-cu-cli --mode=launch $(which julia) --project=../../
 include("benchmark.jl")
 
-bench_cublas(a_cublas, b, c, M, N, K, transpose_a, transpose_b, 10)
+bench_cublas(a_cublas, b, c, M, N, K, transpose_a, transpose_b, 10);
 
-bench_gemmkernels(a_gk, b, c, M, N, K, transpose_a, transpose_b, 10)
+bench_gemmkernels(a_gk, b, c, M, N, K, transpose_a, transpose_b, 10);
 ```
 
 ## Operator fusion
 
-TODO
+```bash
+cd operator-fusion/
+
+julia --project=../../
+include("benchmark.jl")
+
+###############
+
+bench = @benchmark bench_cublas($a, $b, $c, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+bench = @benchmark bench_gemmkernels($a, $b, $c, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+###############
+
+bench = @benchmark bench_cublas_relu($a, $b, $c, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+bench = @benchmark bench_gemmkernels_relu($a, $b, $c, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+###############
+
+bench = @benchmark bench_cublas_bias($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+bench = @benchmark bench_gemmkernels_bias($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+###############
+
+bench = @benchmark bench_cublas_biasrelu($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+bench = @benchmark bench_gemmkernels_biasrelu($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+###############
+
+bench = @benchmark bench_cublas_biasrelutwice($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+bench = @benchmark bench_gemmkernels_biasrelutwice($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+```
 
 ## Complex and Dual numbers
 

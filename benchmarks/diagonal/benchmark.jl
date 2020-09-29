@@ -19,7 +19,7 @@ function summarise_bench(b)
         mu, sigma, unit = mu / 1e9, sigma / 1e9, "s"
     end
 
-    println(string(@sprintf("(%.3f ± %.3f)", mu, sigma), " ", unit))
+    println(string(@sprintf("(%.2f ± %.2f)", mu, sigma), " ", unit))
 end
 
 M = 4096
