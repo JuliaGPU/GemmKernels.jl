@@ -20,7 +20,7 @@ done
 
 ./profile-cutlass.sh
 
-julia plot.jl wmma
+julia plot.jl
 ```
 
 ## Diagonal matrices
