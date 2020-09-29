@@ -34,7 +34,7 @@ markershapes = Dict(
                     "nn" => :circle,
                     "tt" => :cross,
                     "tn" => :diamond,
-                    "tt" => :dtriangle,
+                    "nt" => :dtriangle,
                    )
 
 for file in readdir()
