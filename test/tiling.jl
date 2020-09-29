@@ -2,7 +2,7 @@ using GemmKernels.Tiling
 
 ################################################################################
 
-@testset "Tiling API" begin
+@test_if "tiling" @testset "Tiling API" begin
     @testset "Tiles" begin
         @testset "Index" begin
             @test Tile(M = 4, N = 4, K = 4).index == (M = 0, N = 0, K = 0)
