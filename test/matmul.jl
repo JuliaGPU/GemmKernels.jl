@@ -6,7 +6,7 @@ using LinearAlgebra
 ################################################################################
 
 @testset "Matmul API" begin
-    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
+    @test_if "wmma" @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
 
         @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256)]
@@ -51,7 +51,7 @@ using LinearAlgebra
         end
     end
 
-    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
+    @test_if "bias" @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
         transpose_b = [false, true]
 
         @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
@@ -100,7 +100,7 @@ using LinearAlgebra
         end
     end
 
-    @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
+    @test_if "diagonal" @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
         @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
             @assert M == K "Diagonal only supports square A matrix (M == K)"
 
@@ -156,7 +156,7 @@ using LinearAlgebra
         return d[(conjugate, transpose)]
     end
 
-    @testset "WMMA Complex GEMM ($( complex_transform_to_letter(conjugate_a, transpose_a) )$( complex_transform_to_letter(conjugate_b, transpose_b) ))" for conjugate_a = [false, true],
+    @test_if "complex" @testset "WMMA Complex GEMM ($( complex_transform_to_letter(conjugate_a, transpose_a) )$( complex_transform_to_letter(conjugate_b, transpose_b) ))" for conjugate_a = [false, true],
         conjugate_b = [false, true],
         transpose_a = [false, true],
         transpose_b = [false, true]
@@ -227,7 +227,7 @@ using LinearAlgebra
         end
     end
 
-    @testset "WMMA Dual GEMM" begin
+    @test_if "dual" @testset "WMMA Dual GEMM" begin
         @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
