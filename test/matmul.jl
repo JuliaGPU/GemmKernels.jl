@@ -9,7 +9,7 @@ using LinearAlgebra
     @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256), (2048, 2048, 2048)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256)]
             alpha = 2
             beta  = 3
 
@@ -54,7 +54,7 @@ using LinearAlgebra
     @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (4096, 4096, 4096)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
             a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
             b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
             c_h = rand(Float32, (M, N))
@@ -101,7 +101,7 @@ using LinearAlgebra
     end
 
     @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048), (4096, 4096, 4096)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
             @assert M == K "Diagonal only supports square A matrix (M == K)"
 
             transpose_a = false
@@ -161,7 +161,7 @@ using LinearAlgebra
         transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (2048, 2048, 2048)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));
@@ -228,7 +228,7 @@ using LinearAlgebra
     end
 
     @testset "WMMA Dual GEMM" begin
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (2048, 2048, 2048)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));
