@@ -14,7 +14,7 @@ export CUTLASS_PROF_PATH=~/src/cutlass/build/tools/profiler/cutlass_profiler
 ```bash
 cd wmma/
 
-for file in *.jl; do
+for file in gemmkernels.jl cublas.jl; do
     ./profile-julia.sh $file
 done
 
