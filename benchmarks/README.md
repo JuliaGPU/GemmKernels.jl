@@ -2,46 +2,30 @@
 
 ## WMMA
 
-### Julia implementations
-
 ```bash
 export JULIA_PATH=~/src/julia
+export CUTLASS_PROF_PATH=~/src/cutlass/build/tools/profiler/cutlass_profiler
 
-for file in wmma/*.jl; do
-    ./profile.sh $file
+cd wmma/
+
+for file in *.jl; do
+    ./profile-julia.sh $file
 done
-```
 
-### Plotting
+./profile-cutlass.sh
 
-```bash
 julia plot.jl wmma
 ```
 
-## Complex WMMA
+## Diagonal matrices
 
-### Julia implementations
+TODO
 
-```bash
-export JULIA_PATH=~/src/julia
+## Operator fusion
 
-for file in complex-wmma/*.jl; do
-    ./profile.sh $file
-done
+TODO
 
-julia plot.jl complex-wmma
-```
+## Complex and Dual numbers
 
-## Dual WMMA
+TODO
 
-### Julia implementations
-
-```bash
-export JULIA_PATH=~/src/julia
-
-for file in dual-wmma/*.jl; do
-    ./profile.sh $file
-done
-
-julia plot.jl dual-wmma
-```

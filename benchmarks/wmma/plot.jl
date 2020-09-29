@@ -16,18 +16,6 @@ function convert_to_array(str)
     return parse.(Float64, els)
 end
 
-titles = Dict(
-              "wmma" => "Performance of mixed-precision GEMM",
-              "complex-wmma" => "Performance of mixed-precision complex GEMM",
-              "dual-wmma" => "Performance of mixed-precision dual GEMM",
-             )
-
-flops_factors = Dict(
-                     "wmma" => 2,
-                     "complex-wmma" => 8,
-                     "dual-wmma" => 6,
-                    )
-
 labels = Dict(
               "gemmkernels" => "Our implementation",
               "cublas" => "cuBLAS",
@@ -67,13 +55,14 @@ for file in readdir()
 
         N = df[!, :N]
         runtime_arr = convert_to_array.(df[!, :runtime]) .* 1e3 # in ps
-        tflops = [flops_factors[dir] * N[i] ^ 3 ./ runtime_arr[i] for i = 1 : length(N)]
+        flops_factor = 2
+        tflops = [flops_factor * N[i] ^ 3 ./ runtime_arr[i] for i = 1 : length(N)]
 
         plot!(N, mean.(tflops), seriescolor=seriesnr, label=label, xscale=:log2, markershape=markershape, ribbon=std.(tflops), fillalpha=.5)
     end
 end
 
-title!(titles[dir])
+title!("Performance of mixed-precision GEMM")
 xlabel!("N")
 ylabel!("TFLOPS")
 savefig("plot.pdf")
