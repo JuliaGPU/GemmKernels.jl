@@ -51,7 +51,7 @@ for file in readdir()
 
         N = df[!, :N]
         runtime_arr = convert_to_array.(df[!, :runtime]) .* 1e3 # in ps
-        flops_factor = flops_factors[implementation]
+        flops_factor = flop_factors[implementation]
         tflops = [flops_factor * N[i] ^ 3 ./ runtime_arr[i] for i = 1 : length(N)]
 
         plot!(N, mean.(tflops), seriescolor=seriesnr, label=label, xscale=:log2, markershape=markershape, ribbon=std.(tflops), fillalpha=.5)
