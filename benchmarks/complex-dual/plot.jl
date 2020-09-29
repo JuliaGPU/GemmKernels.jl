@@ -24,11 +24,18 @@ labels = Dict(
              )
 
 seriesnumbers = Dict(
-              "gemmkernels_complex" => 1
+              "gemmkernels_complex" => 1,
               "gemmkernels_dual" => 2,
               "cutlass" => 3,
               "cudajl_complex" => 4,
              )
+
+flop_factors = Dict(
+              "gemmkernels_complex" => 8,
+              "gemmkernels_dual" => 6,
+              "cutlass" => 8,
+              "cudajl_complex" => 8
+                   )
 
 for file in readdir()
     if isfile(file) && splitext(basename(file))[2] == ".csv"
