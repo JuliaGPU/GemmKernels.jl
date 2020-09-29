@@ -10,7 +10,11 @@ export JULIA_PATH=~/src/julia
 for file in wmma/*.jl; do
     ./profile.sh $file
 done
+```
 
+### Plotting
+
+```bash
 julia plot.jl wmma
 ```
 
