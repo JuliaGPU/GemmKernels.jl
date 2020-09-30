@@ -1,3 +1,4 @@
+export Kernel
 module Kernel
 
 using CUDA
