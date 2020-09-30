@@ -48,7 +48,7 @@ We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on
 ## Citation
 
 For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv][arxiv-paper]).
-The `CITATION.bib` file in the root of this repository contains a citation.
+The `CITATION.bib` file in the root of this repository contains a citation in BibTeX format.
 
 [cicd-image]: https://gitlab.com/JuliaGPU/GemmKernels.jl/badges/master/pipeline.svg
 [cicd-url]: https://gitlab.com/JuliaGPU/GemmKernels.jl/commits/master
