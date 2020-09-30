@@ -2,6 +2,8 @@
 
 _Flexible and performant GEMM kernels in Julia_
 
+[![Pipeline Status][cicd-image]][cicd-url]
+
 This package contains a framework to instantiate flexible, performant GEMM (General Matrix Multiplication) kernels.
 
 It decomposes GEMM kernels into orthogonal components:
@@ -38,15 +40,17 @@ It contains the necessary components for mixed-precision GEMMs using WMMA, GEMMs
 
 ## Performance
 
-![Performance Graph](performance-graph)
+![Performance Graph][performance-graph]
 
 The above figure shows the performance of a mixed-precision multiplication of two FP16 matrices, resulting in an FP32 resultant matrix, for different memory layouts.
 We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on an RTX 2080 Ti.
 
 ## Citation
 
-For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv](arxiv-paper)).
+For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv][arxiv-paper]).
 The `CITATION.bib` file in the root of this repository contains a citation.
 
+[cicd-image]: https://gitlab.com/JuliaGPU/GemmKernels.jl/badges/master/pipeline.svg
+[cicd-url]: https://gitlab.com/JuliaGPU/GemmKernels.jl/commits/master
 [performance-graph]: media/performance-wmma-gemm.png
 [arxiv-paper]: https://arxiv.org/abs/2009.12263
