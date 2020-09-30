@@ -38,7 +38,7 @@ It contains the necessary components for mixed-precision GEMMs using WMMA, GEMMs
 
 ## Performance
 
-![Performance Graph](/media/performance-wmma-gemm.png)
+![Performance Graph](media/performance-wmma-gemm.png)
 
 The above figure shows the performance of a mixed-precision multiplication of two FP16 matrices, resulting in an FP32 resultant matrix, for different memory layouts.
 We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on an RTX 2080 Ti.
