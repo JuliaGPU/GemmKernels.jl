@@ -92,7 +92,9 @@ using LinearAlgebra
                                          )
 
             GemmKernels.matmul(a, b, c, d, conf;
-                               epilogue = ep)
+                               epilogue = ep,
+                               kernel = Kernel.matmul_pipelined
+                              )
 
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
