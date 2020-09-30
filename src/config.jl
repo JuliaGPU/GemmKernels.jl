@@ -123,7 +123,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     warps_per_block = get(params, :warps_per_block, 8)
     op_shape = Operator.shape(operator)
     compute_warp = get(params, :compute_warp,
-                       (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = block_shape.K))
+                       (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = op_shape.K))
 
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
     # TODO: Let the layouts handle this?
