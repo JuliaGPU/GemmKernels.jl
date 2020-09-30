@@ -10,6 +10,7 @@ It decomposes a GEMM into orthogonal components:
 - _Layouts_ convert the logical coordinates of tiles to physical offsets in memory.
 - _Transforms_ are used to apply any arbitrary Julia functor to the GEMM's inputs or outputs. They are applied after every load, and before every store.
 - _Operators_ are responsible to perform the matrix multiplication itself. They load tiles from shared memory, perform the matrix multiplication, and store the resultant tile back to shared memory.
+- _Epilogues_ copy tiles of the resultant matrix to global memory, and can be used to implement arbitrary post-processing, such as adding a bias vector to the resultant matrix.
 
 Each of these components corresponds to a set of functions with a predetermined interface.
 These functions can be customised by the user through Julia' multiple dispatch functionality.
