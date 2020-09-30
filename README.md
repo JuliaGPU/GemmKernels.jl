@@ -15,7 +15,7 @@ It decomposes GEMM kernels into orthogonal components:
 - _Epilogues_ copy tiles of the resultant matrix to global memory, and can be used to implement arbitrary post-processing, such as adding a bias vector to the resultant matrix.
 
 Each of these components corresponds to a set of functions with a predetermined interface.
-These functions can be customised by the user through Julia' multiple dispatch functionality.
+These functions can be customised by the user through Julia's multiple dispatch functionality.
 
 The package includes 2 user-facing interfaces: a fully-featured interface (see e.g. `test/matmul.jl`) and a BLAS-like interface (see e.g. `test/blas.jl`).
 
