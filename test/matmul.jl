@@ -54,7 +54,7 @@ using LinearAlgebra
     @test_if "bias" @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
             a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
             b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
             c_h = rand(Float32, (M, N))
