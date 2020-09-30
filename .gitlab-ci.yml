@@ -9,4 +9,4 @@ test:1.5:
         - latest
     only:
         variables:
-            - $CI_COMMIT_TITLE =~ /\[ci\]/
+            - ($CI_COMMIT_TITLE =~ /\[ci\]/) || ($CI_COMMIT_BRANCH == "master")
