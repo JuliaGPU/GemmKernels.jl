@@ -197,7 +197,8 @@ using LinearAlgebra
                                           is_b_col_major = !transpose_b
                                          )
 
-            GemmKernels.matmul(a, b, c, d, conf;)
+            GemmKernels.matmul(a, b, c, d, conf;
+                               kernel = Kernel.matmul_pipelined)
 
             new_a_h = a_h
             new_b_h = b_h
@@ -252,7 +253,8 @@ using LinearAlgebra
                                           mem_cd_thread = (M = 2, N = 1)
                                          )
 
-            GemmKernels.matmul(a, b, c, d, conf)
+            GemmKernels.matmul(a, b, c, d, conf;
+                               kernel = Kernel.matmul_pipelined)
 
             a_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Complex{Float32}.(a_h))
             b_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Complex{Float32}.(b_h))
