@@ -7,3 +7,6 @@ test:1.5:
     tags:
         - nvidia
         - latest
+    only:
+        variables:
+            - $CI_COMMIT_TITLE =~ /\[ci\]/
