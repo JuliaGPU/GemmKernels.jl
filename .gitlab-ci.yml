@@ -4,3 +4,6 @@ test:1.5:
     extends:
         - .julia:1.5
         - .test
+    tags:
+        - nvidia
+        - latest
