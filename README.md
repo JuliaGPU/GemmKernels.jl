@@ -32,7 +32,7 @@ Note that you need a sufficiently recent NVIDIA GPU (Volta or later) that contai
 
 ## Project Status
 
-At the moment, the package only contains GEMM kernels for CUDA-enabled NVIDIA GPUs and target Tensor Cores exclusively.
+At the moment, the package only contains GEMM kernels for CUDA-enabled NVIDIA GPUs and targets Tensor Cores exclusively.
 
 It contains the necessary components for mixed-precision GEMMs using WMMA, GEMMs exploiting operation fusion with elementwise operations or bias vectors, diagonal matrices, and matrices of complex/dual numbers.
 
