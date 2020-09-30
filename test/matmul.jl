@@ -101,7 +101,7 @@ using LinearAlgebra
     end
 
     @test_if "diagonal" @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
             @assert M == K "Diagonal only supports square A matrix (M == K)"
 
             transpose_a = false
