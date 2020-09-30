@@ -4,7 +4,7 @@ _Flexible and performant GEMM kernels in Julia_
 
 This package contains a framework to instantiate flexible, performant GEMM (General Matrix Multiplication) kernels.
 
-It decomposes a GEMM into orthogonal components:
+It decomposes GEMM kernels into orthogonal components:
 
 - _Params_ determine the tiling size and launch configuration of the GEMM kernel. The tiling sizes are specified in _logical_ coordinates, i.e. with a meaning specified by the user.
 - _Layouts_ convert the logical coordinates of tiles to physical offsets in memory.
