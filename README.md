@@ -45,5 +45,5 @@ We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on
 
 ## Citation
 
-For more details on the implementation and performance results, please see our accompanying [paper](https://arxiv.org/abs/2009.12263).
+For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv](https://arxiv.org/abs/2009.12263)).
 The `CITATION.bib` file in the root of this repository contains a citation.
