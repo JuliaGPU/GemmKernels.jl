@@ -15,3 +15,6 @@ coverage:
     extends:
         - .julia:1.5
         - .coverage
+    only:
+        variables:
+            - ($CI_COMMIT_TITLE =~ /\[ci\]/) || ($CI_COMMIT_BRANCH == "master")
