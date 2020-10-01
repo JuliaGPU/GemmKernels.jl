@@ -187,8 +187,8 @@ function matmul_pipelined(a, b, c, d,
     b_frag_i = (block_tile.size.K * block_tile.size.N) ÷ (MEM_B_WARP.K * MEM_B_WARP.N * WARPS_PER_BLOCK)
     b_frag_j = (MEM_B_WARP.K * MEM_B_WARP.N) ÷ (MEM_B_THREAD.K * MEM_B_THREAD.N * 32)
 
-    a_fragment = MArray{Tuple{a_frag_i, a_frag_j}, NTuple{4, VecElement{Float32}}}(undef)
-    b_fragment = MArray{Tuple{b_frag_i, b_frag_j}, NTuple{4, VecElement{Float32}}}(undef)
+    a_fragment = MArray{Tuple{a_frag_i, a_frag_j}, Layout.fragtype(GLOBAL_A_LAYOUT, MEM_A_THREAD)}(undef)
+    b_fragment = MArray{Tuple{b_frag_i, b_frag_j}, Layout.fragtype(GLOBAL_B_LAYOUT, MEM_B_THREAD)}(undef)
 
     a_frags = MArray{Tuple{2, NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
     b_frags = MArray{Tuple{2, NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
