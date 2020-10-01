@@ -257,6 +257,8 @@ function matmul_pipelined(a, b, c, d,
             nxt_stage = mod1(i + 1, 2)
 
             if i == block_tile.size.K ÷ COMPUTE_OP_SHAPE.K # last iteration
+                sync_threads()
+
                 # st.shared()
                 @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                     @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
