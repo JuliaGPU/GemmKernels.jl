@@ -235,22 +235,22 @@ function matmul_pipelined(a, b, c, d,
     # ld.global(64)
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
-            @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = 64)))
+            @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_tile.size.K)))
         end
     end
 
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(MEM_B_WARP), warpId, WARPS_PER_BLOCK, IS_B_COL_MAJOR))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_B_THREAD), laneId, 32, IS_B_COL_MAJOR))
-            @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = 64, N = block_j)))
+            @inbounds b_fragment[i, j] = Layout.load(GLOBAL_B_LAYOUT, b, translate_base(thread_tile, (K = block_tile.size.K, N = block_j)))
         end
     end
 
     @unroll 1 for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
-        @unroll for (i, warp_k) = enumerate(0 : 16 : 64 - 1)
+        @unroll for (i, warp_k) = enumerate(0 : COMPUTE_OP_SHAPE.K : block_tile.size.K - 1)
             cur_stage = mod1(i, 2)
             nxt_stage = mod1(i + 1, 2)
 
-            if i == 4 # last iteration
+            if i == block_tile.size.K ÷ COMPUTE_OP_SHAPE.K # last iteration
                 # st.shared()
                 @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                     @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
@@ -286,7 +286,7 @@ function matmul_pipelined(a, b, c, d,
             end
 
             # ld.shared((warp_k + 16) % 64, nxt_stage)
-            warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = (warp_k + 16) % 64))
+            warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = (warp_k + COMPUTE_OP_SHAPE.K) % block_tile.size.K))
 
             @unroll for i = 1 : NUM_FRAGMENTS_M
                 a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))
