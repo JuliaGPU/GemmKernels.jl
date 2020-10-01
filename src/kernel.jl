@@ -181,8 +181,14 @@ function matmul_pipelined(a, b, c, d,
     shmem_b = @cuDynamicSharedMem(Layout.eltype(SHARED_B_LAYOUT), Layout.physical_size(SHARED_B_LAYOUT, block_tile.KN.size),
                                     length(shmem_a) * sizeof(Layout.eltype(SHARED_A_LAYOUT)))
 
-    a_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
-    b_fragment = MArray{Tuple{4, 1}, NTuple{4, VecElement{Float32}}}(undef)
+    # Sizes of a_fragment and b_fragment
+    a_frag_i = (block_tile.size.M * block_tile.size.K) ÷ (MEM_A_WARP.M * MEM_A_WARP.K * WARPS_PER_BLOCK)
+    a_frag_j = (MEM_A_WARP.M * MEM_A_WARP.K) ÷ (MEM_A_THREAD.M * MEM_A_THREAD.K * 32)
+    b_frag_i = (block_tile.size.K * block_tile.size.N) ÷ (MEM_B_WARP.K * MEM_B_WARP.N * WARPS_PER_BLOCK)
+    b_frag_j = (MEM_B_WARP.K * MEM_B_WARP.N) ÷ (MEM_B_THREAD.K * MEM_B_THREAD.N * 32)
+
+    a_fragment = MArray{Tuple{a_frag_i, a_frag_j}, NTuple{4, VecElement{Float32}}}(undef)
+    b_fragment = MArray{Tuple{b_frag_i, b_frag_j}, NTuple{4, VecElement{Float32}}}(undef)
 
     a_frags = MArray{Tuple{2, NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
     b_frags = MArray{Tuple{2, NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
