@@ -149,58 +149,51 @@ end
 
 struct InterleavedColMajor{T} <: LayoutBase{T} end
 
+#= @inline fragtype(::Type{InterleavedColMajor{T}}, tile_size::NamedTuple) where {T} = MArray{Tuple{tile_size[1], tile_size[2]}, Complex{T}} =#
+@inline fragtype(::Type{InterleavedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
+
 @inline function load(::Type{InterleavedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
-    res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
+    x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
 
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds res[i, j] = workspace[t.index[1] + 1, t.index[2] + 1]
+            @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1]
+            x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
         end
     end
 
-    return res
+    return x
+
+    #= res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef) =#
+
+    #= @unroll for j = 1 : tile.size[2] =#
+    #=     @unroll for i = 1 : tile.size[1] =#
+    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
+
+    #=         @inbounds res[i, j] = workspace[t.index[1] + 1, t.index[2] + 1] =#
+    #=     end =#
+    #= end =#
+
+    #= return res =#
 end
 
 @inline function store!(::Type{InterleavedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @unroll for j = 1 : size[2]
-        @unroll for i = 1 : size[1]
+    @unroll for j = 1 : tile.size[2]
+        @unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = value[i, j]
-        end
-    end
-end
-
-# -------------------
-# InterleavedRowMajor
-# -------------------
-
-struct InterleavedRowMajor{T} <: LayoutBase{T} end
-
-@inline function load(::Type{InterleavedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
-    res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
-
-    @unroll for i = 1 : tile.size[1]
-        @unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds res[i, j] = workspace[t.index[2] + 1, t.index[1] + 1]
+            val = value[(i - 1) * tile.size[2] + j]
+            @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = val
         end
     end
 
-    return res
-end
+    #= @unroll for j = 1 : size[2] =#
+    #=     @unroll for i = 1 : size[1] =#
+    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
 
-@inline function store!(::Type{InterleavedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @unroll for i = 1 : size[1]
-        @unroll for j = 1 : size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = value[i, j]
-        end
-    end
+    #=         @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = value[i, j] =#
+    #=     end =#
+    #= end =#
 end
 
 # -------------
@@ -214,64 +207,55 @@ struct SplitColMajor{T} <: LayoutBase{T} end
     return (t..., 2)
 end
 
+@inline fragtype(::Type{SplitColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
+
 @inline function load(::Type{SplitColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
-    res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
+    x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
 
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds res[i,j] = workspace[t.index[1] + 1, t.index[2] + 1, 1] + workspace[t.index[1] + 1, t.index[2] + 1, 2] * im
+            @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1, 1] + im *
+                            workspace[t.index[1] + 1, t.index[2] + 1, 2]
+            x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
         end
     end
 
-    return res
+    return x
+
+    #= res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef) =#
+
+    #= @unroll for j = 1 : tile.size[2] =#
+    #=     @unroll for i = 1 : tile.size[1] =#
+    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
+
+    #=         @inbounds res[i,j] = workspace[t.index[1] + 1, t.index[2] + 1, 1] + workspace[t.index[1] + 1, t.index[2] + 1, 2] * im =#
+    #=     end =#
+    #= end =#
+
+    #= return res =#
 end
 
 @inline function store!(::Type{SplitColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @unroll for j = 1 : tile.size[2]
         @unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = value[i, j].re
-            @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = value[i, j].im
+            val = value[(i - 1) * tile.size[2] + j]
+            @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = val.re
+            @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = val.im
         end
     end
+    #= @unroll for j = 1 : tile.size[2] =#
+    #=     @unroll for i = 1 : tile.size[1] =#
+    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
+
+    #=         #1= @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = value[i, j].re =1# =#
+    #=         #1= @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = value[i, j].im =1# =#
+    #=     end =#
+    #= end =#
 end
 
-# -------------
-# SplitRowMajor
-# -------------
-
+struct InterleavedRowMajor{T} <: LayoutBase{T} end
 struct SplitRowMajor{T} <: LayoutBase{T} end
-
-@inline function physical_size(::Type{Padded{SplitRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P}
-    return (logical_size[2] + P, logical_size[1], 2)
-end
-
-@inline function load(::Type{SplitRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
-    res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef)
-
-    @unroll for i = 1 : tile.size[1]
-        @unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds res[i,j] = workspace[t.index[2] + 1, t.index[1] + 1, 1] + workspace[t.index[2] + 1, t.index[1] + 1, 2] * im
-        end
-    end
-
-    return res
-end
-
-@inline function store!(::Type{SplitRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @unroll for i = 1 : tile.size[1]
-        @unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
-
-            @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 1] = value[i, j].re
-            @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 2] = value[i, j].im
-        end
-    end
-end
 
 end

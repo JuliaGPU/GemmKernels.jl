@@ -148,10 +148,10 @@ using LinearAlgebra
         end
     end
 
-    @test_if "complex" @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
-        transpose_b = [false, true]
+    @test_if "complex" @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false],
+        transpose_b = [false]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));
