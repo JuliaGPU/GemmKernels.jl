@@ -42,7 +42,8 @@ function benchmark_matmul(a, b, c, d)
                 is_b_col_major = !transpose_b
             )
 
-        GemmKernels.matmul(a, b, c, d, conf)
+        GemmKernels.matmul(a, b, c, d, conf;
+                           kernel = Kernel.matmul_pipelined)
     end
 end
 
