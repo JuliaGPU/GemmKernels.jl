@@ -164,18 +164,6 @@ struct InterleavedColMajor{T} <: LayoutBase{T} end
     end
 
     return x
-
-    #= res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef) =#
-
-    #= @unroll for j = 1 : tile.size[2] =#
-    #=     @unroll for i = 1 : tile.size[1] =#
-    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
-
-    #=         @inbounds res[i, j] = workspace[t.index[1] + 1, t.index[2] + 1] =#
-    #=     end =#
-    #= end =#
-
-    #= return res =#
 end
 
 @inline function store!(::Type{InterleavedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
@@ -186,14 +174,6 @@ end
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = val
         end
     end
-
-    #= @unroll for j = 1 : size[2] =#
-    #=     @unroll for i = 1 : size[1] =#
-    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
-
-    #=         @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = value[i, j] =#
-    #=     end =#
-    #= end =#
 end
 
 # -------------
@@ -222,18 +202,6 @@ end
     end
 
     return x
-
-    #= res = MArray{Tuple{tile.size[1], tile.size[2]}, Complex{T}}(undef) =#
-
-    #= @unroll for j = 1 : tile.size[2] =#
-    #=     @unroll for i = 1 : tile.size[1] =#
-    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
-
-    #=         @inbounds res[i,j] = workspace[t.index[1] + 1, t.index[2] + 1, 1] + workspace[t.index[1] + 1, t.index[2] + 1, 2] * im =#
-    #=     end =#
-    #= end =#
-
-    #= return res =#
 end
 
 @inline function store!(::Type{SplitColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
@@ -245,14 +213,6 @@ end
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = val.im
         end
     end
-    #= @unroll for j = 1 : tile.size[2] =#
-    #=     @unroll for i = 1 : tile.size[1] =#
-    #=         t = translate_offset(tile, (i - 1, j - 1)) =#
-
-    #=         #1= @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = value[i, j].re =1# =#
-    #=         #1= @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 2] = value[i, j].im =1# =#
-    #=     end =#
-    #= end =#
 end
 
 struct InterleavedRowMajor{T} <: LayoutBase{T} end
