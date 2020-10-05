@@ -195,7 +195,7 @@ function matmul_pipelined(a, b, c, d,
 
     warp_tile_mn = subdivide(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
 
-    # ld.global(0)
+    # ld.global(0 : BLOCK_SHAPE.K)
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
             @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = 0)))
@@ -225,7 +225,7 @@ function matmul_pipelined(a, b, c, d,
 
     sync_threads()
 
-    # ld.shared(0, 1)
+    # ld.shared(0 : COMPUTE_OP_SHAPE.K, stage = 1)
     warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = 0))
 
     @unroll for i = 1 : NUM_FRAGMENTS_M
@@ -238,7 +238,7 @@ function matmul_pipelined(a, b, c, d,
         @inbounds b_frags[1, j] = transf_sh2rf_b(Operator.load_b(OPERATOR, SHARED_B_LAYOUT, shmem_b, b_tile), b_tile)
     end
 
-    # ld.global(64)
+    # ld.global(BLOCK_SHAPE.K : 2 * BLOCK_SHAPE.K)
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
             @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_tile.size.K)))
@@ -278,7 +278,7 @@ function matmul_pipelined(a, b, c, d,
 
                 # avoid out of bounds access for global memory
                 if block_k < (gemm_sz.size.K - 2 * block_tile.size.K)
-                    # ld.global(block_k + 2 * 64)
+                    # ld.global(block_k + 2 * BLOCK_SHAPE.K : block_k + 3 * BLOCK_SHAPE.K)
                     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(MEM_A_WARP), warpId, WARPS_PER_BLOCK, IS_A_COL_MAJOR))
                         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(MEM_A_THREAD), laneId, 32, IS_A_COL_MAJOR))
                             @inbounds a_fragment[i, j] = Layout.load(GLOBAL_A_LAYOUT, a, translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K)))
@@ -293,7 +293,7 @@ function matmul_pipelined(a, b, c, d,
                 end
             end
 
-            # ld.shared((warp_k + 16) % 64, nxt_stage)
+            # ld.shared((warp_k + COMPUTE_OP_SHAPE.K) % BLOCK_SHAPE.K, stage = nxt_stage)
             warp_tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = (warp_k + COMPUTE_OP_SHAPE.K) % block_tile.size.K))
 
             @unroll for i = 1 : NUM_FRAGMENTS_M
