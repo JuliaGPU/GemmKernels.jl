@@ -20,6 +20,13 @@ shared_layout_cd(typ::Type{CuArray{T, N}}, transpose) where {T, N} = global_layo
 convert_matrix(mat) = mat
 convert_matrix(mat::Diagonal{T, A}) where {T, A} = mat.diag
 
+# Select the best kernel
+kernel(layout_a, layout_b) = Kernel.matmul_singlestage
+kernel(::Type{Layout.AlignedColMajor{T}}, ::Type{Layout.AlignedColMajor{T}}) where {T} = Kernel.matmul_pipelined
+kernel(::Type{Layout.AlignedColMajor{T}}, ::Type{Layout.AlignedRowMajor{T}}) where {T} = Kernel.matmul_pipelined
+kernel(::Type{Layout.AlignedRowMajor{T}}, ::Type{Layout.AlignedColMajor{T}}) where {T} = Kernel.matmul_pipelined
+kernel(::Type{Layout.AlignedRowMajor{T}}, ::Type{Layout.AlignedRowMajor{T}}) where {T} = Kernel.matmul_pipelined
+
 # Based on https://github.com/JuliaGPU/CUDA.jl/blob/bd5a2a8800e91eb6a7df89eb5dd4bb8fc503541d/lib/cublas/wrappers.jl#L743-L769
 function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, C)
     m = size(A, transA == 'N' ? 1 : 2)
@@ -33,12 +40,15 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
     transpose_a = (transA == 'T')
     transpose_b = (transB == 'T')
 
+    a_layout = global_layout(typeof(A), Val(transpose_a))
+    b_layout = global_layout(typeof(B), Val(transpose_b))
+
     conf = GemmKernels.get_config(
             gemm_shape = (M = m, N = n, K = k),
             operator = Operator.WMMAOp{16, 16, 16},
 
-            global_a_layout = global_layout(typeof(A), Val(transpose_a)),
-            global_b_layout = global_layout(typeof(B), Val(transpose_b)),
+            global_a_layout = a_layout,
+            global_b_layout = b_layout,
             global_c_layout = global_layout(typeof(C), Val(false)),
             global_d_layout = global_layout(typeof(C), Val(false)),
 
@@ -53,7 +63,9 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
 
     GemmKernels.matmul(convert_matrix(A), convert_matrix(B), convert_matrix(C), convert_matrix(C), conf;
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * (beta / alpha)),
-                       transform_regs_to_shared_d = Transform.Elementwise(x -> x * alpha))
+                       transform_regs_to_shared_d = Transform.Elementwise(x -> x * alpha),
+                       kernel = kernel(a_layout, b_layout)
+                      )
 end
 
 end

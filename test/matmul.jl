@@ -41,7 +41,9 @@ using LinearAlgebra
 
             GemmKernels.matmul(a, b, c, d, conf;
                                transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
-                               transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta))
+                               transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
+                               kernel = Kernel.matmul_pipelined
+                              )
 
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
@@ -90,7 +92,9 @@ using LinearAlgebra
                                          )
 
             GemmKernels.matmul(a, b, c, d, conf;
-                               epilogue = ep)
+                               epilogue = ep,
+                               kernel = Kernel.matmul_pipelined
+                              )
 
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
@@ -193,7 +197,8 @@ using LinearAlgebra
                                           is_b_col_major = !transpose_b
                                          )
 
-            GemmKernels.matmul(a, b, c, d, conf;)
+            GemmKernels.matmul(a, b, c, d, conf;
+                               kernel = Kernel.matmul_pipelined)
 
             new_a_h = a_h
             new_b_h = b_h
@@ -248,7 +253,8 @@ using LinearAlgebra
                                           mem_cd_thread = (M = 2, N = 1)
                                          )
 
-            GemmKernels.matmul(a, b, c, d, conf)
+            GemmKernels.matmul(a, b, c, d, conf;
+                               kernel = Kernel.matmul_pipelined)
 
             a_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Complex{Float32}.(a_h))
             b_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Complex{Float32}.(b_h))

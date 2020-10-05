@@ -113,7 +113,8 @@ function bench_gemmkernels(a, b, c, M, N, K, transpose_a, transpose_b)
        )
 
         for i = 1 : 100
-            GemmKernels.matmul(a, b, c, c, conf;)
+            GemmKernels.matmul(a, b, c, c, conf;
+                               kernel = Kernel.matmul_pipelined)
         end
     end
 end
@@ -135,7 +136,8 @@ function bench_gemmkernels_relu(a, b, c, M, N, K, transpose_a, transpose_b)
 
         for i = 1 : 100
             GemmKernels.matmul(a, b, c, c, conf;
-                               transform_regs_to_shared_d = Transform.Elementwise(f))
+                               transform_regs_to_shared_d = Transform.Elementwise(f),
+                               kernel = Kernel.matmul_pipelined)
         end
     end
 end
@@ -157,7 +159,8 @@ function bench_gemmkernels_bias(a, b, c, bias, M, N, K, transpose_a, transpose_b
 
         for i = 1 : 100
             GemmKernels.matmul(a, b, c, c, conf;
-                               epilogue = Epilogue.Bias(pointer(bias)))
+                               epilogue = Epilogue.Bias(pointer(bias)),
+                               kernel = Kernel.matmul_pipelined)
         end
     end
 end
@@ -180,7 +183,8 @@ function bench_gemmkernels_biasrelu(a, b, c, bias, M, N, K, transpose_a, transpo
         for i = 1 : 100
             GemmKernels.matmul(a, b, c, c, conf;
                                transform_regs_to_shared_d = Transform.Elementwise(f),
-                               epilogue = Epilogue.Bias(pointer(bias)))
+                               epilogue = Epilogue.Bias(pointer(bias)),
+                               kernel = Kernel.matmul_pipelined)
         end
     end
 end
@@ -204,7 +208,8 @@ function bench_gemmkernels_biasrelutwice(a, b, c, bias, M, N, K, transpose_a, tr
             GemmKernels.matmul(a, b, c, c, conf;
                                transform_shared_to_regs_c = Transform.Elementwise(f),
                                transform_regs_to_shared_d = Transform.Elementwise(f),
-                               epilogue = Epilogue.Bias(pointer(bias)))
+                               epilogue = Epilogue.Bias(pointer(bias)),
+                               kernel = Kernel.matmul_pipelined)
         end
     end
 end
