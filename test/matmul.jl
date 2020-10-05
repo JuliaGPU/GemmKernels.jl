@@ -151,7 +151,7 @@ using LinearAlgebra
     @test_if "complex" @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));
@@ -209,12 +209,12 @@ using LinearAlgebra
 
             # TODO: Figure out why changing this to a * b + c = d instead of a * b = d - c
             # makes tests fail for CC (see #19).
-            @test all(isapprox.(new_a_h * new_b_h, Array(d) - c_h; rtol=sqrt(eps(Float16))));
+            @test all(isapprox.(Complex{Float32}.(new_a_h) * Complex{Float32}.(new_b_h), Array(d) - c_h; rtol=sqrt(eps(Float16))));
         end
     end
 
     @test_if "dual" @testset "WMMA Dual GEMM" begin
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256)]
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));
