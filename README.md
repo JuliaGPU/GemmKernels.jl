@@ -2,7 +2,9 @@
 
 _Flexible and performant GEMM kernels in Julia_
 
-[![Pipeline Status][cicd-image]][cicd-url]
+[![Build Status][buildkite-image]][buildkite-url]
+
+[![Coverage][coverage-image]][coverage-url]
 
 This package contains a framework to instantiate flexible, performant GEMM (General Matrix Multiplication) kernels.
 
@@ -50,7 +52,9 @@ We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on
 For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv][arxiv-paper]).
 The [`CITATION.bib`](CITATION.bib) file in the root of this repository contains a citation in BibTeX format.
 
-[cicd-image]: https://gitlab.com/JuliaGPU/GemmKernels.jl/badges/master/pipeline.svg
-[cicd-url]: https://gitlab.com/JuliaGPU/GemmKernels.jl/commits/master
+[buildkite-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg
+[buildkite-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
+[coverage-image]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl/branch/master/graph/badge.svg?token=YXD6751WQ1
+[coverage-url]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl
 [performance-graph]: media/performance-wmma-gemm.png
 [arxiv-paper]: https://arxiv.org/abs/2009.12263
