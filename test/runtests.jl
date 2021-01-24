@@ -1,6 +1,8 @@
 using GemmKernels
 using Test
 
+import CUDA
+
 macro test_if(label, expr)
     return quote
         if isempty(ARGS) || $(label) in ARGS
@@ -10,6 +12,8 @@ macro test_if(label, expr)
         end
     end
 end
+
+CUDA.allowscalar(false)
 
 @testset "GemmKernels.jl" begin
     include("tiling.jl")
