@@ -97,11 +97,19 @@ end
 
 struct Diagonal{T} <: LayoutBase{T} end
 
-@inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
-    "
-    %ret = bitcast <8 x i16> %0 to <4 x float>
-    ret <4 x float> %ret
-    ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
+if VERSION < v"1.6.0-DEV.1236"
+    @inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
+        "
+        %ret = bitcast <8 x i16> %0 to <4 x float>
+        ret <4 x float> %ret
+        ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
+else
+    @inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
+        "
+        %ret = bitcast <8 x half> %0 to <4 x float>
+        ret <4 x float> %ret
+        ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
+end
 
 @inline function load(::Type{Diagonal{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
