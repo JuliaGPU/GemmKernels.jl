@@ -2,6 +2,11 @@ using GemmKernels
 using Test
 
 import CUDA
+import InteractiveUtils
+
+InteractiveUtils.versioninfo()
+CUDA.versioninfo()
+@info "" CUDA.capability.(CUDA.devices())
 
 macro test_if(label, expr)
     return quote
