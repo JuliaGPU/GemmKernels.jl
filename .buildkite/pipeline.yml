@@ -18,8 +18,6 @@ steps:
       - JuliaCI/julia#v0.6:
           version: "1.6-nightly"
       - JuliaCI/julia-test#v0.3: ~
-      - JuliaCI/julia-coverage#v0.3:
-          codecov: true
     agents:
       queue: "juliagpu"
       cuda: "*"
@@ -32,8 +30,6 @@ steps:
       - JuliaCI/julia#v0.6:
           version: "nightly"
       - JuliaCI/julia-test#v0.3: ~
-      - JuliaCI/julia-coverage#v0.3:
-          codecov: true
     agents:
       queue: "juliagpu"
       cuda: "*"
