@@ -132,19 +132,6 @@ end
 
 using LLVM
 
-multiply_fp16(a::Float16, b::Float16) =
-    Base.bitcast(Float16,
-                 LLVM.Interop.@asmcall(
-                                       "{mul.f16 \$0,\$1,\$2;}",
-                                       "=h,h,h",
-                                       false,
-                                       Int16,
-                                       Tuple{Int16, Int16},
-                                       Base.bitcast(Int16, a),
-                                       Base.bitcast(Int16, b)
-                                      )
-                )
-
 @inline function mma(::Type{WMMAComplexOp{M, N, K}}, a_frag, b_frag, c_frag) where {M, N, K}
     conf = WMMA.Config{16, 16, 16, Float32}
 
@@ -152,7 +139,7 @@ multiply_fp16(a::Float16, b::Float16) =
     c_im = c_frag[2]
 
     c_re = WMMA.mma(a_frag[1],  b_frag[1], c_re, conf)
-    c_re = WMMA.mma(multiply_fp16.(a_frag[2], Float16(-1)), b_frag[2], c_re, conf)
+    c_re = WMMA.mma(.-(a_frag[2]), b_frag[2], c_re, conf)
 
     c_im = WMMA.mma(a_frag[1], b_frag[2], c_im, conf)
     c_im = WMMA.mma(a_frag[2], b_frag[1], c_im, conf)
