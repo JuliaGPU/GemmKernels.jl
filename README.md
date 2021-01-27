@@ -8,6 +8,7 @@ _Flexible and performant GEMM kernels in Julia_
 | ----------- | -- |
 | 1.5         | [![Continuous Integration][buildkite-julia1-image]][buildkite-julia1-url]             |
 | 1.6-nightly | [![Continuous Integration][buildkite-julia16nightly-image]][buildkite-julia16nightly-url] |
+| nightly | [![Continuous Integration][buildkite-julianightly-image]][buildkite-julianightly-url] |
 
 This package contains a framework to instantiate flexible, performant GEMM (General Matrix Multiplication) kernels.
 
@@ -57,8 +58,11 @@ The [`CITATION.bib`](CITATION.bib) file in the root of this repository contains 
 
 [buildkite-julia1-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.5
 [buildkite-julia1-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
+
 [buildkite-julia16nightly-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.6-nightly
 [buildkite-julia16nightly-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
+[buildkite-julianightly-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%20nightly
+[buildkite-julianightly-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
 [coverage-image]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl/branch/master/graph/badge.svg
 [coverage-url]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl
 [performance-graph]: media/performance-wmma-gemm.png
