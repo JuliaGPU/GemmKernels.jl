@@ -38,9 +38,59 @@ end
 
 @inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
     if sym == :launch_args
-        return (threads = WARPS_PER_BLOCK * 32, blocks = (MATMUL_SHAPE.M ÷ BLOCK_SHAPE.M, MATMUL_SHAPE.N ÷ BLOCK_SHAPE.N), shmem = 64 * 1024)
+        (threads = WARPS_PER_BLOCK * 32,
+         blocks = (MATMUL_SHAPE.M ÷ BLOCK_SHAPE.M, MATMUL_SHAPE.N ÷ BLOCK_SHAPE.N),
+         shmem = 64 * 1024)
+
+    # convenience accessors for typevars
+    elseif sym == :matmul_shape
+        MATMUL_SHAPE
+    elseif sym == :block_shape
+        BLOCK_SHAPE
+    elseif sym == :warps_per_block
+        WARPS_PER_BLOCK
+    elseif sym == :mem_a_warp
+        MEM_A_WARP
+    elseif sym == :mem_a_thread
+        MEM_A_THREAD
+    elseif sym == :mem_b_warp
+        MEM_B_WARP
+    elseif sym == :mem_b_thread
+        MEM_B_THREAD
+    elseif sym == :mem_cd_warp
+        MEM_CD_WARP
+    elseif sym == :mem_cd_thread
+        MEM_CD_THREAD
+    elseif sym == :compute_warp
+        COMPUTE_WARP
+    elseif sym == :compute_op_shape
+        COMPUTE_OP_SHAPE
+    elseif sym == :global_a_layout
+        GLOBAL_A_LAYOUT
+    elseif sym == :global_b_layout
+        GLOBAL_B_LAYOUT
+    elseif sym == :global_c_layout
+        GLOBAL_C_LAYOUT
+    elseif sym == :global_d_layout
+        GLOBAL_D_LAYOUT
+    elseif sym == :shared_a_layout
+        SHARED_A_LAYOUT
+    elseif sym == :shared_b_layout
+        SHARED_B_LAYOUT
+    elseif sym == :shared_c_layout
+        SHARED_C_LAYOUT
+    elseif sym == :shared_d_layout
+        SHARED_D_LAYOUT
+    elseif sym == :operator
+        OPERATOR
+    elseif sym == :is_a_col_major
+        IS_A_COL_MAJOR
+    elseif sym == :is_b_col_major
+        IS_B_COL_MAJOR
+
+    # fallback
     else
-        return getfield(conf, sym)
+        getfield(conf, sym)
     end
 end
 
