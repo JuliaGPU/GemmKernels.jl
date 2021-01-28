@@ -4,9 +4,8 @@ using Test
 import CUDA
 import InteractiveUtils
 
-InteractiveUtils.versioninfo()
-CUDA.versioninfo()
-@info "" CUDA.capability.(CUDA.devices())
+@info "Julia details\n\n" * sprint(io->InteractiveUtils.versioninfo(io))
+@info "CUDA details\n\n" * sprint(io->CUDA.versioninfo(io))
 
 macro test_if(label, expr)
     return quote
