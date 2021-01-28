@@ -12,23 +12,23 @@ using GPUifyLoops: @unroll
 
 struct Default end
 
-@inline function (ep::Default)(d, shmem_d, transform, conf::Type{GemmKernels.Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
+@inline function (ep::Default)(d, shmem_d, transform, ::Type{conf}) where {conf <: GemmKernels.Config}
     # Constants
-    block_i = (blockIdx().x - 1) * BLOCK_SHAPE.M
-    block_j = (blockIdx().y - 1) * BLOCK_SHAPE.N
+    block_i = (blockIdx().x - 1) * conf.block_shape.M
+    block_j = (blockIdx().y - 1) * conf.block_shape.N
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1
 
-    gemm_sz = Tile(MATMUL_SHAPE)
-    block_tile = Tile(BLOCK_SHAPE)
+    gemm_sz = Tile(conf.matmul_shape)
+    block_tile = Tile(conf.block_shape)
 
-    # Cooperatively store a BLOCK_SHAPE.M x BLOCK_SHAPE.N tile of D from shared to global memory within one threadblock
-    @unroll for warp_tile = parallellise(block_tile.MN, Tile(MEM_CD_WARP), warpId, WARPS_PER_BLOCK)
-        @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_CD_THREAD), laneId, 32)
-            x = Layout.load(SHARED_D_LAYOUT, shmem_d, thread_tile)
+    # Cooperatively store a block_shape.M x block_shape.N tile of D from shared to global memory within one threadblock
+    @unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
+        @unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
+            x = Layout.load(conf.shared_d_layout, shmem_d, thread_tile)
             x = transform(x, thread_tile)
-            Layout.store!(GLOBAL_D_LAYOUT, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
+            Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
         end
     end
 end
@@ -51,24 +51,24 @@ end
     return ntuple(k -> VecElement{Float32}(x[k].value + b), Val(4))
 end
 
-@inline function (ep::Bias{B})(d, shmem_d, transform, conf::Type{GemmKernels.Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR, B}
+@inline function (ep::Bias{B})(d, shmem_d, transform, ::Type{conf}) where {B, conf <: GemmKernels.Config}
     # Constants
-    block_i = (blockIdx().x - 1) * BLOCK_SHAPE.M
-    block_j = (blockIdx().y - 1) * BLOCK_SHAPE.N
+    block_i = (blockIdx().x - 1) * conf.block_shape.M
+    block_j = (blockIdx().y - 1) * conf.block_shape.N
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1
 
-    gemm_sz = Tile(MATMUL_SHAPE)
-    block_tile = Tile(BLOCK_SHAPE)
+    gemm_sz = Tile(conf.matmul_shape)
+    block_tile = Tile(conf.block_shape)
 
-    # Cooperatively store a BLOCK_SHAPE.M x BLOCK_SHAPE.N tile of D from shared to global memory within one threadblock
-    @unroll for warp_tile = parallellise(block_tile.MN, Tile(MEM_CD_WARP), warpId, WARPS_PER_BLOCK)
-        @unroll for thread_tile = parallellise(warp_tile, Tile(MEM_CD_THREAD), laneId, 32)
-            x = Layout.load(SHARED_D_LAYOUT, shmem_d, thread_tile)
+    # Cooperatively store a block_shape.M x block_shape.N tile of D from shared to global memory within one threadblock
+    @unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
+        @unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
+            x = Layout.load(conf.shared_d_layout, shmem_d, thread_tile)
             x = apply_bias(x, ep.bias_pointer, translate_base(thread_tile, (M = block_i, N = block_j)))
             x = transform(x, thread_tile)
-            Layout.store!(GLOBAL_D_LAYOUT, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
+            Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
         end
     end
 end
