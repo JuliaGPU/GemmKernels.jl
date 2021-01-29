@@ -4,11 +4,11 @@ using LinearAlgebra
 
 CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
 
-@test_if "blas" @testset "BLAS API" begin
-    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
-        transpose_b = [false, true]
-
-        @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
+@testset "BLAS API" begin
+    @testset "WMMA GEMM" begin
+    for transpose_a = [false, true], transpose_b = [false, true],
+         M in [128, 256], N in [128, 256], K in [128, 256]
+    @testcase "$( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
             N in [128, 256],
             K in [128, 256]
 
@@ -35,12 +35,12 @@ CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
             @test all(isapprox.(Array(c_gemmkernels), Array(c_cublas); rtol=sqrt(eps(Float16))));
         end
     end
+    end
 
-    @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
-        @testset "(M = $M, N = $N, K = $K)" for M in [128, 256],
-            N in [128, 256],
-            K in [M]
-
+    @testset "WMMA GEMM diagonal" begin
+    for transpose_b = [false, true],
+        M in [128, 256], N in [128, 256], K in [M]
+    @testcase "A = diagonal, B = $( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
             transpose_a = false
 
             alpha = rand(Float32)
@@ -65,5 +65,6 @@ CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
 
             @test all(isapprox.(Array(c_gemmkernels), Array(c_cublas); rtol=sqrt(eps(Float16))));
         end
+    end
     end
 end

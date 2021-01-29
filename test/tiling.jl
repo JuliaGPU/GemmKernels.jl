@@ -2,39 +2,39 @@ using GemmKernels.Tiling
 
 ################################################################################
 
-@test_if "tiling" @testset "Tiling API" begin
+@testset "Tiling API" begin
     @testset "Tiles" begin
-        @testset "Index" begin
+        @testcase "Index" begin
             @test Tile(M = 4, N = 4, K = 4).index == (M = 0, N = 0, K = 0)
         end
 
-        @testset "Projection" begin
+        @testcase "Projection" begin
             @test Tile(M = 1, N = 2, K = 3).MN  == Tile(M = 1, N = 2)
             @test Tile(M = 1, N = 2, K = 3).NM  == Tile(N = 2, M = 1)
             @test Tile(M = 1, N = 2, K = 3).M   == Tile(M = 1)
             @test Tile(M = 1, N = 2, K = 3).KMN == Tile(K = 3, M = 1, N = 2)
         end
 
-        @testset "Transposition" begin
+        @testcase "Transposition" begin
             @test transpose(Tile(M = 1, N = 2)) == Tile(N = 2, M = 1)
             @test transpose(Tile(M = 1, N = 2, K = 3)) == Tile(K = 3, N = 2, M = 1)
         end
 
-        @testset "Translate base" begin
+        @testcase "Translate base" begin
             tile = translate_base(Tile(M = 10, N = 20), (M = 1, N = 2))
             @test tile.size == (M = 10, N = 20)
             @test tile.base == (M = 1, N = 2)
             @test tile.offset == (M = 0, N = 0)
         end
 
-        @testset "Translate offset" begin
+        @testcase "Translate offset" begin
             tile = translate_offset(Tile(M = 10, N = 20), (M = 1, N = 2))
             @test tile.size == (M = 10, N = 20)
             @test tile.base == (M = 0, N = 0)
             @test tile.offset == (M = 1, N = 2)
         end
 
-        @testset "Linearise" begin
+        @testcase "Linearise" begin
             tile = Tile(M = 3, N = 5)
             for i = 0 : 2, j = 0 : 4
                 tile_t = translate_offset(tile, (M = i, N = j))
@@ -45,7 +45,7 @@ using GemmKernels.Tiling
     end
 
     @testset "Tile iteration" begin
-        @testset "Subdivide" begin
+        @testcase "Subdivide" begin
             tile_size = (M = 8, N = 4)
             num_tiles = (M = 2, N = 4)
             tile = Tile(M = num_tiles.M * tile_size.M, N = num_tiles.N * tile_size.N)
@@ -59,7 +59,7 @@ using GemmKernels.Tiling
             end
         end
 
-        @testset "Parallellise" begin
+        @testcase "Parallellise" begin
             tile_size = (M = 8, N = 4)
             num_tiles = (M = 2, N = 8)
             tile = Tile(M = num_tiles.M * tile_size.M, N = num_tiles.N * tile_size.N)
