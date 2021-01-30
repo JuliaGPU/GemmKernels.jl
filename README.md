@@ -33,7 +33,7 @@ The package can be installed using Julia's build-in package manager.
 Open the Julia REPL, type `]` to enter Pkg-mode, and run:
 
 ```
-pkg> add https://github.com/thomasfaingnaert/GemmKernels.jl
+pkg> add GemmKernels
 ```
 
 Note that you need a sufficiently recent NVIDIA GPU (Volta or later) that contains Tensor Cores to use this package.
