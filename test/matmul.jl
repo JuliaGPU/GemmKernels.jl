@@ -54,7 +54,7 @@ using LinearAlgebra
         end
     end
 
-    @testset "WMMA GEMM + bias + bias" begin
+    @testset "WMMA GEMM + bias" begin
         for transpose_a = [false, true], transpose_b = [false, true],
             (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
         @testcase "$( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
