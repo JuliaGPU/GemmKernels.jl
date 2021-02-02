@@ -20,20 +20,18 @@ struct Vec{N, T} end
 
 @inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, i::Integer = 1) where {N, T, AS}
     alignment = sizeof(T) * N
-    vec_len = (sizeof(T) * N) ÷ sizeof(Float32)
 
     return quote
-        vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{$vec_len, VecElement{Float32}}, AS}, ptr)
+        vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
         return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
     end
 end
 
 @inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, x, i::Integer = 1) where {N, T, AS}
     alignment = sizeof(T) * N
-    vec_len = (sizeof(T) * N) ÷ sizeof(Float32)
 
     return quote
-        vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{$vec_len, VecElement{Float32}}, AS}, ptr)
+        vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
         return unsafe_store!(vec_ptr, x, (i-1) ÷ N + 1, Val($alignment))
     end
 end
@@ -71,7 +69,7 @@ struct AlignedColMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{Padded{AlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 
-@inline fragtype(::Type{AlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{4, VecElement{Float32}}
+@inline fragtype(::Type{AlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{8, VecElement{Float16}}
 
 @inline function load(::Type{AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
@@ -97,28 +95,13 @@ end
 
 struct Diagonal{T} <: LayoutBase{T} end
 
-if VERSION < v"1.6.0-DEV.1236"
-    @inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
-        "
-        %ret = bitcast <8 x i16> %0 to <4 x float>
-        ret <4 x float> %ret
-        ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
-else
-    @inline bitcast_helper(x::NTuple{8, VecElement{Float16}}) = Base.llvmcall(
-        "
-        %ret = bitcast <8 x half> %0 to <4 x float>
-        ret <4 x float> %ret
-        ", NTuple{4, VecElement{Float32}}, Tuple{NTuple{8, VecElement{Float16}}}, x)
-end
-
 @inline function load(::Type{Diagonal{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
     # Only load on the diagonal, i.e. if row and column are equal.
     # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
-    # TODO: Remove the <4 x float> everywhere, so we don't have to do this ugly casting all over the place.
-    return bitcast_helper(ntuple(k -> VecElement{Float16}(tile.index[1] + k - 1 == tile.index[2] ? @inbounds(workspace[tile.index[2] + 1]) : 0), Val(8)))
+    return ntuple(k -> VecElement{Float16}(tile.index[1] + k - 1 == tile.index[2] ? @inbounds(workspace[tile.index[2] + 1]) : 0), Val(8))
 end
 
 @inline threadblock_condition(layout_a::Type{Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
@@ -131,7 +114,7 @@ struct AlignedRowMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{Padded{AlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
-@inline fragtype(::Type{AlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{4, VecElement{Float32}}
+@inline fragtype(::Type{AlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{8, VecElement{Float16}}
 
 @inline function load(::Type{AlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)

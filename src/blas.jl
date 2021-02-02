@@ -62,8 +62,8 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
                                 )
 
     GemmKernels.matmul(convert_matrix(A), convert_matrix(B), convert_matrix(C), convert_matrix(C), conf;
-                       transform_shared_to_regs_c = Transform.Elementwise(x -> x * (beta / alpha)),
-                       transform_regs_to_shared_d = Transform.Elementwise(x -> x * alpha),
+                       transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
+                       transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
                        kernel = kernel(a_layout, b_layout)
                       )
 end
