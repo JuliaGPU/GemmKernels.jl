@@ -6,10 +6,10 @@ using LinearAlgebra
 ################################################################################
 
 @testset "Matmul API" begin
-    @test_if "wmma" @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
-        transpose_b = [false, true]
-
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256), (2048, 2048, 2048)]
+    @testset "WMMA GEMM" begin
+        for transpose_a = [false, true], transpose_b = [false, true],
+            (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256), (2048, 2048, 2048)]
+        @testcase "$( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
             alpha = 2
             beta  = 3
 
@@ -51,12 +51,13 @@ using LinearAlgebra
 
             @test all(isapprox.(alpha * Float32.(new_a_h) * Float32.(new_b_h) + beta * c_h, Array(d); rtol = sqrt(eps(Float16))))
         end
+        end
     end
 
-    @test_if "bias" @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
-        transpose_b = [false, true]
-
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
+    @testset "WMMA GEMM + bias" begin
+        for transpose_a = [false, true], transpose_b = [false, true],
+            (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
+        @testcase "$( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
             a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
             b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
             c_h = rand(Float32, (M, N))
@@ -102,10 +103,13 @@ using LinearAlgebra
 
             @test all(isapprox.(Float32.(new_a_h) * Float32.(new_b_h) + c_h .+ Array(bias), Array(d); rtol = sqrt(eps(Float16))))
         end
+        end
     end
 
-    @test_if "diagonal" @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
+    @testset "WMMA GEMM diagonal" begin
+        for transpose_b = [false, true],
+            (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
+        @testcase "A = diagonal, B = $( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
             @assert M == K "Diagonal only supports square A matrix (M == K)"
 
             transpose_a = false
@@ -146,24 +150,25 @@ using LinearAlgebra
 
             @test all(isapprox.(Float32.(Diagonal(new_a_h)) * Float32.(new_b_h) + c_h, Array(d); rtol = sqrt(eps(Float16))))
         end
+        end
     end
 
-    @test_if "complex" @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
-        transpose_b = [false, true]
-
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
-            a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
-            b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
-            c_h = rand(Complex{Float32}, (M, N));
+    @testset "WMMA Complex GEMM" begin
+        for transpose_a = [false, true], transpose_b = [false, true],
+            (M, N, K) = [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
+        @testcase "$( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" begin
+            a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K))
+            b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K))
+            c_h = rand(Complex{Float32}, (M, N))
 
             # Transpose input if necessary
             a_h = transpose_a ? transpose(a_h) : a_h
             b_h = transpose_b ? transpose(b_h) : b_h
 
-            a = CuArray(a_h);
-            b = CuArray(b_h);
-            c = CuArray(c_h);
-            d = similar(c);
+            a = CuArray(a_h)
+            b = CuArray(b_h)
+            c = CuArray(c_h)
+            d = similar(c)
 
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
@@ -209,20 +214,22 @@ using LinearAlgebra
 
             # TODO: Figure out why changing this to a * b + c = d instead of a * b = d - c
             # makes tests fail for CC (see #19).
-            @test all(isapprox.(Complex{Float32}.(new_a_h) * Complex{Float32}.(new_b_h), Array(d) - c_h; rtol=sqrt(eps(Float16))));
+            @test all(isapprox.(Complex{Float32}.(new_a_h) * Complex{Float32}.(new_b_h), Array(d) - c_h; rtol=sqrt(eps(Float16))))
+        end
         end
     end
 
-    @test_if "dual" @testset "WMMA Dual GEMM" begin
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
-            a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
-            b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
-            c_h = rand(Complex{Float32}, (M, N));
+    @testset "WMMA Dual GEMM" begin
+        for (M, N, K) in [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
+        @testcase "M = $M, N = $N, K = $K" begin
+            a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K))
+            b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K))
+            c_h = rand(Complex{Float32}, (M, N))
 
-            a = CuArray(a_h);
-            b = CuArray(b_h);
-            c = CuArray(c_h);
-            d = similar(c);
+            a = CuArray(a_h)
+            b = CuArray(b_h)
+            c = CuArray(c_h)
+            d = similar(c)
 
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
@@ -261,7 +268,8 @@ using LinearAlgebra
             c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_h)
             d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Array(d))
 
-            @test all(isapprox.(a_dual * b_dual + c_dual, d_dual; rtol=sqrt(eps(Float16))));
+            @test all(isapprox.(a_dual * b_dual + c_dual, d_dual; rtol=sqrt(eps(Float16))))
+        end
         end
     end
 end

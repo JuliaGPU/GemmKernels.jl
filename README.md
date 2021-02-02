@@ -6,7 +6,6 @@ _Flexible and performant GEMM kernels in Julia_
 
 | Julia       | CI |
 | ----------- | -- |
-| 1.5         | [![Continuous Integration][buildkite-julia1-image]][buildkite-julia1-url]             |
 | 1.6-nightly | [![Continuous Integration][buildkite-julia16nightly-image]][buildkite-julia16nightly-url] |
 | nightly | [![Continuous Integration][buildkite-julianightly-image]][buildkite-julianightly-url] |
 
@@ -55,9 +54,6 @@ We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on
 
 For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv][arxiv-paper]).
 The [`CITATION.bib`](CITATION.bib) file in the root of this repository contains a citation in BibTeX format.
-
-[buildkite-julia1-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.5
-[buildkite-julia1-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
 
 [buildkite-julia16nightly-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.6-nightly
 [buildkite-julia16nightly-url]: https://buildkite.com/julialang/gemmkernels-dot-jl

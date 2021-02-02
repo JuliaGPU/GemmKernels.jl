@@ -1,11 +1,10 @@
 steps:
-  - label: "Julia 1.5"
+  - label: "Julia 1.6-nightly"
     plugins:
       - JuliaCI/julia#v1:
-          version: '1.5'
+          version: "1.6-nightly"
       - JuliaCI/julia-test#v1: ~
       - JuliaCI/julia-coverage#v1:
-          codecov: true
     agents:
       queue: "juliagpu"
       cuda: "*"
@@ -13,18 +12,6 @@ steps:
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
-  - label: "Julia 1.6-nightly"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: "1.6-nightly"
-      - JuliaCI/julia-test#v1: ~
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      cap: "recent"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 60
-    
   - label: "Julia nightly"
     plugins:
       - JuliaCI/julia#v1:
