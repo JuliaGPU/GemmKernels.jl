@@ -12,7 +12,7 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
-CUDA = "2"
+CUDA = "2, 3.0"
 ForwardDiff = "0.10"
 GPUifyLoops = "0.2"
 LLVM = "3"
