@@ -89,6 +89,12 @@ bench = @benchmark bench_gemmkernels_biasrelu($a, $b, $c, $bias, $M, $N, $K, $tr
 bench = @benchmark bench_cublas_biasrelutwice($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
 
 bench = @benchmark bench_gemmkernels_biasrelutwice($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+###############
+
+bench = @benchmark bench_cublas_biasrelutwice_ab_elop($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
+
+bench = @benchmark bench_gemmkernels_biasrelutwice_ab_elop($a, $b, $c, $bias, $M, $N, $K, $transpose_a, $transpose_b); summarise_bench(bench);
 ```
 
 ## Complex and Dual numbers
