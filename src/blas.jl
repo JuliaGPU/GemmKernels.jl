@@ -5,16 +5,16 @@ using GemmKernels
 using LinearAlgebra
 
 # Global layouts
-global_layout(::Type{CuArray{T, N}}, ::Val{false}) where {T, N} = Layout.AlignedColMajor{T}
-global_layout(::Type{CuArray{T, N}}, ::Val{true}) where {T, N} = Layout.AlignedRowMajor{T}
-global_layout(::Type{Diagonal{Float16, CuArray{Float16, N}}}, transpose) where {N} = Layout.Diagonal{Float16}
+global_layout(::Type{<:CuArray{T}}, ::Val{false}) where {T} = Layout.AlignedColMajor{T}
+global_layout(::Type{<:CuArray{T}}, ::Val{true}) where {T} = Layout.AlignedRowMajor{T}
+global_layout(::Type{<:Diagonal{Float16, <:CuArray{Float16}}}, transpose) = Layout.Diagonal{Float16}
 
 # Shared layouts for A / B
-shared_layout_ab(typ::Type{CuArray{Float16, N}}, transpose) where {N} = Layout.Padded{global_layout(typ, transpose), 8}
-shared_layout_ab(::Type{Diagonal{Float16, CuArray{Float16, N}}}, transpose) where {N, P} = shared_layout_ab(CuArray{Float16, N}, transpose)
+shared_layout_ab(typ::Type{<:CuArray{Float16}}, transpose) = Layout.Padded{global_layout(typ, transpose), 8}
+shared_layout_ab(::Type{<:Diagonal{Float16, <:CuArray{Float16, N}}}, transpose) where {N, P} = shared_layout_ab(CuArray{Float16, N}, transpose)
 
 # Shared layouts for C / D
-shared_layout_cd(typ::Type{CuArray{T, N}}, transpose) where {T, N} = global_layout(typ, transpose)
+shared_layout_cd(typ::Type{<:CuArray{T}}, transpose) where {T} = global_layout(typ, transpose)
 
 # Convert matrix to type compatible with kernel
 convert_matrix(mat) = mat
