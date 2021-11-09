@@ -255,7 +255,9 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
 - `count`: The number of cooperating entities.
 """
 @inline function subdivide(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count) where {names, T, size, tile_sz}
-    return iterate(parallellise(tile, tiling_size, idx, count))[1]
+    iter = iterate(parallellise(tile, tiling_size, idx, count))::Tuple{Tile,Any}
+    iter === nothing && throw(BoundsError())
+    @inbounds iter[1]
 end
 
 @inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S, col_major}, state = 1) where {tile_size, parent_size, names, T, S, col_major}
