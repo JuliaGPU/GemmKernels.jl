@@ -119,7 +119,7 @@ function matmul_singlestage(a, b, c, d,
     @unroll for i = 1 : num_fragments_m
         @unroll for j = 1 : num_fragments_n
             tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
-            Operator.store_d(conf.operator, conf.shared_d_layout, shmem_d, transf_rf2sh_d(c_frags[i, j], tile), tile)
+            @inbounds Operator.store_d(conf.operator, conf.shared_d_layout, shmem_d, transf_rf2sh_d(c_frags[i, j], tile), tile)
         end
     end
 
@@ -326,7 +326,7 @@ function matmul_pipelined(a, b, c, d,
     @unroll for i = 1 : num_fragments_m
         @unroll for j = 1 : num_fragments_n
             tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
-            Operator.store_d(conf.operator, conf.shared_d_layout, shmem_d, transf_rf2sh_d(c_frags[i, j], tile), tile)
+            @inbounds Operator.store_d(conf.operator, conf.shared_d_layout, shmem_d, transf_rf2sh_d(c_frags[i, j], tile), tile)
         end
     end
 
