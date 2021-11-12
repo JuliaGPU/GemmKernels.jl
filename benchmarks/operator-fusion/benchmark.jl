@@ -114,7 +114,7 @@ function bench_gemmkernels(a, b, c, M, N, K, transpose_a, transpose_b)
     CUDA.@sync begin
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
-        operator = Operator.WMMAOp{16, 16, 16},
+        operator = Operator.WMMAOp{16, 16, 16, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
@@ -136,7 +136,7 @@ function bench_gemmkernels_relu(a, b, c, M, N, K, transpose_a, transpose_b)
     CUDA.@sync begin
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
-        operator = Operator.WMMAOp{16, 16, 16},
+        operator = Operator.WMMAOp{16, 16, 16, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
@@ -159,7 +159,7 @@ function bench_gemmkernels_bias(a, b, c, bias, M, N, K, transpose_a, transpose_b
     CUDA.@sync begin
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
-        operator = Operator.WMMAOp{16, 16, 16},
+        operator = Operator.WMMAOp{16, 16, 16, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
@@ -182,7 +182,7 @@ function bench_gemmkernels_biasrelu(a, b, c, bias, M, N, K, transpose_a, transpo
     CUDA.@sync begin
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
-        operator = Operator.WMMAOp{16, 16, 16},
+        operator = Operator.WMMAOp{16, 16, 16, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
@@ -206,7 +206,7 @@ function bench_gemmkernels_biasrelutwice(a, b, c, bias, M, N, K, transpose_a, tr
     CUDA.@sync begin
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
-        operator = Operator.WMMAOp{16, 16, 16},
+        operator = Operator.WMMAOp{16, 16, 16, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
@@ -231,7 +231,7 @@ function bench_gemmkernels_biasrelutwice_ab_elop(a, b, c, bias, M, N, K, transpo
     CUDA.@sync begin
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
-        operator = Operator.WMMAOp{16, 16, 16},
+        operator = Operator.WMMAOp{16, 16, 16, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 

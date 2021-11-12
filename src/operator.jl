@@ -17,9 +17,9 @@ end
 # WMMA
 # ----
 
-struct WMMAOp{M, N, K} end
+struct WMMAOp{M, N, K, T} end
 
-@inline shape(::Type{WMMAOp{M, N, K}}) where {M, N, K} = (M = M, N = N, K = K)
+@inline shape(::Type{WMMAOp{M, N, K, T}}) where {M, N, K, T} = (M = M, N = N, K = K)
 
 # convert_index_func: function used to transpose the index in case of a row-major layout
 for (layout_type, wmma_layout_type, convert_index_func) in [
@@ -27,12 +27,12 @@ for (layout_type, wmma_layout_type, convert_index_func) in [
                                         (Layout.AlignedRowMajor, WMMA.RowMajor, x -> reverse(Tuple(x)))
                                        ]
     @eval begin
-        @inline fragtype_a(::Type{WMMAOp{16, 16, 16}}, ::Type{$layout_type{Float16}}) = WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixA}
-        @inline fragtype_b(::Type{WMMAOp{16, 16, 16}}, ::Type{$layout_type{Float16}}) = WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixB}
-        @inline fragtype_accum(::Type{WMMAOp{16, 16, 16}}, ::Type{$layout_type{Float32}}) = WMMA.Fragment{16, 16, 16, 8, Float32, WMMA.Unspecified, WMMA.Accumulator}
+        @inline fragtype_a(::Type{WMMAOp{16, 16, 16, T}}, ::Type{$layout_type{Float16}}) where {T} = WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixA}
+        @inline fragtype_b(::Type{WMMAOp{16, 16, 16, T}}, ::Type{$layout_type{Float16}}) where {T} = WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixB}
+        @inline fragtype_accum(::Type{WMMAOp{16, 16, 16, T}}, ::Type{$layout_type{T}}) where {T} = WMMA.Fragment{16, 16, 16, 8, T, WMMA.Unspecified, WMMA.Accumulator}
 
-        @inline function load_a(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K}
-            conf = WMMA.Config{M, N, K, Float32}
+        @inline function load_a(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K, T}
+            conf = WMMA.Config{M, N, K, T}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
@@ -41,8 +41,8 @@ for (layout_type, wmma_layout_type, convert_index_func) in [
             return WMMA.load_a(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function load_b(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K}
-            conf = WMMA.Config{M, N, K, Float32}
+        @inline function load_b(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K, T}
+            conf = WMMA.Config{M, N, K, T}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
@@ -51,30 +51,30 @@ for (layout_type, wmma_layout_type, convert_index_func) in [
             return WMMA.load_b(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function load_c(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float32}}, workspace, tile::Tile) where {M, N, K}
-            conf = WMMA.Config{M, N, K, Float32}
+        @inline function load_c(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{T}}, workspace, tile::Tile) where {M, N, K, T}
+            conf = WMMA.Config{M, N, K, T}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(Float32)
+            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(T)
             return WMMA.load_c(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function store_d(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
-            conf = WMMA.Config{M, N, K, Float32}
+        @inline function store_d(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{T}}, workspace, frag, tile::Tile) where {M, N, K, T}
+            conf = WMMA.Config{M, N, K, T}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(Float32)
+            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(T)
             WMMA.store_d(ptr, frag, size(workspace, 1), $wmma_layout_type, conf)
         end
     end
 end
 
-function mma(::Type{WMMAOp{M, N, K}}, a_frag, b_frag, c_frag) where {M, N, K}
-    conf = WMMA.Config{M, N, K, Float32}
+function mma(::Type{WMMAOp{M, N, K, T}}, a_frag, b_frag, c_frag) where {M, N, K, T}
+    conf = WMMA.Config{M, N, K, T}
     return WMMA.mma(a_frag, b_frag, c_frag, conf)
 end
 

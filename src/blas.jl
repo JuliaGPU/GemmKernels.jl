@@ -45,7 +45,7 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
 
     conf = GemmKernels.get_config(
             gemm_shape = (M = m, N = n, K = k),
-            operator = Operator.WMMAOp{16, 16, 16},
+            operator = Operator.WMMAOp{16, 16, 16, eltype(C)},
 
             global_a_layout = a_layout,
             global_b_layout = b_layout,
