@@ -4,10 +4,11 @@ _Flexible and performant GEMM kernels in Julia_
 
 [![Coverage][coverage-image]][coverage-url]
 
-| Julia       | CI |
-| ----------- | -- |
-| 1.6-nightly | [![Continuous Integration][buildkite-julia16nightly-image]][buildkite-julia16nightly-url] |
-| nightly | [![Continuous Integration][buildkite-julianightly-image]][buildkite-julianightly-url] |
+| Julia       | CI                                                                       |
+| ----------- | ------------------------------------------------------------------------ |
+| 1.6         | [![Continuous Integration][buildkite-julia16-image]][buildkite-url]      |
+| 1.7         | [![Continuous Integration][buildkite-julia17-image]][buildkite-url]      |
+| nightly     | [![Continuous Integration][buildkite-julianightly-image]][buildkite-url] |
 
 This package contains a framework to instantiate flexible, performant GEMM (General Matrix Multiplication) kernels.
 
@@ -28,7 +29,7 @@ The documentation is still a WIP, but you can get an idea of the usage of this p
 
 ## Quick Start
 
-The package can be installed using Julia's build-in package manager.
+The package can be installed using Julia's built-in package manager.
 Open the Julia REPL, type `]` to enter Pkg-mode, and run:
 
 ```
@@ -55,10 +56,10 @@ We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on
 For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv][arxiv-paper]).
 The [`CITATION.bib`](CITATION.bib) file in the root of this repository contains a citation in BibTeX format.
 
-[buildkite-julia16nightly-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.6-nightly
-[buildkite-julia16nightly-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
+[buildkite-julia16-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.6
+[buildkite-julia17-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.7
 [buildkite-julianightly-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%20nightly
-[buildkite-julianightly-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
+[buildkite-url]: https://buildkite.com/julialang/gemmkernels-dot-jl
 [coverage-image]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl/branch/master/graph/badge.svg
 [coverage-url]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl
 [performance-graph]: media/performance-wmma-gemm.png
