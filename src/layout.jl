@@ -4,6 +4,7 @@ module Layout
 using CUDA
 using GPUifyLoops: @unroll
 using GemmKernels.Tiling
+using StaticArrays
 
 # ---------------------
 # Customise computation
