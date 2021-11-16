@@ -110,3 +110,11 @@ done
 
 julia plot.jl
 ```
+
+## Tensor Contractions
+
+```bash
+cd tensor-contractions/
+
+julia --project ./run.jl
+```
