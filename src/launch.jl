@@ -18,11 +18,7 @@ function matmul(a, b, c, d, conf;
             epilogue,
             conf]
 
-    GC.@preserve args begin
-        kernel_args = cudaconvert.(args)
-        kernel_tt = Tuple{Core.Typeof.(kernel_args)...}
-        kernel = cufunction(kernel, kernel_tt; )
-        attributes(kernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = 64 * 1024
-        kernel(kernel_args...; conf.launch_args...)
-    end
+    hostkernel = @cuda launch=false kernel(args...)
+    attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = 64 * 1024
+    hostkernel(args...; conf.launch_args...)
 end
