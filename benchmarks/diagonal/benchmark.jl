@@ -55,7 +55,7 @@ end
 function bench_gemmkernels(a, b, c, M, N, K, transpose_a, transpose_b, num_iterations = 100)
     conf = GemmKernels.get_config(
                                   gemm_shape = (M = M, N = N, K = K),
-                                  operator = Operator.WMMAOp{16, 16, 16},
+                                  operator = Operator.WMMAOp{16, 16, 16, Float32},
                                   global_a_layout = Layout.Diagonal{Float16},
                                   global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
