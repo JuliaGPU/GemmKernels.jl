@@ -4,7 +4,7 @@ module Kernel
 using CUDA
 using GemmKernels
 using GemmKernels.Tiling
-using GPUifyLoops: @unroll
+using KernelAbstractions.Extras: @unroll
 using StaticArrays
 
 function matmul_singlestage(a, b, c, d,

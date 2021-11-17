@@ -2,7 +2,7 @@ export Layout
 module Layout
 
 using CUDA
-using GPUifyLoops: @unroll
+using KernelAbstractions.Extras: @unroll
 using GemmKernels.Tiling
 using StaticArrays
 

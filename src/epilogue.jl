@@ -4,7 +4,7 @@ module Epilogue
 using CUDA
 using GemmKernels
 using GemmKernels.Tiling
-using GPUifyLoops: @unroll
+using KernelAbstractions.Extras: @unroll
 
 # ----------------
 # Default epilogue
