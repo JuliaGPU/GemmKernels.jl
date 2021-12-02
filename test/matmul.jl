@@ -1,4 +1,5 @@
 using CUDA
+using CUDA: unsafe_free!
 using ForwardDiff
 using GemmKernels
 using LinearAlgebra
@@ -6,7 +7,59 @@ using LinearAlgebra
 ################################################################################
 
 @testset "Matmul API" begin
-    @test_if "wmma" @testset "WMMA GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
+    @test_if "simt" @testset "SIMT GEMM $(dtype)x$(dtype)+$(dtype)=$(dtype) - $( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" for
+        dtype = [Int16, Int32, Int64, Float16, Float32, Float64, ComplexF16, ComplexF32],
+            transpose_a = [false, true], transpose_b = [false, true],
+            (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256), (4096, 4096, 4096)]
+
+            if real(dtype) <: AbstractFloat
+                # floating point types & derivatives
+                a_h = rand(dtype, (M, K)) / sqrt(dtype(K))
+                b_h = rand(dtype, (K, N)) / sqrt(dtype(K))
+            else
+                # integer types & derivatives
+                a_h = floor.(dtype, rand(dtype, (M, K)) / sqrt(dtype(K)))
+                b_h = floor.(dtype, rand(dtype, (K, N)) / sqrt(dtype(K)))
+            end
+            
+            c_h = rand(dtype, (M, N))
+
+            # Transpose input if necessary
+            a_h = transpose_a ? transpose(a_h) : a_h
+            b_h = transpose_b ? transpose(b_h) : b_h
+
+            a   = CuArray(a_h)
+            b   = CuArray(b_h)
+            c   = CuArray(c_h)
+            d   = similar(c)
+
+            conf = GemmKernels.get_config(
+                                          gemm_shape = (M = M, N = N, K = K),
+                                          operator = Operator.SIMTOp,
+                                          global_a_layout = transpose_a ? Layout.AlignedRowMajor{eltype(a)} : Layout.AlignedColMajor{eltype(a)},
+                                          global_b_layout = transpose_b ? Layout.AlignedRowMajor{eltype(b)} : Layout.AlignedColMajor{eltype(b)},
+
+                                          global_c_layout = Layout.AlignedColMajor{eltype(c)},
+                                          global_d_layout = Layout.AlignedColMajor{eltype(d)},
+
+                                          is_a_col_major = !transpose_a,
+
+                                          is_b_col_major = !transpose_b,
+                                         )
+
+            GemmKernels.matmul(a, b, c, d, conf;
+                               kernel = Kernel.matmul_pipelined
+                              )
+
+            # Transpose outputs, if necessary
+            new_a_h = transpose_a ? transpose(a_h) : a_h
+            new_b_h = transpose_b ? transpose(b_h) : b_h
+
+            rtol = (real(dtype) <: AbstractFloat) ? 1.0 : 0
+            @test all(isapprox.(new_a_h * new_b_h + c_h, Array(d); rtol = rtol))
+    end
+
+   @test_if "wmma" @testset "WMMA GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true],
         (A_type, B_type, CD_type, min_dimension) in [(Float16, Float16, Float16, 256), (Float16, Float16, Float32, 128)]
         @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2,2,1], [1,1,2], [2,2,2]], [[2048, 2048, 2048]])
@@ -267,3 +320,4 @@ using LinearAlgebra
 end
 
 ################################################################################
+

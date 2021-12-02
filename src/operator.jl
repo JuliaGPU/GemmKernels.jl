@@ -1,5 +1,6 @@
 export Operator
 module Operator
+using KernelAbstractions.Extras: @unroll
 
 using CUDA
 using GemmKernels
@@ -14,7 +15,70 @@ for f in (:fragtype_a, :fragtype_b, :fragtype_accum, :load_a, :load_b, :load_c, 
 end
 
 # ----
-# WMMA
+#  SIMT Op
+# ----
+struct SIMTOp end
+
+@inline shape(::Type{SIMTOp}) where {M, N, K} = (M = 8, N = 4, K = 1)
+
+# convert_index_func: function used to transpose the index in case of a row-major layout
+# 2 types of optimizations:
+# 1. coalescing of memory ops
+# 2. vectorization of memory ops (like vload in layout.jl?)
+for (layout_type, convert_index_func) in [
+                                        (Layout.AlignedColMajor, identity),
+                                        (Layout.AlignedRowMajor, x -> reverse(Tuple(x)))
+                                       ]
+
+    @eval begin
+        # fragtype: type of per thread input/result of mma operations
+        @inline fragtype_a(::Type{SIMTOp}, ::Type{$layout_type{T}}) where {T} = T
+
+        @inline fragtype_b(::Type{SIMTOp}, ::Type{$layout_type{T}}) where {T} = T
+        @inline fragtype_accum(::Type{SIMTOp}, ::Type{$layout_type{T}}) where {T} = T
+
+        # define load / stores based on layout types
+        @inline function load_a(::Type{SIMTOp}, ::Type{$layout_type{T}}, workspace, tile::Tile) where {T}
+            laneId = (threadIdx().x - 1) % 32 + 1
+            row = ((laneId - 1) % 8)
+
+            y, x = $convert_index_func((tile.base.M  + tile.offset.M + 1 + row, tile.base.K + tile.offset.K + 1))
+            @inbounds return workspace[y, x]
+        end
+
+        @inline function load_b(::Type{SIMTOp}, ::Type{$layout_type{T}}, workspace, tile::Tile) where {T}
+            laneId = (threadIdx().x - 1) % 32 + 1
+            col = ((laneId - 1) ÷ 8)
+
+            y, x = $convert_index_func((tile.base.K + tile.offset.K + 1, tile.base.N + tile.offset.N + 1 + col))
+            @inbounds return workspace[y, x]
+        end
+
+        @inline function load_c(op::Type{SIMTOp}, layout::Type{$layout_type{T}}, workspace, tile::Tile) where {T}
+            laneId = (threadIdx().x - 1) % 32 + 1
+            row = ((laneId - 1) % 8)
+            col = ((laneId - 1) ÷ 8)
+
+            y, x = $convert_index_func((tile.base.M + tile.offset.M + 1 + row, tile.base.N + tile.offset.N + 1 + col))
+            @inbounds return workspace[y, x]
+        end
+
+        @inline function store_d(::Type{SIMTOp}, ::Type{$layout_type{T}}, workspace, frag, tile::Tile) where {T}
+            laneId = (threadIdx().x - 1) % 32 + 1
+
+            row = ((laneId - 1) % 8)
+            col = ((laneId - 1) ÷ 8)
+
+            y, x = $convert_index_func((tile.base.M + tile.offset.M + 1 + row, tile.base.N + tile.offset.N + 1 + col))
+            @inbounds workspace[y, x] = frag
+        end
+    end
+end
+
+@inline function mma(op::Type{SIMTOp}, a_frag, b_frag, c_frag)
+    @inbounds return a_frag * b_frag + c_frag
+end
+
 # ----
 
 struct WMMAOp{M, N, K, T} end

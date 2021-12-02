@@ -169,14 +169,19 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
+    # make sure block shape fits grid
+    block_shape = (M = min(block_shape.M, gemm_shape.M)
+                 , N = min(block_shape.N, gemm_shape.N)
+                 , K = min(block_shape.K, gemm_shape.K))
+
     # 8 warps in a 4 x 2 arrangement usually works well
+    # TODO: base this on the compute shape?
     warps_per_block = get(params, :warps_per_block, 8)
     op_shape = Operator.shape(operator)
     compute_warp = get(params, :compute_warp,
                        (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = op_shape.K))
 
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
-    # TODO: Let the layouts handle this?
     is_a_col_major = get(params, :is_a_col_major, true)
     is_b_col_major = get(params, :is_b_col_major, true)
     is_cd_col_major = get(params, :is_cd_col_major, true)

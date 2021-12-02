@@ -67,6 +67,7 @@ end
 abstract type AlignedColMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{AlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
+@inline physical_size(::Type{<:AlignedColMajor{T}}, logical_size::NamedTuple) where {T} = (logical_size[1] , logical_size[2])
 
 @inline fragtype(::Type{<:AlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
 
