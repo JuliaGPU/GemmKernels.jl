@@ -53,7 +53,7 @@ We compare our kernels with the state-of-the-art libraries cuBLAS and CUTLASS on
 
 ## Citation
 
-For more details on the implementation and performance results, please see our accompanying paper (pre-print available on [arXiv][arxiv-paper]).
+For more details on the implementation and performance results, please see our accompanying [paper][ieee-paper] (pre-print available on [arXiv][arxiv-paper]).
 The [`CITATION.bib`](CITATION.bib) file in the root of this repository contains a citation in BibTeX format.
 
 [buildkite-julia16-image]: https://badge.buildkite.com/92f2ead968bafc516afa354576cccb7ab2f5b42a272d9cb0f0.svg?branch=master&step=Julia%201.6
@@ -63,4 +63,5 @@ The [`CITATION.bib`](CITATION.bib) file in the root of this repository contains 
 [coverage-image]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl/branch/master/graph/badge.svg
 [coverage-url]: https://codecov.io/gh/JuliaGPU/GemmKernels.jl
 [performance-graph]: media/performance-wmma-gemm.png
+[ieee-paper]: https://ieeexplore.ieee.org/document/9655458
 [arxiv-paper]: https://arxiv.org/abs/2009.12263
