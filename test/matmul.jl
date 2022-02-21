@@ -10,7 +10,7 @@ using LinearAlgebra
     @test_if "simt" @testset "SIMT GEMM $(dtype)x$(dtype)+$(dtype)=$(dtype) - $( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ); M = $M, N = $N, K = $K" for
         dtype = [Int16, Int32, Int64, Float16, Float32, Float64, ComplexF16, ComplexF32],
             transpose_a = [false, true], transpose_b = [false, true],
-            (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256), (4096, 4096, 4096)]
+            (M, N, K) in [(128, 128, 128), (256, 256, 128), (128, 128, 256), (256, 256, 256), (1024, 1024, 1024)]
 
             if real(dtype) <: AbstractFloat
                 # floating point types & derivatives
