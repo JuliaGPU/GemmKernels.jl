@@ -4,7 +4,6 @@ module Layout
 using CUDA
 using KernelAbstractions.Extras: @unroll
 using GemmKernels.Tiling
-using StaticArrays
 
 # ---------------------
 # Customise computation
