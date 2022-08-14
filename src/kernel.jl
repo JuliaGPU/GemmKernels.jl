@@ -137,8 +137,8 @@ function matmul_pipelined(a, b, c, d,
                           epilogue,
                           ::Type{conf}) where {conf <: GemmKernels.Config}
     # Calculate the number of fragments needed to fully cover a warp tile
-    num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
-    num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
+    num_fragments_m = cld(conf.compute_warp.M, conf.compute_op_shape.M)
+    num_fragments_n = cld(conf.compute_warp.N, conf.compute_op_shape.N)
 
     # Constants
     block_i = (blockIdx().x - 1) * conf.block_shape.M
@@ -155,9 +155,17 @@ function matmul_pipelined(a, b, c, d,
 
     @unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
         @unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
-            x = Layout.load(conf.global_c_layout, c, translate_base(thread_tile, (M = block_i, N = block_j)))
-            x = transf_gl2sh_c(x, thread_tile)
-            Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
+            tile = translate_base(thread_tile, (M = block_i, N = block_j))
+            m = tile.base.M + tile.offset.M + tile.size.M
+            n = tile.base.N + tile.offset.N + tile.size.N
+
+            if m <= size(c, 1) && n <= size(c, 2)
+                x = Layout.load(conf.global_c_layout, c, tile)
+                x = transf_gl2sh_c(x, thread_tile)
+                Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
+            else
+                Layout.store!(conf.shared_c_layout, shmem_c, ntuple(_ -> Layout.eltype(conf.shared_c_layout)(0), Val(tile.size.M * tile.size.N)), thread_tile)
+            end
         end
     end
 
@@ -199,13 +207,32 @@ function matmul_pipelined(a, b, c, d,
     # ld.global(0 : block_shape.K)
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-            @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = 0))), i, j)
+            tile = translate_base(thread_tile, (M = block_i, K = 0))
+            m = tile.base.M + tile.offset.M + tile.size.M
+            k = tile.base.K + tile.offset.K + tile.size.K
+
+            if m <= size(a, 1) && k <= size(a, 2)
+                @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, tile), i, j)
+            else
+                # default 0?
+                #@inbounds a_fragment[i, j] = Layout.eltype(conf.global_a_layout)(0)
+                @inbounds a_fragment = setindex(a_fragment, ntuple(_ -> Layout.eltype(conf.global_a_layout)(0), Val(tile.size.M * tile.size.K)), i, j)
+            end
         end
     end
 
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-            @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = 0, N = block_j))), i, j)
+            tile = translate_base(thread_tile, (K = 0, N = block_j))
+            k = tile.base.K + tile.offset.K + tile.size.K
+            n = tile.base.N + tile.offset.N + tile.size.N
+
+            if k <= size(b, 1) && n <= size(b, 2)
+                @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, tile), i, j)
+            else
+                # default 0?
+                @inbounds b_fragment = setindex(b_fragment, ntuple(_ -> Layout.eltype(conf.global_b_layout)(0), Val(tile.size.N * tile.size.K)), i, j)
+            end
         end
     end
 
@@ -242,13 +269,29 @@ function matmul_pipelined(a, b, c, d,
     # ld.global(block_shape.K : 2 * block_shape.K)
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-            @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_tile.size.K))), i, j)
+            tile = translate_base(thread_tile, (M = block_i, K = block_tile.size.K))
+            m = tile.base.M + tile.offset.M + tile.size.M
+            k = tile.base.K + tile.offset.K + tile.size.K
+
+            if m <= size(a, 1) && k <= size(a, 2)
+                @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, tile), i, j)
+            else
+                @inbounds a_fragment = setindex(a_fragment, ntuple(_ -> Layout.eltype(conf.global_a_layout)(0), Val(tile.size.M * tile.size.K)), i, j)
+            end
         end
     end
 
     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-            @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_tile.size.K, N = block_j))), i, j)
+            tile = translate_base(thread_tile, (K = block_tile.size.K, N = block_j))
+            k = tile.base.K + tile.offset.K + tile.size.K
+            n = tile.base.N + tile.offset.N + tile.size.N
+
+            if k <= size(b, 1) && n <= size(b, 2)
+                @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, tile), i, j)
+            else
+                @inbounds b_fragment = setindex(b_fragment, ntuple(_ -> Layout.eltype(conf.global_b_layout)(0), Val(tile.size.N * tile.size.K)), i, j)
+            end
         end
     end
 
@@ -268,8 +311,8 @@ function matmul_pipelined(a, b, c, d,
                     end
                 end
 
-                @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
-                    @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
+                    @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
+                        @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
                         @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
                         Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
                     end
@@ -282,13 +325,29 @@ function matmul_pipelined(a, b, c, d,
                     # ld.global(block_k + 2 * block_shape.K : block_k + 3 * block_shape.K)
                     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
                         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-                            @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K))), i, j)
+                            tile = translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K))
+                            m = tile.base.M + tile.offset.M + tile.size.M
+                            k = tile.base.K + tile.offset.K + tile.size.K
+
+                            if m <= size(a, 1) && k <= size(a, 2)
+                                @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, tile), i, j)
+                            else
+                                @inbounds a_fragment[i, j] = setindex(a_fragment, ntuple(_ -> Layout.eltype(conf.global_a_layout)(0), Val(tile.size.M * tile.size.K)), i, j)
+                            end
                         end
                     end
 
                     @unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
                         @unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-                            @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_k + 2 * block_tile.size.K, N = block_j))), i, j)
+                            tile = translate_base(thread_tile, (K = block_k + 2 * block_tile.size.K, N = block_j))
+                            k = tile.base.K + tile.offset.K + tile.size.K
+                            n = tile.base.N + tile.offset.N + tile.size.N
+
+                            if k <= size(b, 1) && n <= size(b, 2)
+                                @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, tile), i, j)
+                            else
+                                @inbounds b_fragment = setindex(b_fragment, ntuple(_ -> Layout.eltype(conf.global_b_layout)(0), Val(tile.size.N * tile.size.K)), i, j)
+                            end
                         end
                     end
                 end

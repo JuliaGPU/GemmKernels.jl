@@ -39,7 +39,7 @@ end
 @inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
     if sym == :launch_args
         (threads = WARPS_PER_BLOCK * 32,
-         blocks = (MATMUL_SHAPE.M ÷ BLOCK_SHAPE.M, MATMUL_SHAPE.N ÷ BLOCK_SHAPE.N),
+         blocks = (cld(MATMUL_SHAPE.M, BLOCK_SHAPE.M), cld(MATMUL_SHAPE.N, BLOCK_SHAPE.N)),
          shmem = 64 * 1024)
 
     # convenience accessors for typevars
@@ -169,17 +169,12 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
-    # make sure block shape fits grid
-    block_shape = (M = min(block_shape.M, gemm_shape.M)
-                 , N = min(block_shape.N, gemm_shape.N)
-                 , K = min(block_shape.K, gemm_shape.K))
-
     # 8 warps in a 4 x 2 arrangement usually works well
     # TODO: base this on the compute shape?
     warps_per_block = get(params, :warps_per_block, 8)
     op_shape = Operator.shape(operator)
     compute_warp = get(params, :compute_warp,
-                       (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = op_shape.K))
+                       (M = cld(block_shape.M, 4), N = cld(block_shape.N, 2), K = op_shape.K))
 
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
     is_a_col_major = get(params, :is_a_col_major, true)
@@ -192,17 +187,30 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
 
     mem_a_warp = get(params, :mem_a_warp,
         adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K), is_a_col_major))
+
     mem_b_warp = get(params, :mem_b_warp,
         adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N), is_b_col_major))
+
     mem_cd_warp = get(params, :mem_cd_warp,
         adjacent_elements(32 * 16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
 
     mem_a_thread = get(params, :mem_a_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K), is_a_col_major))
+
+    # make sure threads fit inside the gemm_shape
+    mem_a_thread = (M = gcd(mem_a_thread.M, gemm_shape.M),
+                    K = gcd(mem_a_thread.K, gemm_shape.K))
+    
     mem_b_thread = get(params, :mem_b_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N), is_b_col_major))
+    # make sure threads fit inside the gemm_shape
+    mem_b_thread = (K = gcd(mem_b_thread.K, gemm_shape.K),
+                    N = gcd(mem_b_thread.N, gemm_shape.N))
+
     mem_cd_thread = get(params, :mem_cd_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
+    mem_cd_thread = ( M = gcd(mem_cd_thread.M, gemm_shape.M),
+                      N = gcd(mem_cd_thread.N, gemm_shape.N))
 
     return Config{
         #= Params =#
