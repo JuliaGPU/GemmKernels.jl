@@ -169,6 +169,8 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
+    println("block_shape: $block_shape")
+
     # 8 warps in a 4 x 2 arrangement usually works well
     # TODO: base this on the compute shape?
     warps_per_block = get(params, :warps_per_block, 8)
@@ -198,23 +200,30 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_a_layout)), (M = block_shape.M, K = block_shape.K), is_a_col_major))
 
     # make sure threads fit inside the gemm_shape
-    mem_a_thread = (M = gcd(mem_a_thread.M, gemm_shape.M),
-                    K = gcd(mem_a_thread.K, gemm_shape.K))
+    #mem_a_thread = (M = gcd(mem_a_thread.M, gemm_shape.M),
+                    #K = gcd(mem_a_thread.K, gemm_shape.K))
+
     
     mem_b_thread = get(params, :mem_b_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_b_layout)), (K = block_shape.K, N = block_shape.N), is_b_col_major))
     # make sure threads fit inside the gemm_shape
-    mem_b_thread = (K = gcd(mem_b_thread.K, gemm_shape.K),
-                    N = gcd(mem_b_thread.N, gemm_shape.N))
+    #mem_b_thread = (K = gcd(mem_b_thread.K, gemm_shape.K),
+                    #N = gcd(mem_b_thread.N, gemm_shape.N))
 
     mem_cd_thread = get(params, :mem_cd_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
-    mem_cd_thread = ( M = gcd(mem_cd_thread.M, gemm_shape.M),
-                      N = gcd(mem_cd_thread.N, gemm_shape.N))
+    #mem_cd_thread = ( M = gcd(mem_cd_thread.M, gemm_shape.M),
+                      #N = gcd(mem_cd_thread.N, gemm_shape.N))
+
+    
+    # set compute shape to covering amount of blocks
+    compute_shape = (M = cld(gemm_shape.M, block_shape.M)*block_shape.M,
+                  N = cld(gemm_shape.N, block_shape.N)*block_shape.N,
+                  K = cld(gemm_shape.K, block_shape.K)*block_shape.K)
 
     return Config{
         #= Params =#
-        gemm_shape,
+        compute_shape,
         block_shape,
         warps_per_block,
         mem_a_warp,

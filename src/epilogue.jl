@@ -29,12 +29,11 @@ struct Default end
             tile = translate_base(thread_tile, (M = block_i, N = block_j))
             m = tile.base.M + tile.offset.M + tile.size.M
             n = tile.base.N + tile.offset.N + tile.size.N
-            @cuprintln("$m, $n")
-            
+
             if m <= size(d, 1) && n <= size(d, 2)
                 x = Layout.load(conf.shared_d_layout, shmem_d, thread_tile)
                 x = transform(x, thread_tile)
-                Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
+                Layout.store!(conf.global_d_layout, d, x, tile)
             end
         end
     end
