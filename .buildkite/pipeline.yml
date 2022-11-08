@@ -15,7 +15,7 @@ steps:
   - label: "Julia 1.7"
     plugins:
       - JuliaCI/julia#v1:
-          version: 1.7-nightly
+          version: 1.7
       - JuliaCI/julia-test#v1: ~
       - JuliaCI/julia-coverage#v1:
     agents:
@@ -24,6 +24,21 @@ steps:
       cap: "recent"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
+
+  - label: "Julia 1.8"
+    plugins:
+      - JuliaCI/julia#v1:
+          version: 1.8
+      - JuliaCI/julia-test#v1: ~
+      - JuliaCI/julia-coverage#v1:
+    agents:
+      queue: "juliagpu"
+      cuda: "*"
+      cap: "recent"
+    if: build.message !~ /\[skip tests\]/
+    timeout_in_minutes: 60
+    soft_fail:
+      - exit_status: 1
 
   - label: "Julia nightly"
     plugins:
@@ -40,5 +55,4 @@ steps:
       - exit_status: 1
 
 env:
-  JULIA_PKG_SERVER: "" # it often struggles with our large artifacts
   SECRET_CODECOV_TOKEN: "mqW1qFfd8v23i8ulnEaJEZUJj70lCAFZonhVkARc1z3VbB/Z0MDDB5BCzM3Rrgq3DQdNwc+ZSMluTNT0H7QIWuUN49eLqtLVl7gs0Io2MlMXnaD892I3n0+v0cV5oShBtY8iErgdmlCAw4EzfLv3fsXR0hPJyL4DUfyewhe6lDvWCYb8cZzoNfIQ8gmQN6oyJnbm8CmCKsrdzrDcC9NRhMI6jMYL8ZD9ry/m059S2hReyIdNtVikXPz9NBBmN+DAlGmp+MqQfcIlTeXIj0/U9OCi04GjbnT0IBFdjW4lTaNDIdLDnaRdumfO0C2g1lFJk73F+dsf/7goK6GpyyD/dw==;U2FsdGVkX192PcTTM+mOwv2BFs5wDMjTHE11fxBvTJ98468YZ6nlosYl9drk9bbZpYXR3cg4fEr/mK/dkDCJBA=="
