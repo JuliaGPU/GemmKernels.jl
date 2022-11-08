@@ -11,7 +11,7 @@ LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [compat]
-CUDA = "3.5"
+CUDA = "3.5, 4"
 ForwardDiff = "0.10"
 KernelAbstractions = "0.7, 0.8"
 LLVM = "3, 4"
