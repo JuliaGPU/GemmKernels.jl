@@ -43,12 +43,13 @@ for (layout_type, convert_index_func) in [
             laneId = (threadIdx().x - 1) % 32 + 1
 
             op_y = (laneId - 1) ÷ 8 + 1
-            y, x = $convert_index_func((tile.base.M + tile.offset.M + op_y, tile.base.K + tile.offset.K + 1))
+            y, x = (tile.base.M + tile.offset.M + op_y, tile.base.K + tile.offset.K + 1)
 
-            frag = LocalArray{Tuple{M * K ÷ 4}, T}(undef)
+            frag = LocalArray{Tuple{M ÷ 4, K}, T}(undef)
             @unroll for m = 1 : M ÷ 4
                 @unroll for k = 1 : K
-                    @inbounds frag = setindex(frag, T(workspace[y + 4 * (m - 1), x + (k - 1)]), m + (M ÷ 4) * (k - 1))
+                    y_layout, x_layout = $convert_index_func((y + 4 * (m - 1), x + (k - 1)))
+                    @inbounds frag = setindex(frag, T(workspace[y_layout, x_layout]), m, k)
                 end
             end
             
@@ -59,12 +60,13 @@ for (layout_type, convert_index_func) in [
             laneId = (threadIdx().x - 1) % 32 + 1
 
             op_x = (laneId - 1) % 8 + 1
-            y, x = $convert_index_func((tile.base.K + tile.offset.K + 1, tile.base.N + tile.offset.N + op_x))
+            y, x = (tile.base.K + tile.offset.K + 1, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{K * N ÷ 8}, T}(undef)
-            @unroll for n = 1 : N ÷ 8
-                @unroll for k = 1 : K
-                    @inbounds frag = setindex(frag, T(workspace[y + (k - 1), x + 8 * (n - 1)]), n + (N ÷ 8) * (k - 1))
+            frag = LocalArray{Tuple{K, N ÷ 8}, T}(undef)
+            @unroll for k = 1 : K
+                @unroll for n = 1 : N ÷ 8
+                    y_layout, x_layout = $convert_index_func((y + (k - 1), x + 8 * (n - 1)))
+                    @inbounds frag = setindex(frag, T(workspace[y_layout, x_layout]), k, n)
                 end
             end
 
@@ -74,15 +76,18 @@ for (layout_type, convert_index_func) in [
         @inline function load_c(::Type{FPUOp{M, N, K, T}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, T, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
-            op_y = (laneId - 1) ÷ 8 + 1
-            op_x = (laneId - 1) % 8 + 1
+            op_y = (laneId - 1) % 8 + 1
+            op_x = (laneId - 1) ÷ 8 + 1
 
-            y, x = $convert_index_func((tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x))
+            y, x = (tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x)
 
             frag = LocalArray{Tuple{M * N ÷ 32}, DT}(undef)
             @unroll for m = 1 : M ÷ 4
                 @unroll for n = 1 : N ÷ 8 
-                    @inbounds frag = setindex(frag, DT(workspace[y + 4 * (m - 1), x + 8 * (n - 1)]), m + (M ÷ 4) * (n - 1))
+                    if (threadIdx().x == 1 && y <= 4 && x <= 8)
+                        @cushow (y, x)
+                    end
+                    @inbounds frag = setindex(frag, DT(workspace[y, x]), m + (M ÷ 4) * (n - 1))
                 end
             end
 

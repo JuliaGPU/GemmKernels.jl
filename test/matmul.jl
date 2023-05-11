@@ -46,7 +46,7 @@ using LinearAlgebra
             GemmKernels.matmul(a, b, c, d, conf;
                                 transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
                                 transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-                                kernel = Kernel.matmul_testing
+                                kernel = Kernel.matmul_pipelined
                                 )
 
             # Transpose outputs, if necessary
