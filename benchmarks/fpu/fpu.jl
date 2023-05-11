@@ -10,7 +10,7 @@ function fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
     conf = GemmKernels.get_config(
         gemm_shape = gemm_shape,
         block_shape = (M = 64, N = 64, K = 64),
-        operator = Operator.FPUOp{8, 8, 1, Float32},
+        operator = Operator.FPUOp{8, 8, 1, Float32, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float32} : Layout.AlignedColMajor{Float32},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float32} : Layout.AlignedColMajor{Float32},
 
