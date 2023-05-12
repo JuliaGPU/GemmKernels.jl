@@ -9,7 +9,7 @@ CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
 function fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
     conf = GemmKernels.get_config(
         gemm_shape = gemm_shape,
-        block_shape = (M = 64, N = 64, K = 64),
+        block_shape = (M = 128, N = 128, K = 32),
         operator = Operator.FPUOp{8, 8, 1, Float32, Float32},
         global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float32} : Layout.AlignedColMajor{Float32},
         global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float32} : Layout.AlignedColMajor{Float32},
@@ -21,14 +21,16 @@ function fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
         is_b_col_major = !transpose_b,
     )
 
-    CUDA.@sync begin
+    # CUDA.@sync begin
         GemmKernels.matmul(
             a, b, c, d, conf;
             transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
             transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-            kernel = Kernel.matmul_singlestage
+            kernel = Kernel.matmul_pipelined
         )
-    end
+    # end
+
+    return
 end
 
 function main()
