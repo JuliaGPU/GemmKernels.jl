@@ -43,11 +43,11 @@ for (layout_type, convert_index_func) in [
             op_y = (laneId - 1) ÷ 8 + 1
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.K + tile.offset.K + 1)
 
-            frag = LocalArray{Tuple{M ÷ 4, K}, CT}(undef)
+            frag = LocalArray{Tuple{M * K ÷ 4}, CT}(undef)
             @unroll for m = 1 : M ÷ 4
                 @unroll for k = 1 : K
                     y_layout, x_layout = $convert_index_func((y + 4 * (m - 1), x + (k - 1)))
-                    @inbounds frag = setindex(frag, CT(workspace[y_layout, x_layout]), m, k)
+                    @inbounds frag = setindex(frag, CT(workspace[y_layout, x_layout]), m + (M ÷ 4) * (k - 1))
                 end
             end
             
@@ -60,11 +60,11 @@ for (layout_type, convert_index_func) in [
             op_x = (laneId - 1) % 8 + 1
             y, x = (tile.base.K + tile.offset.K + 1, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{K, N ÷ 8}, CT}(undef)
-            @unroll for k = 1 : K
-                @unroll for n = 1 : N ÷ 8
+            frag = LocalArray{Tuple{K * N ÷ 8}, CT}(undef)
+            @unroll for n = 1 : N ÷ 8
+                @unroll for k = 1 : K
                     y_layout, x_layout = $convert_index_func((y + (k - 1), x + 8 * (n - 1)))
-                    @inbounds frag = setindex(frag, CT(workspace[y_layout, x_layout]), k, n)
+                    @inbounds frag = setindex(frag, CT(workspace[y_layout, x_layout]), k + (K) * (n - 1))
                 end
             end
 
@@ -108,29 +108,14 @@ for (layout_type, convert_index_func) in [
 end
 
 function mma(::Type{FPUOp{M, N, K, DT, CT}}, a_frag, b_frag, c_frag) where {M, N, K, DT, CT}
-
-    a_frag = LocalArray{Tuple{M ÷ 4, K}, CT}(a_frag)
-    b_frag = LocalArray{Tuple{K, N ÷ 8}, CT}(b_frag)
-    c_frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(c_frag)
-
-    @unroll for m = 1 : M ÷ 4
-        @unroll for n = 1 : N ÷ 8 
-            @unroll for k = 1 : K
-                if (DT == CT)
-                    # Use fma
-                    @inbounds c_frag = setindex(
-                        c_frag,
-                        DT(fma(a_frag[m, k], b_frag[k, n], c_frag[m, n])),
-                        m, n
-                    )
-                else
-                    # Use mul + cast + add
-                    @inbounds c_frag = setindex(
-                        c_frag,
-                        DT(a_frag[m, k] * b_frag[k, n]) + c_frag[m, n],
-                        m, n
-                    )
-                end
+    @unroll for k = 1 : K
+        @unroll for m = 1 : M ÷ 4
+            @unroll for n = 1 : N ÷ 8 
+                @inbounds c_frag = setindex(
+                    c_frag,
+                    DT(fma(a_frag[m + (M ÷ 4) * (k - 1)], b_frag[k + K * (n - 1)], c_frag[m + (M ÷ 4) * (n - 1)])),
+                    m + (M ÷ 4) * (n - 1)
+                )
             end
         end
     end

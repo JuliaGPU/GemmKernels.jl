@@ -7,8 +7,7 @@ CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
 
 function cublas_impl(transpose_a, transpose_b, alpha, a, b, beta, c)
     CUDA.CUBLAS.gemmEx!(
-        !transpose_a ? 'N' : 'T',
-        !transpose_b ? 'N' : 'T',
+        'N', 'N',
         alpha,
         a,
         b,
