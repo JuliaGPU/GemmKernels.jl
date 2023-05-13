@@ -1,67 +1,50 @@
 using CUDA
-using Test
+using ForwardDiff
+using GemmKernels
+using LinearAlgebra
 using Statistics
 using Printf
 
 CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
 
-function cublas_impl(transpose_a, transpose_b, alpha, a, b, beta, c)
-    CUDA.CUBLAS.gemmEx!(
-        'N', 'N',
-        alpha,
-        a,
-        b,
-        beta,
-        c
-    )
-    c
-end
+gemm_shape = eval(Meta.parse(ARGS[1]))
+gemm_names = (:M, :N, :K)
+gemm_shape = NamedTuple{gemm_names}(gemm_shape)
 
-@printf("N,min,max,median,mean,std\n")
+compute_type = eval(Meta.parse(ARGS[2]))
+data_type = eval(Meta.parse(ARGS[3]))
 
-for i = 7:12, transpose_a = [false], transpose_b = [false]
-    M = 2 ^ i
-    N = 2 ^ i
-    K = 2 ^ i
+function main()
+    # ----
+    # GEMM
+    # ----
 
-    alpha = rand(Float16)
-    beta = rand(Float32)
+    alpha = rand(compute_type)
 
-    a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
-    b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
-    c_h = rand(Float32, (M, N))
+    a = CuArray(rand(compute_type, (gemm_shape.M, gemm_shape.K)) / sqrt(compute_type(gemm_shape.K)))
+    b = CuArray(rand(compute_type, (gemm_shape.K, gemm_shape.N)) / sqrt(compute_type(gemm_shape.K)))
 
-    # Transpose input if necessary
-    a_h = transpose_a ? transpose(a_h) : a_h
-    b_h = transpose_b ? transpose(b_h) : b_h
+    beta = rand(data_type)
+    c = CuArray(rand(data_type, (gemm_shape.M, gemm_shape.N)))
+    d = similar(c)
 
-    a = CuArray(a_h)
-    b = CuArray(b_h)
-    c = CuArray(c_h)
-    d = copy(c)
 
-    test_result = alpha * a_h * b_h + beta * c_h
+    # ------
+    # Matmul
+    # ------
 
-    cublas_impl(transpose_a, transpose_b, alpha, a, b, beta, c)
-    @test all(isapprox.(test_result, Matrix(c); rtol = sqrt(eps(Float32))))
-    cublas_impl(transpose_a, transpose_b, alpha, a, b, beta, c)
-
-    times = []
-    for j = 1:100
-        time = CUDA.@elapsed cublas_impl(transpose_a, transpose_b, alpha, a, b, beta, c)
-        push!(times, time)
-
-        c = copy(d)
+    CUDA.@profile begin
+        for i = 1 : 10
+            CUDA.CUBLAS.gemmEx!(
+                'N', 'N',
+                alpha,
+                a,
+                b,
+                beta,
+                c
+            )
+        end
     end
-    times .= times .* 1e6
-
-    @printf(
-        "%d,%.6f,%.6f,%.6f,%.6f,%.6f\n",
-        N,
-        minimum(times),
-        maximum(times),
-        median(times),
-        mean(times),
-        std(times),
-    )
 end
+
+isinteractive() || main()
