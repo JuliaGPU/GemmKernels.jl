@@ -84,7 +84,7 @@ using LinearAlgebra
             conf = GemmKernels.get_config(
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 128, N = 64, K = 32),
-                                            operator = Operator.FPUOp{OP_M, OP_N, OP_K, CD_type},
+                                            operator = Operator.FPUOp{OP_M, OP_N, OP_K, CD_type, A_type},
                                             global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
                                             global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
 

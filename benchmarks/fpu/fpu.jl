@@ -1,88 +1,84 @@
 using CUDA
+using ForwardDiff
 using GemmKernels
-using Test
+using LinearAlgebra
 using Statistics
 using Printf
 
-CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
+gemm_shape = eval(Meta.parse(ARGS[1]))
+gemm_names = (:M, :N, :K)
+gemm_shape = NamedTuple{gemm_names}(gemm_shape)
 
-function fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
-    conf = GemmKernels.get_config(
-        gemm_shape = gemm_shape,
-        block_shape = (M = 128, N = 128, K = 32),
-        operator = Operator.FPUOp{8, 8, 1, Float32, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float32} : Layout.AlignedColMajor{Float32},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float32} : Layout.AlignedColMajor{Float32},
+block_shape = eval(Meta.parse(ARGS[2]))
+block_names = (:M, :N, :K)
+block_shape = NamedTuple{block_names}(block_shape)
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+operator_shape = eval(Meta.parse(ARGS[3]))
+operator_names = (:M, :N, :K)
+operator_shape = NamedTuple{operator_names}(operator_shape)
 
-        is_a_col_major = !transpose_a,
-        is_b_col_major = !transpose_b,
-    )
+compute_type = eval(Meta.parse(ARGS[4]))
+data_type = eval(Meta.parse(ARGS[5]))
 
-    # CUDA.@sync begin
-        GemmKernels.matmul(
-            a, b, c, d, conf;
-            transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
-            transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-            kernel = Kernel.matmul_pipelined
-        )
-    # end
+warps_per_block = 8
+compute_warp = (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = operator_shape.K)
 
-    return
+if (size(ARGS) == 7)
+    warps_per_block = eval(Meta.parse(ARGS[6]))
+    compute_warp = eval(Meta.parse(ARGS[7]))
 end
 
 function main()
-    # @printf("N,min,max,median,mean,std\n")
+    # ----
+    # GEMM
+    # ----
 
-    for i = 7:7, transpose_a = [false], transpose_b = [false]
-        M = 2 ^ i
-        N = 2 ^ i
-        K = 2 ^ i
-        gemm_shape = (M = M, N = N, K = K)
+    alpha = rand(compute_type)
 
-        alpha = rand(Float32)
-        beta = rand(Float32)
+    a = CuArray(rand(compute_type, (gemm_shape.M, gemm_shape.K)) / sqrt(compute_type(gemm_shape.K)))
+    b = CuArray(rand(compute_type, (gemm_shape.K, gemm_shape.N)) / sqrt(compute_type(gemm_shape.K)))
 
-        a_h = rand(Float32, (M, K)) / sqrt(Float32(K))
-        b_h = rand(Float32, (K, N)) / sqrt(Float32(K))
-        c_h = rand(Float32, (M, N))
+    beta = rand(data_type)
+    c = CuArray(rand(data_type, (gemm_shape.M, gemm_shape.N)))
+    d = similar(c)
 
-        # Transpose input if necessary
-        a_h = transpose_a ? transpose(a_h) : a_h
-        b_h = transpose_b ? transpose(b_h) : b_h
+    # ------
+    # Config
+    # ------
 
-        a = CuArray(a_h)
-        b = CuArray(b_h)
-        c = CuArray(c_h)
-        d = similar(c)
+    conf = GemmKernels.get_config(
+        gemm_shape = gemm_shape,
+        block_shape = block_shape,
+        operator = Operator.FPUOp{operator_shape.M, operator_shape.N, operator_shape.K, data_type, compute_type},
 
-        # test_result = Float32(alpha) * Float32.(a_h) * Float32.(b_h) + beta * c_h
+        global_a_layout = Layout.AlignedColMajor{compute_type},
+        global_b_layout = Layout.AlignedColMajor{compute_type},
 
-        fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
-        # @show @test all(isapprox.(test_result, Matrix(d); rtol = sqrt(eps(Float32))))
-        fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
+        global_c_layout = Layout.AlignedColMajor{data_type},
+        global_d_layout = Layout.AlignedColMajor{data_type},
 
-        times = []
-        for j = 1:10
-            # time = CUDA.@elapsed fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
-            # push!(times, time)
+        is_a_col_major = true,
+        is_b_col_major = true,
 
-            CUDA.@profile fpu_impl(transpose_a, transpose_b, alpha, a, b, beta, c, d, gemm_shape)
+        warps_per_block = warps_per_block,
+        compute_warp = compute_warp,
+    )
+
+    # ------
+    # Matmul
+    # ------
+
+    CUDA.@profile begin
+        for i = 1 : 10
+            CUDA.@sync begin
+                GemmKernels.matmul(
+                    a, b, c, d, conf;
+                    transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
+                    transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
+                    kernel = Kernel.matmul_pipelined
+                )
+            end
         end
-
-        # times .= times .* 1e6
-
-        # @printf(
-        #     "%d,%.6f,%.6f,%.6f,%.6f,%.6f\n",
-        #     N,
-        #     minimum(times),
-        #     maximum(times),
-        #     median(times),
-        #     mean(times),
-        #     std(times),
-        # )
     end
 end
 
