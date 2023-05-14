@@ -49,8 +49,9 @@ function main()
                 pipeline(
                     cmd, 
                     `grep 'gpu__time_duration.avg'`,
-                    `awk -F',' '{print $NF}'`,
+                    `awk -F'",' '{print $NF}'`,
                     `sed 's/"//g'`,
+                    `sed 's/,//g'`,
                     `paste -sd ','`
                 ), 
                 String
@@ -66,8 +67,9 @@ function main()
                 pipeline(
                     cmd, 
                     `grep 'gpu__time_duration.avg'`,
-                    `awk -F',' '{print $NF}'`,
+                    `awk -F'",' '{print $NF}'`,
                     `sed 's/"//g'`,
+                    `sed 's/,//g'`,
                     `paste -sd ','`
                 ), 
                 String
