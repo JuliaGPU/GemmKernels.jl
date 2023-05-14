@@ -1,0 +1,68 @@
+[
+    {
+        "N": 7,
+        "GEMM": "(128, 128, 128)",
+        "BLOCK": "(32, 32, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    },
+    {
+        "N": 8,
+        "GEMM": "(256, 256, 256)",
+        "BLOCK": "(32, 32, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    },
+    {
+        "N": 9,
+        "GEMM": "(512, 512, 512)",
+        "BLOCK": "(64, 64, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32",
+        "WARPS_PER_BLOCK": "4",
+        "COMPUTE_WARP": "(32, 32, 32)"
+    },
+    {
+        "N": 10,
+        "GEMM": "(1024, 1024, 1024)",
+        "BLOCK": "(128, 128, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    },
+    {
+        "N": 11,
+        "GEMM": "(2048, 2048, 2048)",
+        "BLOCK": "(128, 128, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    },
+    {
+        "N": 12,
+        "GEMM": "(4096, 4096, 4096)",
+        "BLOCK": "(128, 128, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    },
+    {
+        "N": 13,
+        "GEMM": "(8192, 8192, 8192)",
+        "BLOCK": "(128, 128, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    },
+    {
+        "N": 14,
+        "GEMM": "(16384, 16384, 16384)",
+        "BLOCK": "(128, 128, 32)",
+        "OPERATOR": "(8, 8, 1)",
+        "COMPUTE_TYPE": "Float32",
+        "DATA_TYPE": "Float32"
+    }
+]
