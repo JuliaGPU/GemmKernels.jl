@@ -9,7 +9,7 @@ using LinearAlgebra
     @test_if "fpu compute and data types" @testset "FPU GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))" for (A_type, B_type, CD_type, min_dimension) in [(Float16, Float16, Float32, 128), (Float32, Float32, Float32, 128), (Float32, Float32, Float64, 128), (Float64, Float64, Float64, 128)], transpose_a = [false, true], 
         transpose_b = [false, true], 
         (OP_M, OP_N, OP_K) in [(8, 16, 2)]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]])
+        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]], [[2048, 2048, 2048]])
             alpha = convert(A_type, 2)
             beta  = convert(CD_type, 3)
 
