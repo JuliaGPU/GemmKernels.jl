@@ -111,21 +111,11 @@ function mma(::Type{FPUOp{M, N, K, DT, CT}}, a_frag, b_frag, c_frag) where {M, N
     @unroll for k = 1 : K
         @unroll for m = 1 : M ÷ 4
             @unroll for n = 1 : N ÷ 8 
-                if (DT == CT)
-                    # Use fma
-                    @inbounds c_frag = setindex(
-                        c_frag,
-                        DT(fma(a_frag[m + (M ÷ 4) * (k - 1)], b_frag[k + K * (n - 1)], c_frag[m + (M ÷ 4) * (n - 1)])),
-                        m + (M ÷ 4) * (n - 1)
-                    )
-                else
-                    # Use mul + cast + add
-                    @inbounds c_frag = setindex(
-                        c_frag,
-                        DT(a_frag[m + (M ÷ 4) * (k - 1)] * b_frag[k + K * (n - 1)]) + c_frag[m + (M ÷ 4) * (n - 1)],
-                        m + (M ÷ 4) * (n - 1)
-                    )
-                end
+                @inbounds c_frag = setindex(
+                    c_frag,
+                    DT(fma(a_frag[m + (M ÷ 4) * (k - 1)], b_frag[k + K * (n - 1)], c_frag[m + (M ÷ 4) * (n - 1)])),
+                    m + (M ÷ 4) * (n - 1)
+                )
             end
         end
     end

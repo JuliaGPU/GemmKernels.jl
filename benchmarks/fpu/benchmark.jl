@@ -1,8 +1,8 @@
 using JSON
 
-PATH_TO_NCU = haskey(ENV, "PATH_TO_NCU") ? ENV["PATH_TO_NCU"] : "/usr/local/NVIDIA-Nsight-Compute-2023.1/ncu"
-PATH_TO_JULIA = haskey(ENV, "PATH_TO_JULIA") ? ENV["PATH_TO_JULIA"] : "/home/wjvermeu/julia-versions/julia-1.8.3/bin/julia"
-PATH_TO_CUTLASS = haskey(ENV, "PATH_TO_CUTLASS") ? ENV["PATH_TO_CUTLASS"] : "/home/wjvermeu/cutlass/build/tools/profiler/cutlass_profiler"
+PATH_TO_NCU = get(ENV, "PATH_TO_NCU", "ncu")
+PATH_TO_JULIA = get(ENV, "PATH_TO_JULIA", "julia")
+PATH_TO_CUTLASS = get(ENV, "PATH_TO_CUTLASS", "cutlass")
 
 PWD = ENV["PWD"]
 RELATIVE_PATH = "./benchmarks/fpu"
