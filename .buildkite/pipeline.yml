@@ -40,6 +40,21 @@ steps:
     soft_fail:
       - exit_status: 1
 
+  - label: "Julia 1.9"
+    plugins:
+      - JuliaCI/julia#v1:
+          version: 1.9
+      - JuliaCI/julia-test#v1: ~
+      - JuliaCI/julia-coverage#v1:
+    agents:
+      queue: "juliagpu"
+      cuda: "*"
+      cap: "recent"
+    if: build.message !~ /\[skip tests\]/
+    timeout_in_minutes: 60
+    soft_fail:
+      - exit_status: 1
+
   - label: "Julia nightly"
     plugins:
       - JuliaCI/julia#v1:
