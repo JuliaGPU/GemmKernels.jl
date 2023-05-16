@@ -37,4 +37,4 @@ function main()
     savefig(p, "gemm.png")
 end
 
-isinteractive() || main(ARGS[1])
+isinteractive() || main()
