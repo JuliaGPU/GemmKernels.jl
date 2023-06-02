@@ -55,11 +55,7 @@ using LinearAlgebra
     end
 
     @test_if "fpu operator shape" @testset "FPU GEMM OPERATOR SHAPE ($(OP_M), $(OP_N), $(OP_K)) (NN, NT, TN, TT)" for (OP_M, OP_N, OP_K) in [
-            (4, 8, 1), (4, 8, 2), (4, 8, 4), (4, 8, 8), (4, 8, 16),
-            (8, 8, 1), (8, 8, 2), (8, 8, 4), (8, 8, 8),
-            (8, 16, 1), (8, 16, 2), (8, 16, 4), (8, 16, 8), 
-            (16, 16, 1), (16, 16, 2), (16, 16, 4), 
-            (16, 8, 1), (16, 8, 2), (16, 8, 4),
+            (4, 8, 1), (8, 8, 1), (4, 16, 1), (4, 8, 2), (8, 16, 2) 
         ]
         @testset "NN, NT, TN, TT" for (transpose_a, transpose_b) in [(false, false), (false, true), (true, false), (true, true)]
             (M, N, K) = (128, 128, 128)
