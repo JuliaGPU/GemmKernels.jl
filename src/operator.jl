@@ -117,28 +117,24 @@ function operator_fma(::Type{TropicalFPUOp{M, N, K, DT, CT}}, a::CT, b::CT, c::D
     return max(a + b, c)
 end
 
-for (operator_type) in [FPUOp, TropicalFPUOp]
-    @eval begin
-        @inline function mma(::Type{$operator_type{M, N, K, DT, CT}}, a_frag, b_frag, c_frag) where {M, N, K, DT, CT}
-            a_frag = LocalArray{Tuple{M ÷ 4, K}, CT}(a_frag)
-            b_frag = LocalArray{Tuple{K, N ÷ 8}, CT}(b_frag)
-            c_frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(c_frag)
+@inline function mma(operator_type::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, a_frag, b_frag, c_frag) where {M, N, K, DT, CT}
+    a_frag = LocalArray{Tuple{M ÷ 4, K}, CT}(a_frag)
+    b_frag = LocalArray{Tuple{K, N ÷ 8}, CT}(b_frag)
+    c_frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(c_frag)
 
-            @unroll for m = 1 : M ÷ 4
-                @unroll for n = 1 : N ÷ 8 
-                    @unroll for k = 1 : K
-                        @inbounds c_frag = setindex(
-                            c_frag,
-                            operator_fma($operator_type{M, N, K, DT, CT}, a_frag[m, k], b_frag[k, n], c_frag[m, n]),
-                            m, n
-                        )
-                    end
-                end
+    @unroll for m = 1 : M ÷ 4
+        @unroll for n = 1 : N ÷ 8 
+            @unroll for k = 1 : K
+                @inbounds c_frag = setindex(
+                    c_frag,
+                    operator_fma(operator_type, a_frag[m, k], b_frag[k, n], c_frag[m, n]),
+                    m, n
+                )
             end
-
-            return NTuple{M * N ÷ 32, DT}(c_frag)
         end
     end
+
+    return NTuple{M * N ÷ 32, DT}(c_frag)
 end
 
 # ----
