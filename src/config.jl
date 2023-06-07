@@ -192,6 +192,11 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     # Apply heuristic for block shape
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
+    
+    # Limit the block shape to (128, 128, 32) for the GeneralFPUOp operator
+    if (operator <: Operator.GeneralFPUOp)
+        block_shape = (M = min(block_shape.M, 128), N = min(block_shape.N, 128), K = min(block_shape.K, 32))
+    end
 
     if block_shape.M * block_shape.K < 128 || block_shape.K * block_shape.N < 128 || block_shape.K < 8
         throw(ConfigError("The block shape is too small. The dimensions of the block shape must adhere to the following constraints: BLOCK_M * BLOCK_K ≥ 128, BLOCK_K * BLOCK_N ≥ 128, BLOCK_K ≥ 8."))

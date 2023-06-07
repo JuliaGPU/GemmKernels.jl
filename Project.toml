@@ -5,9 +5,13 @@ version = "0.1.0"
 
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 LLVMLoopInfo = "8b046642-f1f6-4319-8d3c-209ddc03c586"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+cuTENSOR = "011b41b2-24ef-40a8-b3eb-fa098493e9e1"
 
 [compat]
 CUDA = "3.5, 4, 5"

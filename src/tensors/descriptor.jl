@@ -20,7 +20,7 @@ export ALGO
 end
 
 export TensorDescriptor
-Base.@kwdef mutable struct TensorDescriptor
+mutable struct TensorDescriptor
     numModes::Int
     extent::Vector{Int}
     stride::Vector{Int}

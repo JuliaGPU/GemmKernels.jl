@@ -142,7 +142,7 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
 end
 
 export setUpGETTKernel
-function setUpGETTKernel(desc::ContractionDescriptor, operator=Operator.WMMAOp)
+function setUpGETTKernel(desc::ContractionDescriptor, operator)
     (
         gemmShape,
         TensorLayoutA, isColMajorA, 
@@ -163,13 +163,15 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator=Operator.WMMAOp)
         SharedLayoutB = Layout.Padded{Layout.AlignedRowMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
     end
 
+    if (operator == Operator.WMMAOp)
+        operator = Operator.WMMAOp{16, 16, 16, desc.dataType}
+    elseif (operator <: Operator.GeneralFPUOp)
+        operator = operator{8, 8, 1, desc.dataType, desc.computeType}
+    end
+
     gemmConf = GemmKernels.get_config(
         gemm_shape = gemmShape,
-
-        operator = operator{16, 16, 16, desc.dataType},
-        # Or alternatively with the FPU operator:
-        # operator = Operator.FPUOp{8, 8, 1, desc.dataType, desc.computeType},
-        # block_shape = (M = 128, N = 128, K = 32),
+        operator = operator,
 
         global_a_layout = TensorLayoutA,
         global_b_layout = TensorLayoutB,

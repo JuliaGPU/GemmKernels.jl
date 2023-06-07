@@ -5,38 +5,6 @@ using GemmKernels.Tensors
 using Test
 using JSON
 
-function main()
-    fp = open("benchmarks/tensor-contractions/benchmark-suite.json", "r")
-
-    jsonData = JSON.parse(read(fp, String))
-
-    @testset "TCCG benchmark suite against cuTENSOR with $(operator)" for (operator, dataType) in [(Operator.WMMAOp, Float16) , (Operator.FPUOp, Float32)] 
-        for el in jsonData
-            parseableName = el["parseableName"]
-
-            tensorModes = Vector{Vector{Int}}(undef, 0)
-            for tensor in split(parseableName, "-")
-                tensorMode = Vector{Int}(undef, 0)
-
-                for mode in split(tensor, ".")
-                    push!(tensorMode, parse(Int, mode))
-                end
-
-                push!(tensorModes, tensorMode)
-            end
-
-            extents = Tuple(x for x in el["extents"])
-
-            name = el["name"]
-            @testset "$name" begin
-                @test testContraction(extents, tensorModes, operator, dataType)
-            end
-        end
-    end
-
-    nothing
-end
-
 function testContraction(extents, tensorModes, operator, dataType)
     A = CuArray(rand(dataType, extents[tensorModes[2]]) / sqrt(dataType(2048)))
     B = CuArray(rand(dataType, extents[tensorModes[3]]) / sqrt(dataType(2048)))
@@ -81,4 +49,32 @@ function testContraction(extents, tensorModes, operator, dataType)
     return all(isapprox.(Array(D1), Array(D2); rtol = sqrt(eps(dataType))))
 end
 
-isinteractive() || main()
+@testset "Tensor Contraction" begin
+    fp = open("./benchmark-suite.json", "r")
+
+    jsonData = JSON.parse(read(fp, String))
+
+    @test_if "contraction" @testset "TCCG benchmark suite against cuTENSOR with $(operator)" for (operator, dataType) in [(Operator.WMMAOp, Float16) , (Operator.FPUOp, Float32)] 
+        for el in jsonData
+            parseableName = el["parseableName"]
+
+            tensorModes = Vector{Vector{Int}}(undef, 0)
+            for tensor in split(parseableName, "-")
+                tensorMode = Vector{Int}(undef, 0)
+
+                for mode in split(tensor, ".")
+                    push!(tensorMode, parse(Int, mode))
+                end
+
+                push!(tensorModes, tensorMode)
+            end
+
+            extents = Tuple(x for x in el["extents"])
+
+            name = el["name"]
+            @testset "$name" begin
+                @test testContraction(extents, tensorModes, operator, dataType)
+            end
+        end
+    end
+end
