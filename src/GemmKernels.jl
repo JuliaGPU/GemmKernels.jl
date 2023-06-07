@@ -19,4 +19,8 @@ include("transform.jl")
 # instantiations
 include("matmul.jl")
 
+include("tensorlayout.jl")
+include("tensorplan.jl")
+include("GettContractions.jl")
+
 end
