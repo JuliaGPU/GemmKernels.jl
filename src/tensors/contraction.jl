@@ -62,8 +62,8 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d)
     end
 end
 
-export elementwiseTrinary!
-function elementwiseTrinary!(plan::ContractionPlan, α, a, b, β, c, d, opAB, opABC)
+export contraction!
+function contraction!(plan::ContractionPlan, α, a, b, β, c, d, opAB, opABC)
     if (opAB == *) && (opABC == +)
         contraction!(plan, α, a, b, β, c, d)
     elseif (opAB == +) && (opABC == max)
@@ -71,6 +71,17 @@ function elementwiseTrinary!(plan::ContractionPlan, α, a, b, β, c, d, opAB, op
         contraction!(plan, α, a, b, β, c, d)
     end
 end
+
+export elementwiseTrinary!
+function elementwiseTrinary!(plan::ContractionPlan, α, a, b, β, c, d, opAB, opABC)
+    # Future work: reuse GemmKernels building blocks
+end
+
+export elementwiseBinary!
+function elementwiseBinary!(plan::ContractionPlan, α, a, β, c, d, opAB)
+    # Future work: reuse GemmKernels building blocks
+end
+
 
 export reduction!
 function reduction!(α, a, β, c, d, opReduce)
