@@ -33,6 +33,7 @@ function main()
         OPERATOR = el["OPERATOR"]
         COMPUTE_TYPE = el["COMPUTE_TYPE"]
         DATA_TYPE = el["DATA_TYPE"]
+        CUTLASS_KERNEL = el["CUTLASS_KERNEL"]
 
         WARPS_PER_BLOCK = haskey(el, "WARPS_PER_BLOCK") ? el["WARPS_PER_BLOCK"] : ""
         COMPUTE_WARP = haskey(el, "COMPUTE_WARP") ? el["COMPUTE_WARP"] : ""
@@ -82,10 +83,8 @@ function main()
                 --csv --print-units base --metrics 'gpu__time_duration.avg' -k Kernel2
                 $PATH_TO_CUTLASS
                 --operation=Gemm --gemm_kind=gemm --m=$(GEMM.M) --n=$(GEMM.N) --k=$(GEMM.K)
-                --kernels=cutlass_simt_sgemm_128x128_8x2_nn_align1 
-                --warmup-iterations=0 --profiling-iterations=10 --verification-enabled=false`
-
-            @show cmd
+                --kernels=$(CUTLASS_KERNEL)
+                --warmup-iterations=0 --profiling-iterations=10 --verification-enabled=false --alpha=2 --beta=3`
 
             result = read(
                 pipeline(
@@ -97,8 +96,6 @@ function main()
                 ), 
                 String
             )[1:end-1]
-
-            @show result
         end
 
         # Write results to CSV

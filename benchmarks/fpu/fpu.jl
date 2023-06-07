@@ -23,9 +23,12 @@ data_type = eval(Meta.parse(ARGS[5]))
 warps_per_block = 8
 compute_warp = (M = block_shape.M ÷ 4, N = block_shape.N ÷ 2, K = operator_shape.K)
 
-if (size(ARGS) == 7)
+if (ARGS[7] != "")
     warps_per_block = eval(Meta.parse(ARGS[6]))
+
     compute_warp = eval(Meta.parse(ARGS[7]))
+    compute_warp_names = (:M, :N, :K)
+    compute_warp = NamedTuple{compute_warp_names}(compute_warp)
 end
 
 function main()

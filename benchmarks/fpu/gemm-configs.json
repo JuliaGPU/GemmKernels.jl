@@ -5,7 +5,8 @@
         "BLOCK": "(32, 32, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x64_8x2_nn_align1"
     },
     {
         "N": 8,
@@ -13,17 +14,19 @@
         "BLOCK": "(32, 32, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x64_8x2_nn_align1"
     },
     {
         "N": 9,
         "GEMM": "(512, 512, 512)",
         "BLOCK": "(64, 64, 32)",
-        "OPERATOR": "(8, 8, 1)",
+        "OPERATOR": "(4, 8, 2)",
         "COMPUTE_TYPE": "Float32",
         "DATA_TYPE": "Float32",
         "WARPS_PER_BLOCK": "4",
-        "COMPUTE_WARP": "(32, 32, 32)"
+        "COMPUTE_WARP": "(32, 32, 2)",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x64_8x2_nn_align1"
     },
     {
         "N": 10,
@@ -31,7 +34,8 @@
         "BLOCK": "(128, 128, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x128_8x2_nn_align1"
     },
     {
         "N": 11,
@@ -39,7 +43,8 @@
         "BLOCK": "(128, 128, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x128_8x2_nn_align1"
     },
     {
         "N": 12,
@@ -47,7 +52,8 @@
         "BLOCK": "(128, 128, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x128_8x2_nn_align1"
     },
     {
         "N": 13,
@@ -55,7 +61,8 @@
         "BLOCK": "(128, 128, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x128_8x2_nn_align1"
     },
     {
         "N": 14,
@@ -63,6 +70,7 @@
         "BLOCK": "(128, 128, 32)",
         "OPERATOR": "(8, 8, 1)",
         "COMPUTE_TYPE": "Float32",
-        "DATA_TYPE": "Float32"
+        "DATA_TYPE": "Float32",
+        "CUTLASS_KERNEL": "cutlass_simt_sgemm_128x128_8x2_nn_align1"
     }
 ]
