@@ -1,5 +1,6 @@
 using CUDA
-using GemmKernels.TensorPlan
+using cuTENSOR
+using GemmKernels.Tensors
 using Test
 using JSON
 
@@ -9,15 +10,6 @@ function main()
     jsonData = JSON.parse(read(fp, String))
 
     for el in jsonData
-        # if (el["name"] != "ABC-DCA-BD" && el["name"] != "AB-CAD-DCB")
-        #     continue
-        # end
-        # if (el["name"] == "AB-CAD-DCB")
-        #     continue
-        # end
-        # if (el["name"] == "ABCD-EAFB-FBEC")
-        #     break
-        # end
         parseableName = el["parseableName"]
 
         tensorModes = Vector{Vector{Int}}(undef, 0)
@@ -47,7 +39,7 @@ function test(extents, tensorModes)
     C = CuArray(rand(Float16, extents[tensorModes[1]]))
     D = CuArray(zeros(Float16, extents[tensorModes[1]]))
 
-    plan = TensorPlan.ContractionPlan(
+    plan = Tensors.ContractionPlan(
         A, tensorModes[2],
         B, tensorModes[3],
         C, tensorModes[1],
@@ -55,28 +47,28 @@ function test(extents, tensorModes)
     )
     # @show plan.TensorLayoutA
 
-    TensorPlan.contraction!(plan, Float16(1.0), A, B, Float16(1.0), C, D)
+    Tensors.contraction!(plan, 1, A, B, 1, C, D)
     D1 = Array(D)
 
     # CUTENSOR
-    algo = CUDA.CUTENSOR.CUTENSOR_ALGO_GETT
+    algo = cuTENSOR.CUTENSOR_ALGO_GETT
 
-    plan = CUDA.CUTENSOR.plan_contraction(
-        A, tensorModes[2], CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
-        B, tensorModes[3], CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
-        C, tensorModes[1], CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
-        CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
+    plan = cuTENSOR.plan_contraction(
+        A, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        B, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        C, tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cuTENSOR.CUTENSOR_OP_IDENTITY,
         algo = algo,
         compute_type = Float16
     )
 
-    CUDA.CUTENSOR.contraction!(
+    cuTENSOR.contraction!(
         1,
-        A, tensorModes[2], CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
-        B, tensorModes[3], CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
+        A, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        B, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
         1,
-        C, tensorModes[1], CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
-        CUDA.CUTENSOR.CUTENSOR_OP_IDENTITY,
+        C, tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cuTENSOR.CUTENSOR_OP_IDENTITY,
         compute_type = Float16,
         plan = plan
     )

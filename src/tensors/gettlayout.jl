@@ -1,5 +1,4 @@
-export TensorLayout
-module TensorLayout
+module GETTLayout
 
 using CUDA
 using GemmKernels.Layout
@@ -18,14 +17,14 @@ end
     end
 end
 
-abstract type TensorLayoutColMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size} <: Layout.AlignedColMajor{T} end
+abstract type GETTLayoutColMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size} <: Layout.AlignedColMajor{T} end
 
-abstract type TensorLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size} <: Layout.AlignedRowMajor{T} end
+abstract type GETTLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size} <: Layout.AlignedRowMajor{T} end
 
 @inline function Layout.load(
         ::Union{
-            Type{TensorLayoutColMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size}},
-            Type{TensorLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size}}
+            Type{GETTLayoutColMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size}},
+            Type{GETTLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size}}
         }, workspace, tile::Tile{size}
     ) where {T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size, size}
 
@@ -49,14 +48,14 @@ abstract type TensorLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK
     if (is_load_strided == false)
         return Layout.vloada(Layout.Vec{NUMEL, T}, pointer(workspace), offset)
     else
-        return TensorLayout.sloada(Layout.Vec{NUMEL, T}, workspace, offset, strided_over_size)
+        return GETTLayout.sloada(Layout.Vec{NUMEL, T}, workspace, offset, strided_over_size)
     end
 end
 
 @inline function Layout.store!(
         ::Union{
-            Type{TensorLayoutColMajor{T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_store_strided, strided_over_size}},
-            Type{TensorLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_store_strided, strided_over_size}}
+            Type{GETTLayoutColMajor{T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_store_strided, strided_over_size}},
+            Type{GETTLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_store_strided, strided_over_size}}
         }, workspace, value, tile::Tile{size}
     ) where {T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_store_strided, strided_over_size, size}
 
@@ -81,7 +80,7 @@ end
     if (is_store_strided == false)
         return Layout.vstorea!(Layout.Vec{NUMEL, T}, pointer(workspace), value, offset)
     else
-        TensorLayout.sstorea!(Layout.Vec{NUMEL, T}, workspace, value, offset, strided_over_size)
+        GETTLayout.sstorea!(Layout.Vec{NUMEL, T}, workspace, value, offset, strided_over_size)
     end
 end
 
@@ -90,10 +89,7 @@ end
 # precomputeGETTLayoutConstants([16, 512, 32], ([1, 3], [2]))
 # result: ((1, 3), (2,), (1, 16), (1,), (16, 512, 32), (1, 8192), (16,))
 
-# TODO: Write docstring.
-
 export precomputeGETTLayoutConstants
-
 function precomputeGETTLayoutConstants(
     T_strides_sizes::Vector{Int},
     T_strides::Tuple{Vector{Int}, Vector{Int}},
@@ -181,89 +177,27 @@ function precomputeGETTLayoutConstants(
     )
 end
 
-function createALayout(
-    T::DataType,
-    T_strides_sizes::Vector{Int},
-    T_strides::Tuple{Vector{Int}, Vector{Int}},
+function createGETTLayout(
+    DT::DataType,
+    extent::Vector{Int},
+    stride_indices::Tuple{Vector{Int}, Vector{Int}},
     is_col_major::Bool,
     is_load_strided::Bool,
     load_or_store_strided_over::Union{Vector{Int}, Nothing} = nothing,
 )
     (
-        TM_strides, TK_strides,
-        TM_div, TK_div,
+        T1_strides, T2_strides,
+        T1_div, T2_div,
         T_mod,
-        GM_mul, GK_mul,
-        is_load_strided, strided_over_size
-    ) = precomputeGETTLayoutConstants(T_strides_sizes, T_strides, is_load_strided, load_or_store_strided_over)
+        G1_mul, G2_mul,
+        is_load_or_store_strided, strided_over_size
+    ) = precomputeGETTLayoutConstants(extent, stride_indices, is_load_strided, load_or_store_strided_over)
 
     if (is_col_major == true)
-        return TensorLayoutColMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size}
+        return GETTLayoutColMajor{DT, T1_strides, T1_div, G1_mul, T2_strides, T2_div, G2_mul, T_mod, is_load_or_store_strided, strided_over_size}
     else
-        return TensorLayoutRowMajor{T, TM_strides, TM_div, GM_mul, TK_strides, TK_div, GK_mul, T_mod, is_load_strided, strided_over_size}
+        return GETTLayoutRowMajor{DT, T1_strides, T1_div, G1_mul, T2_strides, T2_div, G2_mul, T_mod, is_load_or_store_strided, strided_over_size}
     end
-end
-
-function createBLayout(
-    T::DataType,
-    T_strides_sizes::Vector{Int},
-    T_strides::Tuple{Vector{Int}, Vector{Int}},
-    is_col_major::Bool,
-    is_load_strided::Bool,
-    load_or_store_strided_over::Union{Vector{Int}, Nothing} = nothing,
-)
-    (
-        TK_strides, TN_strides,
-        TK_div, TN_div,
-        T_mod,
-        GK_mul, GN_mul,
-        is_load_strided, strided_over_size
-    ) = precomputeGETTLayoutConstants(T_strides_sizes, T_strides, is_load_strided, load_or_store_strided_over)
-
-    if (is_col_major == true)
-        return TensorLayoutColMajor{T, TK_strides, TK_div, GK_mul, TN_strides, TN_div, GN_mul, T_mod, is_load_strided, strided_over_size}
-    else
-        return TensorLayoutRowMajor{T, TK_strides, TK_div, GK_mul, TN_strides, TN_div, GN_mul, T_mod, is_load_strided, strided_over_size}
-    end
-end
-
-function createCLayout(
-    T::DataType,
-    T_strides_sizes::Vector{Int},
-    T_strides::Tuple{Vector{Int}, Vector{Int}},
-    is_load_strided::Bool,
-    load_or_store_strided_over::Union{Vector{Int}, Nothing} = nothing,
-)
-
-    (
-        TM_strides, TN_strides,
-        TM_div, TN_div,
-        T_mod,
-        GM_mul, GN_mul,
-        is_load_strided, strided_over_size
-    ) = precomputeGETTLayoutConstants(T_strides_sizes, T_strides, is_load_strided, load_or_store_strided_over)
-
-    # TODO: Add RowMajor support (goes along with attempt at more vectorised C loads and D stores)
-    return TensorLayoutColMajor{T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_load_strided, strided_over_size}
-end
-
-# TODO: Make this also use the strided_over contant. It will probably be more efficient.
-function createDLayout(
-    T::DataType,
-    T_strides_sizes::Vector{Int},
-    T_strides::Tuple{Vector{Int}, Vector{Int}},
-    is_store_strided::Bool,
-    load_or_store_strided_over::Union{Vector{Int}, Nothing} = nothing,
-)
-    (
-        TM_strides, TN_strides,
-        TM_div, TN_div,
-        T_mod,
-        GM_mul, GN_mul,
-        is_store_strided, strided_over_size
-    ) = precomputeGETTLayoutConstants(T_strides_sizes, T_strides, is_store_strided, load_or_store_strided_over)
-
-    return TensorLayoutColMajor{T, TM_strides, TM_div, GM_mul, TN_strides, TN_div, GN_mul, T_mod, is_store_strided, strided_over_size}
 end
 
 end
