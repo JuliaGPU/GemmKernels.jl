@@ -28,8 +28,8 @@ function main()
         xticks=(1 : 8, N),
         xlabel="N",
         ylabel="TFLOPS",
-        # label=["GemmKernels.jl" "CUBLAS"],
-        label=["GemmKernels.jl" "CUBLAS" "CUTLASS"],
+        label=["GemmKernels.jl" "CUBLAS"],
+        # label=["GemmKernels.jl" "CUBLAS" "CUTLASS"],
         xlims=(0, 9),
         ylims=(0, 12),
     )

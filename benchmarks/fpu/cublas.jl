@@ -35,14 +35,16 @@ function main()
 
     CUDA.@profile begin
         for i = 1 : 10
-            CUDA.CUBLAS.gemmEx!(
-                'N', 'N',
-                alpha,
-                a,
-                b,
-                beta,
-                c
-            )
+            CUDA.@sync begin
+                CUDA.CUBLAS.gemmEx!(
+                    'N', 'N',
+                    alpha,
+                    a,
+                    b,
+                    beta,
+                    c
+                )
+            end
         end
     end
 end

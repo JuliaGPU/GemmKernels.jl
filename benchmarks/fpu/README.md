@@ -18,3 +18,29 @@ If Nsight Compute throws a 'No kernels were profiled.' error, try adding this to
 ```bash
 LD_LIBRARY_PATH=$($PATH_TO_JULIA -e 'println(joinpath(Sys.BINDIR, Base.LIBDIR, "julia"))')
 ```
+
+If your device is not supported by Nsight Compute, `nvprof` can be used instead. This is how the CUBLAS benchmark can be replaced in `benchmark.jl`.
+
+```julia
+cmd = `nvprof
+    --profile-from-start off -f --csv --print-gpu-trace --openacc-profiling off --log-file tmp.csv
+    $PATH_TO_JULIA --project 
+    $PWD/$RELATIVE_PATH/cublas.jl
+    $GEMM $COMPUTE_TYPE $DATA_TYPE`
+
+run(cmd)
+
+result = read(
+    pipeline(
+        `cat tmp.csv`, 
+        `grep 'P100'`,
+        `awk -F ',' '{print $2}'`,
+        `sed 's/000$//g'`,
+        `sed 's/\.//g'`,
+        `paste -sd ','`
+    ), 
+    String
+)[1:end-1]
+
+run(`rm tmp.csv`)
+```
