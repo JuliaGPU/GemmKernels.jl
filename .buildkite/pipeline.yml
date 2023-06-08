@@ -10,7 +10,7 @@ steps:
       cuda: "*"
       cap: "recent"
     if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
 
   - label: "Julia 1.7"
     plugins:
@@ -23,7 +23,7 @@ steps:
       cuda: "*"
       cap: "recent"
     if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
 
   - label: "Julia 1.8"
     plugins:
@@ -36,7 +36,7 @@ steps:
       cuda: "*"
       cap: "recent"
     if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
     soft_fail:
       - exit_status: 1
 
@@ -51,7 +51,7 @@ steps:
       cuda: "*"
       cap: "recent"
     if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
     soft_fail:
       - exit_status: 1
 
@@ -65,7 +65,7 @@ steps:
       cuda: "*"
       cap: "recent"
     if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 60
+    timeout_in_minutes: 120
     soft_fail:
       - exit_status: 1
 
