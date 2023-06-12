@@ -1,6 +1,6 @@
 [
     {
-        "name": "ABC-BDA-DC",
+        "name": "abc-bda-dc",
         "parseableName": "1.2.3-2.4.1-4.3",
         "extents": [
             64,
@@ -10,7 +10,7 @@
         ]
     },
     {
-        "name": "ABC-DCA-BD",
+        "name": "abc-dca-bd",
         "parseableName": "1.2.3-4.3.1-2.4",
         "extents": [
             64,
@@ -20,7 +20,7 @@
         ]
     },
     {
-        "name": "ABCD-DBEA-EC",
+        "name": "abcd-dbea-ec",
         "parseableName": "1.2.3.4-4.2.5.1-5.3",
         "extents": [
             16,
@@ -31,7 +31,7 @@
         ]
     },
     {
-        "name": "ABCD-DECA-BE",
+        "name": "abcd-deca-be",
         "parseableName": "1.2.3.4-4.5.3.1-2.5",
         "extents": [
             8,
@@ -42,7 +42,7 @@
         ]
     },
     {
-        "name": "ABCD-EBAD-CE",
+        "name": "abcd-ebad-ce",
         "parseableName": "1.2.3.4-5.2.1.4-3.5",
         "extents": [
             16,
@@ -53,7 +53,7 @@
         ]
     },
     {
-        "name": "ABCDE-EFBAD-CF",
+        "name": "abcde-efbad-cf",
         "parseableName": "1.2.3.4.5-5.6.2.1.4-3.6",
         "extents": [
             8,
@@ -65,7 +65,7 @@
         ]
     },
     {
-        "name": "ABCDE-ECBFA-FD",
+        "name": "abcde-ecbfa-fd",
         "parseableName": "1.2.3.4.5-5.3.2.6.1-6.4",
         "extents": [
             8,
@@ -77,7 +77,7 @@
         ]
     },
     {
-        "name": "ABCDE-EFCAD-BF",
+        "name": "abcde-efcad-bf",
         "parseableName": "1.2.3.4.5-5.6.3.1.4-2.6",
         "extents": [
             4,
@@ -89,7 +89,7 @@
         ]
     },
     {
-        "name": "ABCD-EA-EBCD",
+        "name": "abcd-ea-ebcd",
         "parseableName": "1.2.3.4-5.1-5.2.3.4",
         "extents": [
             2048,
@@ -100,7 +100,7 @@
         ]
     },
     {
-        "name": "ABCD-EB-AECD",
+        "name": "abcd-eb-aecd",
         "parseableName": "1.2.3.4-5.2-1.5.3.4",
         "extents": [
             16,
@@ -111,7 +111,7 @@
         ]
     },
     {
-        "name": "ABCD-EC-ABED",
+        "name": "abcd-ec-abed",
         "parseableName": "1.2.3.4-5.3-1.2.5.4",
         "extents": [
             16,
@@ -122,7 +122,7 @@
         ]
     },
     {
-        "name": "AB-AC-CB",
+        "name": "ab-ac-cb",
         "parseableName": "1.2-1.3-3.2",
         "extents": [
             2048,
@@ -131,7 +131,7 @@
         ]
     },
     {
-        "name": "AB-ACD-DBC",
+        "name": "ab-acd-dbc",
         "parseableName": "1.2-1.3.4-4.2.3",
         "extents": [
             2048,
@@ -141,7 +141,7 @@
         ]
     },
     {
-        "name": "AB-CAD-DCB",
+        "name": "ab-cad-dcb",
         "parseableName": "1.2-3.1.4-4.3.2",
         "extents": [
             2048,
@@ -151,17 +151,7 @@
         ]
     },
     {
-        "name": "ABC-AD-BDC",
-        "parseableName": "1.2.3-1.4-2.4.3",
-        "extents": [
-            2048,
-            32,
-            64,
-            2048
-        ]
-    },
-    {
-        "name": "ABC-ACD-DB",
+        "name": "abc-acd-db",
         "parseableName": "1.2.3-1.3.4-4.2",
         "extents": [
             64,
@@ -171,7 +161,17 @@
         ]
     },
     {
-        "name": "ABC-ADC-BD",
+        "name": "abc-ad-bdc",
+        "parseableName": "1.2.3-1.4-2.4.3",
+        "extents": [
+            2048,
+            32,
+            64,
+            2048
+        ]
+    },
+    {
+        "name": "abc-adc-bd",
         "parseableName": "1.2.3-1.4.3-2.4",
         "extents": [
             64,
@@ -181,7 +181,7 @@
         ]
     },
     {
-        "name": "ABC-ADC-DB",
+        "name": "abc-adc-db",
         "parseableName": "1.2.3-1.4.3-4.2",
         "extents": [
             64,
@@ -191,7 +191,18 @@
         ]
     },
     {
-        "name": "ABCD-AEBF-DFCE",
+        "name": "abc-adec-ebd",
+        "parseableName": "1.2.3-1.4.5.3-5.2.4",
+        "extents": [
+            64,
+            2048,
+            32,
+            32,
+            64
+        ]
+    },
+    {
+        "name": "abcd-aebf-dfce",
         "parseableName": "1.2.3.4-1.5.2.6-4.6.3.5",
         "extents": [
             64,
@@ -203,7 +214,7 @@
         ]
     },
     {
-        "name": "ABCD-AEBF-FDEC",
+        "name": "abcd-aebf-fdec",
         "parseableName": "1.2.3.4-1.5.2.6-6.4.5.3",
         "extents": [
             64,
@@ -215,7 +226,7 @@
         ]
     },
     {
-        "name": "ABCD-AECF-BFDE",
+        "name": "abcd-aecf-bfde",
         "parseableName": "1.2.3.4-1.5.3.6-2.6.4.5",
         "extents": [
             64,
@@ -227,7 +238,7 @@
         ]
     },
     {
-        "name": "ABCD-AECF-FBED",
+        "name": "abcd-aecf-fbed",
         "parseableName": "1.2.3.4-1.5.3.6-6.2.5.4",
         "extents": [
             64,
@@ -239,7 +250,7 @@
         ]
     },
     {
-        "name": "ABCD-AEDF-BFCE",
+        "name": "abcd-aedf-bfce",
         "parseableName": "1.2.3.4-1.5.4.6-2.6.3.5",
         "extents": [
             64,
@@ -251,7 +262,7 @@
         ]
     },
     {
-        "name": "ABCD-AEDF-FBEC",
+        "name": "abcd-aedf-fbec",
         "parseableName": "1.2.3.4-1.5.4.6-6.2.5.3",
         "extents": [
             64,
@@ -263,7 +274,7 @@
         ]
     },
     {
-        "name": "ABCD-AEFB-FDCE",
+        "name": "abcd-aefb-fdce",
         "parseableName": "1.2.3.4-1.5.6.2-6.4.3.5",
         "extents": [
             64,
@@ -275,19 +286,7 @@
         ]
     },
     {
-        "name": "ABCD-AEFB-FDCE",
-        "parseableName": "1.2.3.4-1.5.6.2-6.4.3.5",
-        "extents": [
-            64,
-            32,
-            64,
-            32,
-            32,
-            64
-        ]
-    },
-    {
-        "name": "ABCD-AEFC-FBED",
+        "name": "abcd-aefc-fbed",
         "parseableName": "1.2.3.4-1.5.6.3-6.2.5.4",
         "extents": [
             64,
@@ -299,7 +298,7 @@
         ]
     },
     {
-        "name": "ABCD-EAFB-FDEC",
+        "name": "abcd-eafb-fdec",
         "parseableName": "1.2.3.4-5.1.6.2-6.4.5.3",
         "extents": [
             64,
@@ -311,7 +310,7 @@
         ]
     },
     {
-        "name": "ABCD-EAFC-BFDE",
+        "name": "abcd-eafc-bfde",
         "parseableName": "1.2.3.4-5.1.6.3-2.6.4.5",
         "extents": [
             64,
@@ -323,7 +322,7 @@
         ]
     },
     {
-        "name": "ABCD-EAFD-FBEC",
+        "name": "abcd-eafd-fbec",
         "parseableName": "1.2.3.4-5.1.6.4-6.2.5.3",
         "extents": [
             64,
@@ -335,7 +334,7 @@
         ]
     },
     {
-        "name": "ABCDEF-DEGA-GFBC",
+        "name": "abcdef-dega-gfbc",
         "parseableName": "1.2.3.4.5.6-4.5.7.1-7.6.2.3",
         "extents": [
             8,
@@ -348,7 +347,7 @@
         ]
     },
     {
-        "name": "ABCDEF-DEGB-GFAC",
+        "name": "abcdef-degb-gfac",
         "parseableName": "1.2.3.4.5.6-4.5.7.2-7.6.1.3",
         "extents": [
             8,
@@ -361,7 +360,7 @@
         ]
     },
     {
-        "name": "ABCDEF-DEGC-GFAB",
+        "name": "abcdef-degc-gfab",
         "parseableName": "1.2.3.4.5.6-4.5.7.3-7.6.1.2",
         "extents": [
             8,
@@ -374,7 +373,7 @@
         ]
     },
     {
-        "name": "ABCDEF-DFGA-GEBC",
+        "name": "abcdef-dfga-gebc",
         "parseableName": "1.2.3.4.5.6-4.6.7.1-7.5.2.3",
         "extents": [
             8,
@@ -387,7 +386,7 @@
         ]
     },
     {
-        "name": "ABCDEF-DFGB-GEAC",
+        "name": "abcdef-dfgb-geac",
         "parseableName": "1.2.3.4.5.6-4.6.7.2-7.5.1.3",
         "extents": [
             8,
@@ -400,7 +399,7 @@
         ]
     },
     {
-        "name": "ABCDEF-DFGC-GEAB",
+        "name": "abcdef-dfgc-geab",
         "parseableName": "1.2.3.4.5.6-4.6.7.3-7.5.1.2",
         "extents": [
             8,
@@ -413,7 +412,7 @@
         ]
     },
     {
-        "name": "ABCDEF-EFGA-GDBC",
+        "name": "abcdef-efga-gdbc",
         "parseableName": "1.2.3.4.5.6-5.6.7.1-7.4.2.3",
         "extents": [
             8,
@@ -426,7 +425,7 @@
         ]
     },
     {
-        "name": "ABCDEF-EFGB-GDAC",
+        "name": "abcdef-efgb-gdac",
         "parseableName": "1.2.3.4.5.6-5.6.7.2-7.4.1.3",
         "extents": [
             8,
@@ -439,7 +438,7 @@
         ]
     },
     {
-        "name": "ABCDEF-EFGC-GDAB",
+        "name": "abcdef-efgc-gdab",
         "parseableName": "1.2.3.4.5.6-5.6.7.3-7.4.1.2",
         "extents": [
             8,
@@ -452,7 +451,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GDAB-EFGC",
+        "name": "abcdef-gdab-efgc",
         "parseableName": "1.2.3.4.5.6-7.4.1.2-5.6.7.3",
         "extents": [
             8,
@@ -465,7 +464,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GDAC-EFGB",
+        "name": "abcdef-gdac-efgb",
         "parseableName": "1.2.3.4.5.6-7.4.1.3-5.6.7.2",
         "extents": [
             8,
@@ -478,7 +477,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GDBC-EFGA",
+        "name": "abcdef-gdbc-efga",
         "parseableName": "1.2.3.4.5.6-7.4.2.3-5.6.7.1",
         "extents": [
             8,
@@ -491,7 +490,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GEAB-DFGC",
+        "name": "abcdef-geab-dfgc",
         "parseableName": "1.2.3.4.5.6-7.5.1.2-4.6.7.3",
         "extents": [
             8,
@@ -504,7 +503,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GEAC-DFGB",
+        "name": "abcdef-geac-dfgb",
         "parseableName": "1.2.3.4.5.6-7.5.1.3-4.6.7.2",
         "extents": [
             8,
@@ -517,7 +516,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GEBC-DFGA",
+        "name": "abcdef-gebc-dfga",
         "parseableName": "1.2.3.4.5.6-7.5.2.3-4.6.7.1",
         "extents": [
             8,
@@ -530,7 +529,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GFAB-DEGC",
+        "name": "abcdef-gfab-degc",
         "parseableName": "1.2.3.4.5.6-7.6.1.2-4.5.7.3",
         "extents": [
             8,
@@ -543,7 +542,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GFAC-DEGB",
+        "name": "abcdef-gfac-degb",
         "parseableName": "1.2.3.4.5.6-7.6.1.3-4.5.7.2",
         "extents": [
             8,
@@ -556,7 +555,7 @@
         ]
     },
     {
-        "name": "ABCDEF-GFBC-DEGA",
+        "name": "abcdef-gfbc-dega",
         "parseableName": "1.2.3.4.5.6-7.6.2.3-4.5.7.1",
         "extents": [
             8,

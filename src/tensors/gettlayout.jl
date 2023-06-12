@@ -98,8 +98,6 @@ function precomputeGETTLayoutConstants(
 )
     # 1. Convert the tensor strides from Tuple{Vector{Int}, Vector{int}}  to two separate 
     # Tuple{Int, Int, ...}.
-    # ? @eval cannot work with Vector, but can work with Tuple, because the size of Tuple is 
-    # ? known at compile time. 
 
     # → For the A matrix this will contain the tensor strides corresponding to the M stride.
     # e.g. for D[A, B, C] = A[B, D, A] * B[D, C] this will be (1, 3), since B and A belong to the

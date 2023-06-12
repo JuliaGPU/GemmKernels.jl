@@ -81,14 +81,18 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
 
     # If both loads over K could be vectorised, we choose the order of dimensions of the tensor
     # with the largest extent of the first dimension.
+    # Unless the dimensions orders are identical, in which case the orders should not change and
+    # both loads can be vectorised.
     if (isColMajorA == false && isColMajorB == true)
-        if (desc.descA.extent[1] > desc.descB.extent[1])
+        if (sortperm(dimensionsAK) == sortperm(dimensionsBK))
+            nothing
+        elseif (desc.descA.extent[1] > desc.descB.extent[1])
             newPerm = sortperm(dimensionsAK)
             dimensionsAK = dimensionsAK[newPerm]
             dimensionsBK = dimensionsBK[newPerm]
 
             isLoadStridedB = true
-            isColMajorB = true
+            isColMajorB = false
             append!(strideOverB, 1 : dimensionsBK[1] - 1)
         else
             newPerm = sortperm(dimensionsBK)

@@ -4,40 +4,58 @@ using Plots.PlotMeasures
 using Statistics
 using StatsPlots
 
-function getMean(arr)
+function getTFLOPS(arr, N; no_runs=10, debug=false)
     arr = split(arr, ',')
     arr = parse.(Float64, arr)
-    arr = mean(arr)
-    return arr / 1e3
+
+    new_arr = Vector{Float64}(undef, no_runs)
+    no_kernels = Int(length(arr) / no_runs)
+    for i in 1 : no_runs
+        new_arr[i] = sum(arr[(i-1) * no_kernels + 1 : i * no_kernels])
+    end
+
+    arr = mean(new_arr)
+
+    # return arr / 1e3 (in μs)
+    return 2 * (2^N)^3 / (arr * 1e3) # in TFLOPS
 end
 
-function main(file)
-    df = DataFrame(CSV.File(file))
+function main()
+    df_gemmkernels = DataFrame(CSV.File("gettGemmKernels.csv"))
+    df_cutensor_gett = DataFrame(CSV.File("gettCuTensor.csv"))
+    df_cutensor_tgett = DataFrame(CSV.File("tgettCuTensor.csv"))
+    df_cutensor_ttgt = DataFrame(CSV.File("ttgtCuTensor.csv"))
 
-    GKIdx = findall(x -> x == "GK", df[!, :impl])
-    CTIdx = findall(x -> x == "CT", df[!, :impl])
+    GK = getTFLOPS.(df_gemmkernels[!, :result], 11)
+    CT_GETT = getTFLOPS.(df_cutensor_gett[!, :result], 11)
+    CT_TGETT = getTFLOPS.(df_cutensor_tgett[!, :result], 11)
+    CT_TTGT = getTFLOPS.(df_cutensor_ttgt[!, :result], 11)
 
-    GK = getMean.(df[!, :result][GKIdx])
-    CT = getMean.(df[!, :result][CTIdx])
+    ticklabel = df_gemmkernels[!, :contraction]
 
-    ticklabel = df[!, :contraction][GKIdx]
+    # These lines can be used to sort the data by ascending TFLOPS of GemmKernels.jl
+    new_sort = sortperm(GK)
+    GK = GK[new_sort]
+    CT_GETT = CT_GETT[new_sort]
+    CT_TGETT = CT_TGETT[new_sort]
+    CT_TTGT = CT_TTGT[new_sort]
+    ticklabel = df_gemmkernels[!, :contraction][new_sort]
 
-    p = groupedbar(
-        [GK CT], 
-        group=repeat(["0 - GemmKernels.jl", "1 - CUTENSOR"], inner=length(GKIdx)),
-        xticks=(1 : length(GKIdx), ticklabel),
-        bar_position = :dodge, 
-        bar_width=0.7, 
-        ylabel="GPU time (μs)",
-        size=(1200,500), 
-        xrotation=90, 
-        bottom_margin=100px, 
-        left_margin=30px,
-        xlims=(0,49), 
-        ylims=(0,5000)
+    p = plot(
+        [GK CT_GETT CT_TGETT], 
+        size=(800, 400), 
+        marker=[:c :d :ut], 
+        label=["GemmKernels.jl" "cuTENSOR GETT" "cuTENSOR TGETT" "cuTENSOR TTGT"],
+        thickness=10,
+        linewidth=2,
+        xticks=(1 : length(GK), ticklabel),
+        xrotation=90,
+        bottom_margin=80px,
+        yticks=(0 : 5 : 45),
+        ylims=(0, 45)
     )
 
-    savefig(p, file * ".pdf")
+    savefig(p, "gett.pdf")
 end
 
-isinteractive() || main(ARGS[1])
+isinteractive() || main()
