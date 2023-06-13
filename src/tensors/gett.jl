@@ -116,11 +116,18 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         append!(dimensionsDN, findall(x -> x == modeB[dimension], modeD))
     end
 
-    # The C load and D store are if the M and N nodes' order is the same in the A and B tensors.
+    # The C load and D store are vectorised if the order of the M dimensions in A and C are 
+    # identical and the order of the N dimensions in B and D are identical.
+    # This only works if the first dimensions of C is part A.
     isColMajorD = true
-    isStoreStridedD = (vcat(dimensionsDM, dimensionsDN) != 1:length(modeD))
-    strideOverD = Vector{Int}(undef, 0)
 
+    if (dimensionsDM == dimensionsDM[sortperm(dimensionsDM)] && dimensionsDN == dimensionsDN[sortperm(dimensionsDN)] && 1 in modesAM)
+        isStoreStridedD = false
+    else
+        isStoreStridedD = true
+    end
+
+    strideOverD = Vector{Int}(undef, 0)
     if (isStoreStridedD == true)
         append!(strideOverD, 1 : dimensionsDM[1] - 1)
     end
