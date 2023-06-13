@@ -61,8 +61,8 @@ end
 
     NUMEL = 16 ÷ sizeof(T)
 
-    G1 = tile.base[1] + tile.offset.[1]
-    G2 = tile.base[2] + tile.offset.[2]
+    G1 = tile.base[1] + tile.offset[1]
+    G2 = tile.base[2] + tile.offset[2]
 
     offset = 1
 
