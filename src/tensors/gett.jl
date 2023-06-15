@@ -19,6 +19,22 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     modesAM = setdiff(modeA, modesToContract)
     modesBN = setdiff(modeB, modesToContract)
 
+    modesDM = setdiff(modeD, modesBN)
+    modesDN = setdiff(modeD, modesAM)
+
+    # If the first M mode of A is equal to the first M mode of D,
+    # or if the first mode of A is not part of the M modes, 
+    # we want to inherit the order of modes of D for optimal unit-stride
+    # loads ands stores of D.
+    if (modesAM[1] == modesDM[1] || findall(x -> x == modesAM[1], modeA)[1] != 1)
+        modesAM = modesDM
+    end
+    
+    # The same goes for B.
+    if (modesBN[1] == modesDN[1] || findall(x -> x == modesBN[1], modeB)[1] != 1)
+        modesBN = modesDN
+    end
+
     # The mode identifiers are either Char or Int. They do not correspond to the actual dimensions of the tensors.
     # We now find the number of the dimension in the tensor that corresponds to each mode identifier.
 
@@ -103,8 +119,8 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
             isColMajorA = true
             append!(strideOverA, 1 : dimensionsAM[1] - 1)
         end
-    end
-
+    end    
+    
     # We find the dimensions of the C and D tensors that correspond to the M and N modes.
     dimensionsDM = Vector{Int}(undef, 0)
     for dimension in dimensionsAM
@@ -118,10 +134,10 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
 
     # The C load and D store are vectorised if the order of the M dimensions in A and C are 
     # identical and the order of the N dimensions in B and D are identical.
-    # This only works if the first dimensions of C is part A.
+    # This only works if the first dimension of C is part of A.
     isColMajorD = true
 
-    if (dimensionsDM == dimensionsDM[sortperm(dimensionsDM)] && dimensionsDN == dimensionsDN[sortperm(dimensionsDN)] && 1 in modesAM)
+    if (dimensionsDM == dimensionsDM[sortperm(dimensionsDM)] && dimensionsDN == dimensionsDN[sortperm(dimensionsDN)] && modeD[1] in modesAM)
         isStoreStridedD = false
     else
         isStoreStridedD = true

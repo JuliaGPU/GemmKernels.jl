@@ -17,16 +17,16 @@ end
     end
 end
 
-abstract type GETTLayoutColMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent} <: Layout.AlignedColMajor{T} end
+abstract type GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.AlignedColMajor{T} end
 
-abstract type GETTLayoutRowMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent} <: Layout.AlignedRowMajor{T} end
+abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.AlignedRowMajor{T} end
 
 @inline function Layout.load(
         ::Union{
-            Type{GETTLayoutColMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent}},
-            Type{GETTLayoutRowMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent}}
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
         }, workspace, tile::Tile{size}
-    ) where {T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent, size}
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent, size}
 
     NUMEL = 16 ÷ sizeof(T)
 
@@ -35,14 +35,14 @@ abstract type GETTLayoutRowMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, di
 
     offset = 1
 
-    @unroll for i in eachindex(dimensionsT1)
-        stride_offset = (G1 ÷ divT1[i]) % modT[dimensionsT1[i]]
-        offset += stride_offset * mulG1[i]
+    @unroll for i in eachindex(divT1)
+        stride_offset = (G1 ÷ divT1[i]) % modT1[i]
+        offset += stride_offset * strides1[i]
     end
 
-    @unroll for i in eachindex(dimensionsT2)
-        stride_offset = (G2 ÷ divT2[i]) % modT[dimensionsT2[i]]
-        offset += stride_offset * mulG2[i]
+    @unroll for i in eachindex(divT2)
+        stride_offset = (G2 ÷ divT2[i]) % modT2[i]
+        offset += stride_offset * strides2[i]
     end
 
     if (isLoadOrStoreStrided == false)
@@ -54,10 +54,10 @@ end
 
 @inline function Layout.store!(
         ::Union{
-            Type{GETTLayoutColMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent}},
-            Type{GETTLayoutRowMajor{T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent}}
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
         }, workspace, value, tile::Tile{size}
-    ) where {T, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent, size}
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent, size}
 
     NUMEL = 16 ÷ sizeof(T)
 
@@ -66,14 +66,14 @@ end
 
     offset = 1
 
-    @unroll for i in eachindex(dimensionsT1)
-        stride_offset = (G1 ÷ divT1[i]) % modT[dimensionsT1[i]]
-        offset += stride_offset * mulG1[i]
+    @unroll for i in eachindex(divT1)
+        stride_offset = (G1 ÷ divT1[i]) % modT1[i]
+        offset += stride_offset * strides1[i]
     end
 
-    @unroll for i in eachindex(dimensionsT2)
-        stride_offset = (G2 ÷ divT2[i]) % modT[dimensionsT2[i]]
-        offset += stride_offset * mulG2[i]
+    @unroll for i in eachindex(divT2)
+        stride_offset = (G2 ÷ divT2[i]) % modT2[i]
+        offset += stride_offset * strides2[i]
     end
 
     if (isLoadOrStoreStrided == false)
@@ -129,29 +129,30 @@ function precomputeGETTLayoutConstants(
 
     # 3. Precompute the moduli used to calculate the tensor stride offsets.
     # These are simply the extents of the tensor. Again, converted to Tuple{Int, Int, ...}.
-    modT = Tuple(x for x in extent)
+    modT1 = Tuple(extent[dimensionsT1[i]] for i in eachindex(dimensionsT1))
+    modT2 = Tuple(extent[dimensionsT2[i]] for i in eachindex(dimensionsT2))
 
 
     # 4. Precompute the multiplicative terms used to calculate the GEMM stride offsets.
-    # → offset += T1_stride_offset * mulG1[i]
-    mulG1 = Vector{Int}(undef, length(dimensionsT1))
+    # → offset += T1_stride_offset * strides1[i]
+    strides1 = Vector{Int}(undef, length(dimensionsT1))
     for (idx, stride_idx) in enumerate(dimensionsT1)
-        mulG1[idx] = 1
+        strides1[idx] = 1
         for j = 1 : (stride_idx - 1) 
-            mulG1[idx] *= extent[j]
+            strides1[idx] *= extent[j]
         end
     end
-    mulG1 = Tuple(x for x in mulG1)
+    strides1 = Tuple(x for x in strides1)
 
-    # 4b. Do the same for mulG2.
-    mulG2 = Vector{Int}(undef, length(dimensionsT2))
+    # 4b. Do the same for strides2.
+    strides2 = Vector{Int}(undef, length(dimensionsT2))
     for (idx, stride_idx) in enumerate(dimensionsT2)
-        mulG2[idx] = 1
+        strides2[idx] = 1
         for j = 1 : (stride_idx - 1) 
-            mulG2[idx] *= extent[j]
+            strides2[idx] *= extent[j]
         end
     end
-    mulG2 = Tuple(x for x in mulG2)
+    strides2 = Tuple(x for x in strides2)
 
     # 5. Convert the Bool to an Int.
     isLoadOrStoreStrided = Int(isLoadOrStoreStrided)
@@ -166,10 +167,9 @@ function precomputeGETTLayoutConstants(
     end
 
     return (
-        dimensionsT1, dimensionsT2,
         divT1, divT2,
-        modT,
-        mulG1, mulG2,
+        modT1, modT2,
+        strides1, strides2,
         isLoadOrStoreStrided, strideOverExtent,
     )
 end
@@ -183,17 +183,16 @@ function createGETTLayout(
     strideOver::Union{Vector{Int}, Nothing} = nothing,
 )
     (
-        dimensionsT1, dimensionsT2,
         divT1, divT2,
-        modT,
-        mulG1, mulG2,
+        modT1, modT2,
+        strides1, strides2,
         isLoadOrStoreStrided, strideOverExtent
     ) = precomputeGETTLayoutConstants(extent, dimensions, isLoadOrStoreStrided, strideOver)
 
     if (isColMajor == true)
-        return GETTLayoutColMajor{DT, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent}
+        return GETTLayoutColMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}
     else
-        return GETTLayoutRowMajor{DT, dimensionsT1, divT1, mulG1, dimensionsT2, divT2, mulG2, modT, isLoadOrStoreStrided, strideOverExtent}
+        return GETTLayoutRowMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}
     end
 end
 
