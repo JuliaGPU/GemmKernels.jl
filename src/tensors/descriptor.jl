@@ -1,3 +1,4 @@
+using CUDA
 using GemmKernels
 
 ModeType = AbstractVector{<:Union{Char,Integer}}
@@ -55,10 +56,27 @@ mutable struct ContractionDescriptor
     dataType::DataType
 
     function ContractionDescriptor(
-        a, modeA::ModeType,
-        b, modeB::ModeType,
-        c, modeC::ModeType,
-        d, modeD::ModeType;
+        descA::TensorDescriptor, modeA::ModeType,
+        descB::TensorDescriptor, modeB::ModeType,
+        descC::TensorDescriptor, modeC::ModeType,
+        descD::TensorDescriptor, modeD::ModeType,
+        computeType,
+        dataType
+    )
+        return new(
+            descA, modeA,
+            descB, modeB,
+            descC, modeC,
+            descD, modeD,
+            computeType, dataType
+        )
+    end
+
+    function ContractionDescriptor(
+        a::CuArray, modeA::ModeType,
+        b::CuArray, modeB::ModeType,
+        c::CuArray, modeC::ModeType,
+        d::CuArray, modeD::ModeType;
         computeType=eltype(a),
         dataType=eltype(c)
     )
