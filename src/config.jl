@@ -38,9 +38,16 @@ end
 
 @inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
     if sym == :launch_args
-        (threads = WARPS_PER_BLOCK * 32,
-         blocks = (MATMUL_SHAPE.M ÷ BLOCK_SHAPE.M, MATMUL_SHAPE.N ÷ BLOCK_SHAPE.N),
-         shmem = 64 * 1024)
+        # our kernels use 4 shared memory arrays, of which 2 are live at the same time.
+        size_a = sizeof(Layout.eltype(SHARED_A_LAYOUT)) * prod(Layout.physical_size(SHARED_A_LAYOUT, (; BLOCK_SHAPE.M, BLOCK_SHAPE.K)))
+        size_b = sizeof(Layout.eltype(SHARED_B_LAYOUT)) * prod(Layout.physical_size(SHARED_B_LAYOUT, (; BLOCK_SHAPE.K, BLOCK_SHAPE.N)))
+        size_c = sizeof(Layout.eltype(SHARED_C_LAYOUT)) * prod(Layout.physical_size(SHARED_C_LAYOUT, (; BLOCK_SHAPE.M, BLOCK_SHAPE.N)))
+        size_d = sizeof(Layout.eltype(SHARED_D_LAYOUT)) * prod(Layout.physical_size(SHARED_D_LAYOUT, (; BLOCK_SHAPE.M, BLOCK_SHAPE.N)))
+        shmem = max(size_c, size_a+size_b, size_d)
+
+        (; threads = WARPS_PER_BLOCK * 32,
+           blocks = (MATMUL_SHAPE.M ÷ BLOCK_SHAPE.M, MATMUL_SHAPE.N ÷ BLOCK_SHAPE.N),
+           shmem)
 
     # convenience accessors for typevars
     elseif sym == :matmul_shape
