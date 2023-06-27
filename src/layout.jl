@@ -81,13 +81,21 @@ abstract type AlignedColMajor{T} <: LayoutBase{T} end
     return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
 end
 
-@inline function store!(::Type{<:AlignedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+@inline @generated function store!(::Type{<:AlignedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
-    linear_base = linearise(tile.base, Base.size(workspace))
-    linear_offset = linearise(tile.offset, Base.size(workspace))
+    quote
+        linear_base = linearise(tile.base, Base.size(workspace))
+        linear_offset = linearise(tile.offset, Base.size(workspace))
 
-    vstorea!(Vec{N, T}, pointer(workspace), value, linear_base + linear_offset - 1)
+        # we may be storing more values than we can using a single vectorized operation
+        # (e.g., when types mismatch, storing 8 Float16s in a Float32 shared memory layout)
+        @loopinfo unroll for value_offset = 1:$N:length(value)
+            x = @ntuple $N i -> (value[value_offset+i-1])
+            vstorea!(Vec{$N, T}, pointer(workspace), x,
+                    linear_base + linear_offset + value_offset - 2)
+        end
+    end
 end
 
 # --------
