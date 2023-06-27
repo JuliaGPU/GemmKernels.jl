@@ -47,7 +47,7 @@ for (layout_type, convert_index_func) in [
             @loopinfo unroll for m = 1 : M ÷ 4
                 @loopinfo unroll for k = 1 : K
                     y_layout, x_layout = $convert_index_func((y + 4 * (m - 1), x + (k - 1)))
-                    @inbounds frag = setindex(frag, CT(workspace[y_layout, x_layout]), m, k)
+                    @inbounds frag = setindex(frag, workspace[y_layout, x_layout], m, k)
                 end
             end
 
@@ -64,7 +64,7 @@ for (layout_type, convert_index_func) in [
             @loopinfo unroll for n = 1 : N ÷ 8
                 @loopinfo unroll for k = 1 : K
                     y_layout, x_layout = $convert_index_func((y + (k - 1), x + 8 * (n - 1)))
-                    @inbounds frag = setindex(frag, CT(workspace[y_layout, x_layout]), k, n)
+                    @inbounds frag = setindex(frag, workspace[y_layout, x_layout], k, n)
                 end
             end
 
@@ -82,7 +82,7 @@ for (layout_type, convert_index_func) in [
             frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(undef)
             @loopinfo unroll for m = 1 : M ÷ 4
                 @loopinfo unroll for n = 1 : N ÷ 8
-                    @inbounds frag = setindex(frag, DT(workspace[y + 4 * (m - 1), x + 8 * (n - 1)]), m, n)
+                    @inbounds frag = setindex(frag, workspace[y + 4 * (m - 1), x + 8 * (n - 1)], m, n)
                 end
             end
 

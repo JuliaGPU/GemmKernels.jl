@@ -28,16 +28,16 @@ Base.@propagate_inbounds function Base.getindex(v::LocalArray, i::Int)
     @boundscheck checkbounds(v,i)
     @inbounds v.data[i]
 end
-Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L} , val, i::Int) where {S,T,N,L}
+Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L}, val, i::Int) where {S,T,N,L}
     @boundscheck checkbounds(v,i)
-    new_data = Base.setindex(v.data, val, i)
+    new_data = Base.setindex(v.data, convert(T, val), i)
     LocalArray{S,T,N,L}(new_data)
 end
 ## XXX: Base's setindex doesn't have a ND version
-Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L} , val, is::Int...) where {S,T,N,L}
+Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L}, val, is::Int...) where {S,T,N,L}
     @boundscheck checkbounds(v,is...)
     I = CartesianIndex(is...)
     i = LinearIndices(v)[I]
-    new_data = Base.setindex(v.data, val, i)
+    new_data = Base.setindex(v.data, convert(T, val), i)
     LocalArray{S,T,N,L}(new_data)
 end
