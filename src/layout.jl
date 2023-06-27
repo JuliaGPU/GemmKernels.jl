@@ -4,6 +4,7 @@ module Layout
 using CUDA
 using LLVMLoopInfo: @loopinfo
 using GemmKernels.Tiling
+using Base.Cartesian: @ntuple
 
 # ---------------------
 # Customise computation
@@ -30,8 +31,9 @@ end
     alignment = sizeof(T) * N
 
     return quote
+        y = @ntuple $N i -> VecElement{T}(x[i].value)
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-        return unsafe_store!(vec_ptr, x, (i-1) ÷ N + 1, Val($alignment))
+        return unsafe_store!(vec_ptr, y, (i-1) ÷ N + 1, Val($alignment))
     end
 end
 
