@@ -144,8 +144,8 @@ abstract type InterleavedColMajor{T} <: LayoutBase{T} end
 @inline function load(::Type{<:InterleavedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
 
-    @loopinfo unrollfull for j = 1 : tile.size[2]
-        @loopinfo unrollfull for i = 1 : tile.size[1]
+    @loopinfo unroll for j = 1 : tile.size[2]
+        @loopinfo unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1]
             x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
@@ -156,8 +156,8 @@ abstract type InterleavedColMajor{T} <: LayoutBase{T} end
 end
 
 @inline function store!(::Type{<:InterleavedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @loopinfo unrollfull for j = 1 : tile.size[2]
-        @loopinfo unrollfull for i = 1 : tile.size[1]
+    @loopinfo unroll for j = 1 : tile.size[2]
+        @loopinfo unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
             val = value[(i - 1) * tile.size[2] + j]
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = val
@@ -176,8 +176,8 @@ abstract type InterleavedRowMajor{T} <: LayoutBase{T} end
 @inline function load(::Type{<:InterleavedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
 
-    @loopinfo unrollfull for i = 1 : tile.size[1]
-        @loopinfo unrollfull for j = 1 : tile.size[2]
+    @loopinfo unroll for i = 1 : tile.size[1]
+        @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[2] + 1, t.index[1] + 1]
             x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
@@ -188,8 +188,8 @@ abstract type InterleavedRowMajor{T} <: LayoutBase{T} end
 end
 
 @inline function store!(::Type{<:InterleavedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @loopinfo unrollfull for i = 1 : tile.size[1]
-        @loopinfo unrollfull for j = 1 : tile.size[2]
+    @loopinfo unroll for i = 1 : tile.size[1]
+        @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
             val = value[(i - 1) * tile.size[2] + j]
             @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = val
@@ -213,8 +213,8 @@ end
 @inline function load(::Type{<:SplitColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
 
-    @loopinfo unrollfull for j = 1 : tile.size[2]
-        @loopinfo unrollfull for i = 1 : tile.size[1]
+    @loopinfo unroll for j = 1 : tile.size[2]
+        @loopinfo unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1, 1] + im *
                             workspace[t.index[1] + 1, t.index[2] + 1, 2]
@@ -226,8 +226,8 @@ end
 end
 
 @inline function store!(::Type{<:SplitColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @loopinfo unrollfull for j = 1 : tile.size[2]
-        @loopinfo unrollfull for i = 1 : tile.size[1]
+    @loopinfo unroll for j = 1 : tile.size[2]
+        @loopinfo unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
             val = value[(i - 1) * tile.size[2] + j]
             @inbounds workspace[t.index[1] + 1, t.index[2] + 1, 1] = val.re
@@ -251,8 +251,8 @@ end
 @inline function load(::Type{<:SplitRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
 
-    @loopinfo unrollfull for i = 1 : tile.size[1]
-        @loopinfo unrollfull for j = 1 : tile.size[2]
+    @loopinfo unroll for i = 1 : tile.size[1]
+        @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[2] + 1, t.index[1] + 1, 1] + im *
                             workspace[t.index[2] + 1, t.index[1] + 1, 2]
@@ -264,8 +264,8 @@ end
 end
 
 @inline function store!(::Type{<:SplitRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
-    @loopinfo unrollfull for i = 1 : tile.size[1]
-        @loopinfo unrollfull for j = 1 : tile.size[2]
+    @loopinfo unroll for i = 1 : tile.size[1]
+        @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
             val = value[(i - 1) * tile.size[2] + j]
             @inbounds workspace[t.index[2] + 1, t.index[1] + 1, 1] = val.re
