@@ -131,6 +131,22 @@ function matmul_singlestage(a, b, c, d,
     return
 end
 
+function shmem_size(::Type{conf}, ::typeof(matmul_singlestage)) where {conf <: GemmKernels.Config}
+    size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
+             prod(Layout.physical_size(conf.shared_a_layout,
+                  (; conf.block_shape.M, conf.block_shape.K)))
+    size_b = sizeof(Layout.eltype(conf.shared_b_layout)) *
+             prod(Layout.physical_size(conf.shared_b_layout,
+                  (; conf.block_shape.K, conf.block_shape.N)))
+    size_c = sizeof(Layout.eltype(conf.shared_c_layout)) *
+             prod(Layout.physical_size(conf.shared_c_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    size_d = sizeof(Layout.eltype(conf.shared_d_layout)) *
+             prod(Layout.physical_size(conf.shared_d_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    max(size_c, size_a + size_b, size_d)
+end
+
 function matmul_pipelined(a, b, c, d,
                           transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
                           transf_sh2rf_a, transf_sh2rf_b, transf_sh2rf_c, transf_rf2sh_d,
@@ -336,6 +352,22 @@ function matmul_pipelined(a, b, c, d,
     epilogue(d, shmem_d, transf_sh2gl_d, conf)
 
     return
+end
+
+function shmem_size(::Type{conf}, ::typeof(matmul_pipelined)) where {conf <: GemmKernels.Config}
+    size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
+             prod(Layout.physical_size(conf.shared_a_layout,
+                  (; conf.block_shape.M, conf.block_shape.K)))
+    size_b = sizeof(Layout.eltype(conf.shared_b_layout)) *
+             prod(Layout.physical_size(conf.shared_b_layout,
+                  (; conf.block_shape.K, conf.block_shape.N)))
+    size_c = sizeof(Layout.eltype(conf.shared_c_layout)) *
+             prod(Layout.physical_size(conf.shared_c_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    size_d = sizeof(Layout.eltype(conf.shared_d_layout)) *
+             prod(Layout.physical_size(conf.shared_d_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    max(size_c, size_a + size_b, size_d)
 end
 
 end
