@@ -18,7 +18,13 @@ function matmul(a, b, c, d, conf;
             epilogue,
             conf]
 
+    shmem = Kernel.shmem_size(conf, kernel)
+    max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
+    if shmem > max_shmem
+        error("Requested too much shared memory: The current GPU can use at most $(Base.format_bytes(max_shmem)), while this configuration required $(Base.format_bytes(shmem))")
+    end
+
     hostkernel = @cuda launch=false kernel(args...)
-    attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = 64 * 1024
-    hostkernel(args...; conf.launch_args...)
+    attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
+    hostkernel(args...; shmem, conf.launch_args...)
 end

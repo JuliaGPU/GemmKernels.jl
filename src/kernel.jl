@@ -28,7 +28,7 @@ function matmul_singlestage(a, b, c, d,
     block_tile = Tile(conf.block_shape)
 
     # (1) Cooperatively load a block_shape.M x block_shape.N tile of C from global to shared memory within one threadblock
-    shmem_c = CuDynamicSharedArray(Layout.eltype(conf.shared_c_layout), Layout.physical_size(conf.shared_c_layout, block_tile.MN.size))
+    shmem_c = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_c_layout), Layout.physical_size(conf.shared_c_layout, block_tile.MN.size))
 
     @loopinfo unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
         @loopinfo unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
@@ -55,8 +55,8 @@ function matmul_singlestage(a, b, c, d,
     sync_threads()
 
     # (3) Compute a block_shape.M x block_shape.N x block_shape.K matrix product within one threadblock
-    shmem_a = CuDynamicSharedArray(Layout.eltype(conf.shared_a_layout), Layout.physical_size(conf.shared_a_layout, block_tile.MK.size))
-    shmem_b = CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size),
+    shmem_a = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_a_layout), Layout.physical_size(conf.shared_a_layout, block_tile.MK.size))
+    shmem_b = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size),
                                   length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
     @loopinfo unroll for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
@@ -112,7 +112,7 @@ function matmul_singlestage(a, b, c, d,
     end
 
     # (4) Store the compute_warp.M x compute_warp.N tile of D from registers to shared memory
-    shmem_d = CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
+    shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
 
     warp_tile = subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
 
@@ -129,6 +129,22 @@ function matmul_singlestage(a, b, c, d,
     epilogue(d, shmem_d, transf_sh2gl_d, conf)
 
     return
+end
+
+function shmem_size(::Type{conf}, ::typeof(matmul_singlestage)) where {conf <: GemmKernels.Config}
+    size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
+             prod(Layout.physical_size(conf.shared_a_layout,
+                  (; conf.block_shape.M, conf.block_shape.K)))
+    size_b = sizeof(Layout.eltype(conf.shared_b_layout)) *
+             prod(Layout.physical_size(conf.shared_b_layout,
+                  (; conf.block_shape.K, conf.block_shape.N)))
+    size_c = sizeof(Layout.eltype(conf.shared_c_layout)) *
+             prod(Layout.physical_size(conf.shared_c_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    size_d = sizeof(Layout.eltype(conf.shared_d_layout)) *
+             prod(Layout.physical_size(conf.shared_d_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    max(size_c, size_a + size_b, size_d)
 end
 
 function matmul_pipelined(a, b, c, d,
@@ -151,7 +167,7 @@ function matmul_pipelined(a, b, c, d,
     block_tile = Tile(conf.block_shape)
 
     # (1) Cooperatively load a block_shape.M x block_shape.N tile of C from global to shared memory within one threadblock
-    shmem_c = CuDynamicSharedArray(Layout.eltype(conf.shared_c_layout), Layout.physical_size(conf.shared_c_layout, block_tile.MN.size))
+    shmem_c = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_c_layout), Layout.physical_size(conf.shared_c_layout, block_tile.MN.size))
 
     @loopinfo unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
         @loopinfo unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
@@ -178,8 +194,8 @@ function matmul_pipelined(a, b, c, d,
     sync_threads()
 
     # (3) Compute a block_shape.M x block_shape.N x block_shape.K matrix product within one threadblock
-    shmem_a = CuDynamicSharedArray(Layout.eltype(conf.shared_a_layout), Layout.physical_size(conf.shared_a_layout, block_tile.MK.size))
-    shmem_b = CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size),
+    shmem_a = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_a_layout), Layout.physical_size(conf.shared_a_layout, block_tile.MK.size))
+    shmem_b = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size),
                                   length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
     # Sizes of a_fragment and b_fragment
@@ -319,7 +335,7 @@ function matmul_pipelined(a, b, c, d,
     end
 
     # (4) Store the compute_warp.M x compute_warp.N tile of D from registers to shared memory
-    shmem_d = CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
+    shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
 
     warp_tile = subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
 
@@ -336,6 +352,22 @@ function matmul_pipelined(a, b, c, d,
     epilogue(d, shmem_d, transf_sh2gl_d, conf)
 
     return
+end
+
+function shmem_size(::Type{conf}, ::typeof(matmul_pipelined)) where {conf <: GemmKernels.Config}
+    size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
+             prod(Layout.physical_size(conf.shared_a_layout,
+                  (; conf.block_shape.M, conf.block_shape.K)))
+    size_b = sizeof(Layout.eltype(conf.shared_b_layout)) *
+             prod(Layout.physical_size(conf.shared_b_layout,
+                  (; conf.block_shape.K, conf.block_shape.N)))
+    size_c = sizeof(Layout.eltype(conf.shared_c_layout)) *
+             prod(Layout.physical_size(conf.shared_c_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    size_d = sizeof(Layout.eltype(conf.shared_d_layout)) *
+             prod(Layout.physical_size(conf.shared_d_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    max(size_c, size_a + size_b, size_d)
 end
 
 end
