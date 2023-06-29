@@ -45,22 +45,39 @@ SUITE = BenchmarkGroup()
 include("wmma.jl")
 
 # load params
-paramsfile = joinpath(benchmark_results, "params.json")
-if !isfile(paramsfile)
+params_file = joinpath(benchmark_results, "params.json")
+params_updated = false
+if !isfile(params_file)
     @info "Tuning benchmarks"
     tune!(SUITE)
-    BenchmarkTools.save(paramsfile, params(SUITE))
+    params_updated = true
 else
-    loadparams!(SUITE, BenchmarkTools.load(paramsfile)[1], :evals, :samples)
+    loadparams!(SUITE, BenchmarkTools.load(params_file)[1], :evals, :samples)
 
     # find untuned benchmarks for which we have the default evals==0
+    need_tuning = false
     for (ids, benchmark) in BenchmarkTools.leaves(SUITE)
         if params(benchmark).evals == 0
-            @info "Re-runing benchmarks"
-            tune!(SUITE)
-            BenchmarkTools.save(paramsfile, params(SUITE))
+            need_tuning = true
             break
         end
+    end
+
+    if need_tuning
+        @info "Re-runing benchmarks"
+        tune!(SUITE)
+        params_updated = true
+    end
+end
+if params_updated
+    BenchmarkTools.save(params_file, params(SUITE))
+    if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
+        BenchmarkTools.save(params_file, params(SUITE))
+
+        # commit and push
+        run(`$(git()) -C $benchmark_results add $params_file`)
+        run(`$(git()) -C $benchmark_results commit -q -m "Re-tune benchmarks."`)
+        run(`$(git()) -C $benchmark_results push -q`)
     end
 end
 
@@ -79,7 +96,7 @@ if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
 
     # commit and push
     run(`$(git()) -C $benchmark_results add $results_file`)
-    run(`$(git()) -C $benchmark_results commit -q -a -m "Results for $commit."`)
+    run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
     run(`$(git()) -C $benchmark_results push -q`)
 end
 
@@ -120,6 +137,8 @@ resultmark(sym::Symbol) = sym == :regression ? REGRESS_MARK : (sym == :improveme
 
 # compare against previous timings
 if previous_results !== nothing
+    @info "Comparing results"
+
     commit = ENV["BUILDKITE_COMMIT"]
     comparison = judge(minimum(timings), minimum(previous_results.timings))
 
