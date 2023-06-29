@@ -4,10 +4,6 @@ using CUDA
 using GemmKernels
 using LinearAlgebra
 
-# Convert matrix to type compatible with kernel
-convert_matrix(mat) = mat
-convert_matrix(mat::Diagonal{T, A}) where {T, A} = mat.diag
-
 # Select the best kernel
 kernel(layout_a, layout_b) = Kernel.matmul_singlestage
 kernel(::Type{Layout.AlignedColMajor{T}}, ::Type{Layout.AlignedColMajor{T}}) where {T} = Kernel.matmul_pipelined
@@ -16,7 +12,8 @@ kernel(::Type{Layout.AlignedRowMajor{T}}, ::Type{Layout.AlignedColMajor{T}}) whe
 kernel(::Type{Layout.AlignedRowMajor{T}}, ::Type{Layout.AlignedRowMajor{T}}) where {T} = Kernel.matmul_pipelined
 
 # Based on https://github.com/JuliaGPU/CUDA.jl/blob/bd5a2a8800e91eb6a7df89eb5dd4bb8fc503541d/lib/cublas/wrappers.jl#L743-L769
-function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, C)
+function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMatrix,
+                 beta::Number, C::CuMatrix)
     m = size(A, transA == 'N' ? 1 : 2)
     k = size(A, transA == 'N' ? 2 : 1)
     n = size(B, transB == 'N' ? 2 : 1)
@@ -66,7 +63,7 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
             is_b_col_major = !transpose_b
                                 )
 
-    GemmKernels.matmul(convert_matrix(A), convert_matrix(B), convert_matrix(C), convert_matrix(C), conf;
+    GemmKernels.matmul(A, B, C, C, conf;
                        transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
                        kernel = kernel(global_a_layout, global_b_layout)
