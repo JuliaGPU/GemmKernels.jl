@@ -6,15 +6,15 @@ using LinearAlgebra
 ################################################################################
 
 @testset "Matmul API" begin
-    @test_if "fpu compute and data types" @testset "FPU GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))" for 
+    @testset "FPU GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))" for
         (A_type, B_type, CD_type, min_dimension) in [
             (Float16, Float16, Float32, 128), (Float32, Float32, Float32, 128), (Float32, Float32, Float64, 128), (Float64, Float64, Float64, 128),
-            (Int16, Int16, Int16, 128), (Int32, Int32, Int32, 128), (Int64, Int64, Int64, 128), 
-        ], 
-        transpose_a = [false, true], 
-        transpose_b = [false, true], 
+            (Int16, Int16, Int16, 128), (Int32, Int32, Int32, 128), (Int64, Int64, Int64, 128),
+        ],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
         (OP_M, OP_N, OP_K) in [(8, 16, 2)]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]], [[2048, 2048, 2048]])
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]], [[2048, 2048, 2048]])
             alpha = convert(A_type, 2)
             beta  = convert(CD_type, 3)
 
@@ -59,7 +59,7 @@ using LinearAlgebra
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
-            
+
             if A_type <: Integer
                 @test all(isapprox.(alpha * CD_type.(new_a_h) * CD_type.(new_b_h) + beta * c_h, Array(d)))
             else
@@ -68,13 +68,13 @@ using LinearAlgebra
         end
     end
 
-    @test_if "fpu operator shape" @testset "FPU GEMM OPERATOR SHAPE ($(OP_M), $(OP_N), $(OP_K)) (NN, NT, TN, TT)" for (OP_M, OP_N, OP_K) in [
-            (4, 8, 1), (8, 8, 1), (4, 16, 1), (4, 8, 2), (8, 16, 2) 
+    @testset "FPU GEMM OPERATOR SHAPE ($(OP_M), $(OP_N), $(OP_K)) (NN, NT, TN, TT)" for (OP_M, OP_N, OP_K) in [
+            (4, 8, 1), (8, 8, 1), (4, 16, 1), (4, 8, 2), (8, 16, 2)
         ]
-        @testset "NN, NT, TN, TT" for (transpose_a, transpose_b) in [(false, false), (false, true), (true, false), (true, true)]
+        @testcase "NN, NT, TN, TT" for (transpose_a, transpose_b) in [(false, false), (false, true), (true, false), (true, true)]
             (M, N, K) = (128, 128, 128)
             (A_type, B_type, CD_type) = (Float32, Float32, Float32)
-            
+
             alpha = convert(A_type, 2)
             beta  = convert(CD_type, 3)
 
@@ -114,18 +114,18 @@ using LinearAlgebra
             # Transpose outputs, if necessary
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
-            
+
             @test all(isapprox.(alpha * CD_type.(new_a_h) * CD_type.(new_b_h) + beta * c_h, Array(d); rtol = sqrt(eps(A_type))))
         end
     end
 
-    @test_if "tropical fpu" @testset "TROPICAL GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))" for 
-        (A_type, B_type, CD_type, min_dimension) in [(Float32, Float32, Float32, 128)], 
-        transpose_a = [false, true], 
-        transpose_b = [false, true], 
+    @testset "TROPICAL GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))" for
+        (A_type, B_type, CD_type, min_dimension) in [(Float32, Float32, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
         (OP_M, OP_N, OP_K) in [(8, 16, 2)]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]])
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]])
             a_h = rand(A_type, (M, K)) / sqrt(A_type(K))
             b_h = rand(B_type, (K, N)) / sqrt(B_type(K))
             c_h = rand(CD_type, (M, N))
@@ -135,7 +135,7 @@ using LinearAlgebra
                 for j in 1 : N
                     d_h[i, j] = c_h[i, j]
                     for k in 1 : K
-                        d_h[i, j] = max(a_h[i, k] + b_h[k, j], d_h[i, j]) 
+                        d_h[i, j] = max(a_h[i, k] + b_h[k, j], d_h[i, j])
                     end
                 end
             end
@@ -164,16 +164,16 @@ using LinearAlgebra
                                             )
 
             GemmKernels.matmul(a, b, c, d, conf; kernel = Kernel.matmul_pipelined)
-            
+
             @test all(isapprox.(d_h, Array(d); rtol = sqrt(eps(A_type))))
         end
     end
 
 
-    @test_if "wmma" @testset "WMMA GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
+    @testset "WMMA GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true],
         (A_type, B_type, CD_type, min_dimension) in [(Float16, Float16, Float16, 256), (Float16, Float16, Float32, 128)]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2,2,1], [1,1,2], [2,2,2]], [[2048, 2048, 2048]])
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2,2,1], [1,1,2], [2,2,2]], [[2048, 2048, 2048]])
             alpha = convert(A_type, 2)
             beta  = convert(CD_type, 3)
 
@@ -217,10 +217,10 @@ using LinearAlgebra
         end
     end
 
-    @test_if "bias" @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
+    @testset "WMMA GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) + bias" for transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
             a_h = rand(Float16, (M, K)) / sqrt(Float16(K))
             b_h = rand(Float16, (K, N)) / sqrt(Float16(K))
             c_h = rand(Float32, (M, N))
@@ -268,8 +268,8 @@ using LinearAlgebra
         end
     end
 
-    @test_if "diagonal" @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
+    @testset "WMMA GEMM (A = diagonal, B = $( !transpose_b ? 'N' : 'T' ))" for transpose_b = [false, true]
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (4096, 4096, 4096)]
             @assert M == K "Diagonal only supports square A matrix (M == K)"
 
             transpose_a = false
@@ -312,10 +312,10 @@ using LinearAlgebra
         end
     end
 
-    @test_if "complex" @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
+    @testset "WMMA Complex GEMM ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true]
 
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) = [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));
@@ -377,8 +377,8 @@ using LinearAlgebra
         end
     end
 
-    @test_if "dual" @testset "WMMA Dual GEMM" begin
-        @testset "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
+    @testset "WMMA Dual GEMM" begin
+        @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in [(128, 128, 128), (256, 256, 256), (2048, 2048, 2048)]
             a_h = rand(Complex{Float16}, (M, K)) / sqrt(Float16(K));
             b_h = rand(Complex{Float16}, (K, N)) / sqrt(Float16(K));
             c_h = rand(Complex{Float32}, (M, N));

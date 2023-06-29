@@ -4,12 +4,12 @@ using LinearAlgebra
 
 CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
 
-@test_if "blas" @testset "BLAS API" begin
+@testset "BLAS API" begin
     @testset "WMMA GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true],
         (A_type, B_type, CD_type, min_dimension) in [(Float16, Float16, Float16, 256), (Float16, Float16, Float32, 128)]
 
-        @testset "(M = $M, N = $N, K = $K)" for M in min_dimension .* [1, 2],
+        @testcase "(M = $M, N = $N, K = $K)" for M in min_dimension .* [1, 2],
             N in min_dimension .* [1, 2],
             K in min_dimension .* [1, 2]
 
