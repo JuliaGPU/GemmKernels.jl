@@ -3,12 +3,16 @@ using GemmKernels, CUDA
 using Git: git
 import GitHub
 using Printf
+using Statistics
 
 using StableRNGs
 rng = StableRNG(123)
 
 # to find untuned benchmarks
 BenchmarkTools.DEFAULT_PARAMETERS.evals = 0
+
+# allow benchmarks to take quite a while
+BenchmarkTools.DEFAULT_PARAMETERS.seconds = 60
 
 @info "Loading previous benchmark results"
 github_token = get(ENV, "GITHUB_TOKEN", nothing)
@@ -121,17 +125,15 @@ function idrepr(io::IO, id::Vector)
     print(io, "]")
 end
 idrepr_md(id::Vector) = markdown_escaped_code(idrepr(id))
-intpercent(p) = string(ceil(Int, p * 100), "%")
-function resultrow(ids, t::BenchmarkTools.TrialJudgement)
-    t_tol = intpercent(BenchmarkTools.params(t).time_tolerance)
-    m_tol = intpercent(BenchmarkTools.params(t).memory_tolerance)
-    t_ratio = @sprintf("%.2f", BenchmarkTools.time(BenchmarkTools.ratio(t)))
-    m_ratio =  @sprintf("%.2f", BenchmarkTools.memory(BenchmarkTools.ratio(t)))
-    t_mark = resultmark(BenchmarkTools.time(t))
-    m_mark = resultmark(BenchmarkTools.memory(t))
-    timestr = "$(t_ratio) ($(t_tol)) $(t_mark)"
-    memstr = "$(m_ratio) ($(m_tol)) $(m_mark)"
-    return "| $(idrepr_md(ids)) | $(timestr) | $(memstr) |"
+function resultrow(ids, j::BenchmarkTools.TrialJudgement,
+                   old::BenchmarkTools.Trial, new::BenchmarkTools.Trial)
+    t_old = @sprintf("%s ± %s", BenchmarkTools.prettytime(time(mean(old))),
+                                BenchmarkTools.prettytime(time(std(old))))
+    t_new = @sprintf("%s ± %s", BenchmarkTools.prettytime(time(mean(new))),
+                                BenchmarkTools.prettytime(time(std(new))))
+    ratio = @sprintf("%.1f%%", 100*(1-BenchmarkTools.time(BenchmarkTools.ratio(j))))
+    mark = resultmark(BenchmarkTools.time(j))
+    return "| $(idrepr_md(ids)) | $(t_old) | $(t_new) | $(ratio) $(mark) |"
 end
 const REGRESS_MARK = ":x:"
 const IMPROVE_MARK = ":white_check_mark:"
@@ -141,7 +143,9 @@ resultmark(sym::Symbol) = sym == :regression ? REGRESS_MARK : (sym == :improveme
 if previous_results !== nothing
     @info "Comparing results"
 
-    commit = ENV["BUILDKITE_COMMIT"]
+    before = Dict(BenchmarkTools.leaves(previous_results.timings))
+    after = Dict(BenchmarkTools.leaves(timings))
+
     comparison = judge(minimum(timings), minimum(previous_results.timings))
 
     println("Improvements:")
@@ -150,28 +154,32 @@ if previous_results !== nothing
     println("Regressions:")
     println(regressions(comparison))
 
+    # generate some text
+    io = IOBuffer()
+    commit = get(ENV, "BUILDKITE_COMMIT", "HEAD")
+    print(io, """
+        Benchmark results for commit $commit (comparing to $(previous_results.commit)):
+
+        | ID | before | after | change |
+        |----|--------|-------|--------|
+        """)
+    judgements = BenchmarkTools.leaves(comparison)
+    judgements = judgements[sortperm(map(string∘first, judgements))]
+    for (ids, j) in judgements
+        old = rmskew(before[ids])
+        new = rmskew(after[ids])
+        if BenchmarkTools.isregression(time, j) || BenchmarkTools.isimprovement(time, j)
+            println(io, resultrow(ids, j, old, new))
+        end
+    end
+    body = String(take!(io))
+    println(body)
+
     # comment on PR
     if github_token !== nothing && get(ENV, "BUILDKITE_PULL_REQUEST", "false") !== "false"
         auth = GitHub.authenticate(github_token)
         repo = GitHub.repo("JuliaGPU/GemmKernels.jl"; auth)
         pr = parse(Int, ENV["BUILDKITE_PULL_REQUEST"])
-
-        # generate a comment
-        io = IOBuffer()
-        print(io, """
-            Benchmark results for commit $commit (comparing to $(previous_results.commit)):
-
-            | ID | time ratio | memory ratio |
-            |----|------------|--------------|
-            """)
-        entries = BenchmarkTools.leaves(comparison)
-        entries = entries[sortperm(map(string∘first, entries))]
-        for (ids, t) in BenchmarkTools.leaves(comparison)
-            if BenchmarkTools.isregression(t) || BenchmarkTools.isimprovement(t)
-                println(io, resultrow(ids, t))
-            end
-        end
-        body = String(take!(io))
 
         # find a previous comment to edit
         function find_previous_comment()
