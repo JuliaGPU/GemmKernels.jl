@@ -44,7 +44,7 @@ steps:
             println("+++ :julia: Benchmarking")
             include("benchmarks/runbenchmarks.jl")'
         agents:
-          queue: "juliagpu"
+          queue: "benchmark"
           cuda: "*"
         if: build.message !~ /\[skip benchmarks\]/
         matrix:

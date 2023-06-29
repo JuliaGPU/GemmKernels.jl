@@ -18,6 +18,8 @@ if github_token === nothing
 else
     run(`$(git()) clone -q https://$github_token:x-oauth-basic@github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
 end
+run(`$(git()) -C $benchmark_results config --local user.name "JuliaGPU BenchmarkBot"`)
+run(`$(git()) -C $benchmark_results config --local user.email "nobody@juliagpu.org"`)
 
 # load timings
 function load_results()
