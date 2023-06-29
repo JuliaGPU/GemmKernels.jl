@@ -4,18 +4,6 @@ using CUDA
 using GemmKernels
 using LinearAlgebra
 
-# Global layouts
-global_layout(::Type{<:CuArray{T}}, ::Val{false}) where {T} = Layout.AlignedColMajor{T}
-global_layout(::Type{<:CuArray{T}}, ::Val{true}) where {T} = Layout.AlignedRowMajor{T}
-global_layout(::Type{<:Diagonal{Float16, <:CuArray{Float16}}}, transpose) = Layout.Diagonal{Float16}
-
-# Shared layouts for A / B
-shared_layout_ab(typ::Type{<:CuArray{Float16}}, transpose) = Layout.Padded{global_layout(typ, transpose), 8}
-shared_layout_ab(::Type{<:Diagonal{Float16, <:CuArray{Float16, N}}}, transpose) where {N, P} = shared_layout_ab(CuArray{Float16, N}, transpose)
-
-# Shared layouts for C / D
-shared_layout_cd(typ::Type{<:CuArray{T}}, transpose) where {T} = global_layout(typ, transpose)
-
 # Convert matrix to type compatible with kernel
 convert_matrix(mat) = mat
 convert_matrix(mat::Diagonal{T, A}) where {T, A} = mat.diag
@@ -40,22 +28,39 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
     transpose_a = (transA == 'T')
     transpose_b = (transB == 'T')
 
-    a_layout = global_layout(typeof(A), Val(transpose_a))
-    b_layout = global_layout(typeof(B), Val(transpose_b))
+    a_layout_base = transpose_a ? Layout.AlignedRowMajor : Layout.AlignedColMajor
+    b_layout_base = transpose_b ? Layout.AlignedRowMajor : Layout.AlignedColMajor
 
-    conf = GemmKernels.get_config(
+    # determine global memory layouts
+    ## if alpha is zero, we don't need to load A or B
+    if iszero(alpha)
+        global_a_layout = Layout.Zero{eltype(A)}
+        global_b_layout = Layout.Zero{eltype(B)}
+    else
+        global_a_layout = a_layout_base{eltype(A)}
+        global_b_layout = b_layout_base{eltype(B)}
+    end
+    ## if beta is zero, we don't need to load C
+    global_c_layout = if iszero(beta)
+        Layout.Zero{eltype(C)}
+    else
+        Layout.AlignedColMajor{eltype(C)}
+    end
+    global_d_layout = Layout.AlignedColMajor{eltype(C)}
+
+    # determine shared memory layouts
+    ## padded to avoid bank conflicts
+    shared_a_layout = Layout.Padded{a_layout_base{eltype(A)}, 8}
+    shared_b_layout = Layout.Padded{b_layout_base{eltype(B)}, 8}
+    ## outputs are never transposed, and padding them doesn't seem worth it
+    shared_c_layout = shared_d_layout = Layout.AlignedColMajor{eltype(C)}
+
+    conf = GemmKernels.get_config(;
             gemm_shape = (M = m, N = n, K = k),
             operator = Operator.WMMAOp{16, 16, 16, eltype(C)},
 
-            global_a_layout = a_layout,
-            global_b_layout = b_layout,
-            global_c_layout = global_layout(typeof(C), Val(false)),
-            global_d_layout = global_layout(typeof(C), Val(false)),
-
-            shared_a_layout = shared_layout_ab(typeof(A), Val(transpose_a)),
-            shared_b_layout = shared_layout_ab(typeof(B), Val(transpose_b)),
-            shared_c_layout = shared_layout_cd(typeof(C), Val(false)),
-            shared_d_layout = shared_layout_cd(typeof(C), Val(false)),
+            global_a_layout, global_b_layout, global_c_layout, global_d_layout,
+            shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout,
 
             is_a_col_major = !transpose_a,
             is_b_col_major = !transpose_b
@@ -64,7 +69,7 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A, B, beta::Number, 
     GemmKernels.matmul(convert_matrix(A), convert_matrix(B), convert_matrix(C), convert_matrix(C), conf;
                        transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-                       kernel = kernel(a_layout, b_layout)
+                       kernel = kernel(global_a_layout, global_b_layout)
                       )
 end
 

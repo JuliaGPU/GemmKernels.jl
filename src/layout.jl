@@ -57,6 +57,19 @@ abstract type LayoutBase{T} end
 @inline eltype(::Type{<:LayoutBase{T}}) where {T} = T
 @inline physical_size(::Type{<:LayoutBase{T}}, logical_size::NamedTuple) where {T} = Tuple(logical_size)
 
+# ----
+# Zero
+# ----
+
+abstract type Zero{T} <: LayoutBase{T} end
+
+@inline function load(::Type{<:Zero{T}}, workspace, tile::Tile{size}) where {T, size}
+    N = 16 ÷ sizeof(T)
+    return ntuple(i -> VecElement{T}(zero(T)), Val(N))
+end
+
+@inline store!(::Type{<:Zero{T}}, workspace, value, tile::Tile) where {T} = return
+
 # --------------
 # Padded layouts
 # --------------
