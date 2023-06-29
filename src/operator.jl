@@ -4,9 +4,8 @@ module Operator
 using CUDA
 using GemmKernels
 using GemmKernels.Tiling
-using GemmKernels: LocalArray
+using GemmKernels: LocalArray, @immutable
 using LLVMLoopInfo: @loopinfo
-using Base: setindex
 
 # -------------------------------------
 # Default definition for padded layouts
@@ -47,7 +46,7 @@ for (layout_type, convert_index_func) in [
             @loopinfo unroll for m = 1 : M ÷ 4
                 @loopinfo unroll for k = 1 : K
                     y_layout, x_layout = $convert_index_func((y + 4 * (m - 1), x + (k - 1)))
-                    @inbounds frag = setindex(frag, workspace[y_layout, x_layout], m, k)
+                    @inbounds @immutable frag[m,k] = workspace[y_layout, x_layout]
                 end
             end
 
@@ -64,7 +63,7 @@ for (layout_type, convert_index_func) in [
             @loopinfo unroll for n = 1 : N ÷ 8
                 @loopinfo unroll for k = 1 : K
                     y_layout, x_layout = $convert_index_func((y + (k - 1), x + 8 * (n - 1)))
-                    @inbounds frag = setindex(frag, workspace[y_layout, x_layout], k, n)
+                    @inbounds @immutable frag[k,n] = workspace[y_layout, x_layout]
                 end
             end
 
@@ -82,7 +81,7 @@ for (layout_type, convert_index_func) in [
             frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(undef)
             @loopinfo unroll for m = 1 : M ÷ 4
                 @loopinfo unroll for n = 1 : N ÷ 8
-                    @inbounds frag = setindex(frag, workspace[y + 4 * (m - 1), x + 8 * (n - 1)], m, n)
+                    @inbounds @immutable frag[m,n] = workspace[y + 4 * (m - 1), x + 8 * (n - 1)]
                 end
             end
 
@@ -125,11 +124,7 @@ end
     @loopinfo unroll for m = 1 : M ÷ 4
         @loopinfo unroll for n = 1 : N ÷ 8
             @loopinfo unroll for k = 1 : K
-                @inbounds c_frag = setindex(
-                    c_frag,
-                    operator_fma(operator_type, a_frag[m, k], b_frag[k, n], c_frag[m, n]),
-                    m, n
-                )
+                @inbounds @immutable c_frag[m,n] = operator_fma(operator_type, a_frag[m, k], b_frag[k, n], c_frag[m, n])
             end
         end
     end

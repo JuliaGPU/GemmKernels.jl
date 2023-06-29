@@ -4,6 +4,7 @@ module Layout
 using CUDA
 using LLVMLoopInfo: @loopinfo
 using GemmKernels.Tiling
+using GemmKernels: LocalArray, @immutable
 using Base.Cartesian: @ntuple
 
 # ---------------------
@@ -160,7 +161,7 @@ abstract type InterleavedColMajor{T} <: LayoutBase{T} end
         @loopinfo unroll for i = 1 : tile.size[1]
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1]
-            x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
+            @inbounds @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
 
@@ -192,7 +193,7 @@ abstract type InterleavedRowMajor{T} <: LayoutBase{T} end
         @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[2] + 1, t.index[1] + 1]
-            x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
+            @inbounds @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
 
@@ -230,7 +231,7 @@ end
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1, 1] + im *
                             workspace[t.index[1] + 1, t.index[2] + 1, 2]
-            x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
+            @inbounds @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
 
@@ -268,7 +269,7 @@ end
             t = translate_offset(tile, (i - 1, j - 1))
             @inbounds val = workspace[t.index[2] + 1, t.index[1] + 1, 1] + im *
                             workspace[t.index[2] + 1, t.index[1] + 1, 2]
-            x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
+            @inbounds @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
 

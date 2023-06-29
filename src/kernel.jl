@@ -4,9 +4,8 @@ module Kernel
 using CUDA
 using GemmKernels
 using GemmKernels.Tiling
-using GemmKernels: LocalArray
+using GemmKernels: LocalArray, @immutable
 using LLVMLoopInfo: @loopinfo
-using Base: setindex
 
 function matmul_singlestage(a, b, c, d,
                           transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
@@ -48,7 +47,7 @@ function matmul_singlestage(a, b, c, d,
     @loopinfo unroll for i = 1 : num_fragments_m
         @loopinfo unroll for j = 1 : num_fragments_n
             tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
-            @inbounds c_frags = setindex(c_frags, transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile), i ,j)
+            @inbounds @immutable c_frags[i, j] = transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile)
         end
     end
 
@@ -88,7 +87,7 @@ function matmul_singlestage(a, b, c, d,
 
                 @loopinfo unroll for i = 1 : num_fragments_m
                     a_tile = translate_offset(warp_tile.MK, (M = (i-1)*conf.compute_op_shape.M, K = 0))
-                    @inbounds a_frags = setindex(a_frags, transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a, a_tile), a_tile), i)
+                    @inbounds @immutable a_frags[i] = transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a, a_tile), a_tile)
                 end
 
                 # (3.3.2) Load a compute_warp.K x compute_warp.N tile of B from shared memory into registers
@@ -96,13 +95,13 @@ function matmul_singlestage(a, b, c, d,
 
                 @loopinfo unroll for j = 1 : num_fragments_n
                     b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*conf.compute_op_shape.N))
-                    @inbounds b_frags = setindex(b_frags, transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b, b_tile), b_tile), j)
+                    @inbounds @immutable b_frags[j] = transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b, b_tile), b_tile)
                 end
 
                 # (3.3.3) Compute a compute_warp.M x compute_warp.N x compute_warp.K matrix product within one warp
                 @loopinfo unroll for i = 1 : num_fragments_m
                     @loopinfo unroll for j = 1 : num_fragments_n
-                        @inbounds c_frags = setindex(c_frags, Operator.mma(conf.operator, a_frags[i], b_frags[j], c_frags[i, j]), i, j)
+                        @inbounds @immutable c_frags[i, j] = Operator.mma(conf.operator, a_frags[i], b_frags[j], c_frags[i, j])
                     end
                 end
             end
@@ -187,7 +186,7 @@ function matmul_pipelined(a, b, c, d,
     @loopinfo unroll for i = 1 : num_fragments_m
         @loopinfo unroll for j = 1 : num_fragments_n
             tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
-            @inbounds c_frags = setindex(c_frags, transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile), i, j)
+            @inbounds @immutable c_frags[i, j] = transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile)
         end
     end
 
@@ -215,13 +214,13 @@ function matmul_pipelined(a, b, c, d,
     # ld.global(0 : block_shape.K)
     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-            @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = 0))), i, j)
+            @inbounds @immutable a_fragment[i,j] = Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = 0)))
         end
     end
 
     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-            @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = 0, N = block_j))), i, j)
+            @inbounds @immutable b_fragment[i,j] = Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = 0, N = block_j)))
         end
     end
 
@@ -247,24 +246,24 @@ function matmul_pipelined(a, b, c, d,
 
     @loopinfo unroll for i = 1 : num_fragments_m
         a_tile = translate_offset(warp_tile.MK, (M = (i-1)*conf.compute_op_shape.M, K = 0))
-        @inbounds a_frags = setindex(a_frags, transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a, a_tile), a_tile), 1, i)
+        @inbounds @immutable a_frags[1, i] = transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a, a_tile), a_tile)
     end
 
     @loopinfo unroll for j = 1 : num_fragments_n
         b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*conf.compute_op_shape.N))
-        @inbounds b_frags = setindex(b_frags, transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b, b_tile), b_tile), 1, j)
+        @inbounds @immutable b_frags[1, j] = transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b, b_tile), b_tile)
     end
 
     # ld.global(block_shape.K : 2 * block_shape.K)
     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-            @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_tile.size.K))), i, j)
+            @inbounds @immutable a_fragment[i, j] = Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_tile.size.K)))
         end
     end
 
     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-            @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_tile.size.K, N = block_j))), i, j)
+            @inbounds @immutable b_fragment[i, j] = Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_tile.size.K, N = block_j)))
         end
     end
 
@@ -298,13 +297,13 @@ function matmul_pipelined(a, b, c, d,
                     # ld.global(block_k + 2 * block_shape.K : block_k + 3 * block_shape.K)
                     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
                         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-                            @inbounds a_fragment = setindex(a_fragment, Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K))), i, j)
+                            @inbounds @immutable a_fragment[i, j] = Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K)))
                         end
                     end
 
                     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
                         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-                            @inbounds b_fragment = setindex(b_fragment, Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_k + 2 * block_tile.size.K, N = block_j))), i, j)
+                            @inbounds @immutable b_fragment[i, j] = Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_k + 2 * block_tile.size.K, N = block_j)))
                         end
                     end
                 end
@@ -315,18 +314,18 @@ function matmul_pipelined(a, b, c, d,
 
             @loopinfo unroll for i = 1 : num_fragments_m
                 a_tile = translate_offset(warp_tile.MK, (M = (i-1)*conf.compute_op_shape.M, K = 0))
-                @inbounds a_frags = setindex(a_frags, transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a, a_tile), a_tile), nxt_stage, i)
+                @inbounds @immutable a_frags[nxt_stage, i] = transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a, a_tile), a_tile)
             end
 
             @loopinfo unroll for j = 1 : num_fragments_n
                 b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*conf.compute_op_shape.N))
-                @inbounds b_frags = setindex(b_frags, transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b, b_tile), b_tile), nxt_stage, j)
+                @inbounds @immutable b_frags[nxt_stage, j] = transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b, b_tile), b_tile)
             end
 
             # mma(cur_stage)
             @loopinfo unroll for i = 1 : num_fragments_m
                 @loopinfo unroll for j = 1 : num_fragments_n
-                    @inbounds c_frags = setindex(c_frags, Operator.mma(conf.operator, a_frags[cur_stage, i], b_frags[cur_stage, j], c_frags[i, j]), i, j)
+                    @inbounds @immutable c_frags[i, j] = Operator.mma(conf.operator, a_frags[cur_stage, i], b_frags[cur_stage, j], c_frags[i, j])
                 end
             end
         end
