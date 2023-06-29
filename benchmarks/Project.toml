@@ -1,3 +1,5 @@
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Git = "d7ba0133-e1db-5d97-8f8c-041e4b3a1eb2"
+GitHub = "bc5e4493-9b4d-5f90-b8aa-2b2bcaad7a26"
 StableRNGs = "860ef19b-820b-49d6-a774-d7a799459cd3"
