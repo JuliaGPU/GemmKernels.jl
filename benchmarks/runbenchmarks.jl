@@ -44,6 +44,9 @@ end
 SUITE = BenchmarkGroup()
 include("wmma.jl")
 
+@info "Warming-up benchmarks"
+warmup(SUITE; verbose=false)
+
 # load params
 params_file = joinpath(benchmark_results, "params.json")
 params_updated = false
@@ -55,15 +58,15 @@ else
     loadparams!(SUITE, BenchmarkTools.load(params_file)[1], :evals, :samples)
 
     # find untuned benchmarks for which we have the default evals==0
-    need_tuning = false
-    for (ids, benchmark) in BenchmarkTools.leaves(SUITE)
-        if params(benchmark).evals == 0
-            need_tuning = true
-            break
+    function has_untuned(suite)
+        for (ids, benchmark) in BenchmarkTools.leaves(suite)
+            if params(benchmark).evals == 0
+                return true
+            end
         end
+        return false
     end
-
-    if need_tuning
+    if has_untuned(SUITE)
         @info "Re-runing benchmarks"
         tune!(SUITE)
         params_updated = true
@@ -80,9 +83,6 @@ if params_updated
         run(`$(git()) -C $benchmark_results push -q`)
     end
 end
-
-@info "Warming-up benchmarks"
-warmup(SUITE; verbose=false)
 
 @info "Running benchmarks"
 timings = run(SUITE; verbose=true)
