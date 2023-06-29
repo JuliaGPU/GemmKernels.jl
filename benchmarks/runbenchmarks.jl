@@ -157,18 +157,23 @@ if previous_results !== nothing
     # generate some text
     io = IOBuffer()
     commit = get(ENV, "BUILDKITE_COMMIT", "HEAD")
-    print(io, """
-        Benchmark results for commit $commit (comparing to $(previous_results.commit)):
-
-        | ID | before | after | change |
-        |----|--------|-------|--------|
-        """)
+    println(io, "Benchmark results for commit $commit (comparing to $(previous_results.commit)):")
     judgements = BenchmarkTools.leaves(comparison)
     judgements = judgements[sortperm(map(string∘first, judgements))]
-    for (ids, j) in judgements
-        old = rmskew(before[ids])
-        new = rmskew(after[ids])
-        if BenchmarkTools.isregression(time, j) || BenchmarkTools.isimprovement(time, j)
+    filter!(judgements) do (ids, j)
+        BenchmarkTools.isregression(time, j) || BenchmarkTools.isimprovement(time, j)
+    end
+    if isempty(judgements)
+        println(io, "No regressions or improvements detected.")
+    else
+        print(io, """
+
+            | ID | before | after | change |
+            |----|--------|-------|--------|
+            """)
+        for (ids, j) in judgements
+            old = rmskew(before[ids])
+            new = rmskew(after[ids])
             println(io, resultrow(ids, j, old, new))
         end
     end
