@@ -41,3 +41,31 @@ Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L}, val, is:
     new_data = Base.setindex(v.data, convert(T, val), i)
     LocalArray{S,T,N,L}(new_data)
 end
+
+# helper macro
+"""
+    @immutable local_array[...]
+    @immutable local_array[...] = ...
+
+Helper macro that rewrites array indexing operations on a `LocalArray` to call non-mutating
+versions of the array indexing functions. Instead, the macro will generate an expression
+that overwrites the array with the new value.
+"""
+macro immutable(ex)
+    # is this an assignment?
+    if Meta.isexpr(ex, :(=))
+        ex, val = ex.args
+    else
+        val = nothing
+    end
+    Meta.isexpr(ex, :ref) || error("@immutable only works with indexing operations")
+
+    # getindex does not need to be rewritten
+    val === nothing && return ex
+
+    # rewrite setindex to overwrite the array
+    arr, idxs... = ex.args
+    quote
+        $(esc(arr)) = Base.setindex($(esc(arr)), $(esc(val)), $(map(esc, idxs)...))
+    end
+end
