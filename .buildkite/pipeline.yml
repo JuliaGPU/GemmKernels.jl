@@ -1,73 +1,58 @@
 steps:
-  - label: "Julia 1.6"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: 1.6
-      - JuliaCI/julia-test#v1: ~
-      - JuliaCI/julia-coverage#v1:
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      cap: "recent"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 120
+  - group: ":julia: Julia"
+    key: "julia"
+    steps:
+      - label: "Julia {{matrix.julia}}"
+        plugins:
+          - JuliaCI/julia#v1:
+              version: "{{matrix.julia}}"
+          - JuliaCI/julia-test#v1: ~
+          - JuliaCI/julia-coverage#v1: ~
+        agents:
+          queue: "juliagpu"
+          cuda: "*"
+        if: build.message !~ /\[skip tests\]/
+        timeout_in_minutes: 120
+        matrix:
+          setup:
+            julia:
+              - "1.6"
+              - "1.7"
+              - "1.8"
+              - "1.9"
+          #     - "nightly"
+          # adjustments:
+          #   - with:
+          #       julia: "nightly"
+          #     soft_fail: true
 
-  - label: "Julia 1.7"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: 1.7
-      - JuliaCI/julia-test#v1: ~
-      - JuliaCI/julia-coverage#v1:
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      cap: "recent"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 120
+  - group: ":racehorse: Benchmarks"
+    steps:
+      - label: "Benchmarks on Julia {{matrix.julia}}"
+        plugins:
+          - JuliaCI/julia#v1:
+              version: "{{matrix.julia}}"
+        command: |
+          julia --project -e '
+            println("--- :julia: Instantiating project")
+            using Pkg
+            Pkg.instantiate()
+            Pkg.activate("benchmarks")
+            Pkg.instantiate()
+            push!(LOAD_PATH, @__DIR__)
 
-  - label: "Julia 1.8"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: 1.8
-      - JuliaCI/julia-test#v1: ~
-      - JuliaCI/julia-coverage#v1:
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      cap: "recent"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 120
-    soft_fail:
-      - exit_status: 1
-
-  - label: "Julia 1.9"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: 1.9
-      - JuliaCI/julia-test#v1: ~
-      - JuliaCI/julia-coverage#v1:
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      cap: "recent"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 120
-    soft_fail:
-      - exit_status: 1
-
-  - label: "Julia nightly"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: "nightly"
-      - JuliaCI/julia-test#v1: ~
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      cap: "recent"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 120
-    soft_fail:
-      - exit_status: 1
+            println("+++ :julia: Benchmarking")
+            include("benchmarks/runbenchmarks.jl")'
+        agents:
+          queue: "juliagpu"
+          cuda: "*"
+        if: build.message !~ /\[skip benchmarks\]/
+        matrix:
+          setup:
+            julia:
+              - "1.9"
+        timeout_in_minutes: 30
 
 env:
   SECRET_CODECOV_TOKEN: "mqW1qFfd8v23i8ulnEaJEZUJj70lCAFZonhVkARc1z3VbB/Z0MDDB5BCzM3Rrgq3DQdNwc+ZSMluTNT0H7QIWuUN49eLqtLVl7gs0Io2MlMXnaD892I3n0+v0cV5oShBtY8iErgdmlCAw4EzfLv3fsXR0hPJyL4DUfyewhe6lDvWCYb8cZzoNfIQ8gmQN6oyJnbm8CmCKsrdzrDcC9NRhMI6jMYL8ZD9ry/m059S2hReyIdNtVikXPz9NBBmN+DAlGmp+MqQfcIlTeXIj0/U9OCi04GjbnT0IBFdjW4lTaNDIdLDnaRdumfO0C2g1lFJk73F+dsf/7goK6GpyyD/dw==;U2FsdGVkX192PcTTM+mOwv2BFs5wDMjTHE11fxBvTJ98468YZ6nlosYl9drk9bbZpYXR3cg4fEr/mK/dkDCJBA=="
+  SECRET_GITHUB_TOKEN: "lX9HgvfbQmLQyalEYzbp/mYpbyPPSzNkwjhI6VAyAFTMnKlX+FN8V2gWpKGVCsXuU5P1VgdTxuPcI/FiB2Rl0ng+i4hc/FY9vbl2xUl1tS6BJWtbHa8MZjpcRfGWsqvf5oFZxijiaYdAd4cDO5Ubh2zIYR9GNQTRqcX0yGTOlYpcnla77XfucrCuciD0mCchD4UXWMUjEoNOvd6PqIWlGazjym6Fllc90u6JNEa3m8/UQjjx6AwTW3+lhC0MyvuMDzFRc+KWvwNLc4bhNGoZUnoe+uoNVmILXow3FYbvqvr8aIKPQgbZBBCajPzrevCi1PvcKXsk+BhdeJEtOjEaDg==;U2FsdGVkX1860HAQDaVtnxbr2tOV98XJS345pfGCH7UoIAoBFhDYXolq6sgslgRSqOUcZlaU8Ifj9i3LPqxb7A=="
