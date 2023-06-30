@@ -22,4 +22,4 @@ withenv("JULIA_NUM_THREADS" => 1, "OPENBLAS_NUM_THREADS" => 1) do
 end
 
 @everywhere using XUnit
-runtests("tests.jl")
+runtests("tests.jl", ARGS...)
