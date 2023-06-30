@@ -25,4 +25,8 @@ end
 
 @inline (transf::Elementwise)(x, tile) = transf.func.(x)
 
+# when dealing with tuples of VecElements, transform the contained values
+@inline (transf::Elementwise)(x::NTuple{N, <:VecElement}, tile) where {N} =
+    ntuple(i->VecElement(transf.func(x[i].value)), Val(N))
+
 end
