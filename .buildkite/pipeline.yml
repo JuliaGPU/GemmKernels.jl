@@ -15,7 +15,14 @@ steps:
           julia --project -e '
               # make sure the 1.6-era Manifest works on this Julia version
               using Pkg
-              Pkg.resolve()'
+              Pkg.resolve()
+
+              # work around XUnit.jl bug
+              try
+                Pkg.add(url="https://github.com/maleadt/XUnit.jl", rev="pass_compat")
+              catch err
+                @warn "Could not install patched version of XUnit.jl"
+              end'
         if: build.message !~ /\[skip tests\]/
         timeout_in_minutes: 120
         matrix:
