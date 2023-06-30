@@ -52,9 +52,10 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMa
     ## outputs are never transposed, and padding them doesn't seem worth it
     shared_c_layout = shared_d_layout = Layout.AlignedColMajor{eltype(C)}
 
+    compute_type = promote_type(eltype(A), eltype(B))
     conf = GemmKernels.get_config(;
             gemm_shape = (M = m, N = n, K = k),
-            operator = Operator.WMMAOp{16, 16, 16, eltype(C)},
+            operator = Operator.WMMAOp{16, 16, 16, compute_type, eltype(C)},
 
             global_a_layout, global_b_layout, global_c_layout, global_d_layout,
             shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout,
