@@ -14,8 +14,11 @@ using LinearAlgebra
         transpose_a = [false, true],
         transpose_b = [false, true],
         (OP_M, OP_N, OP_K) in [(8, 16, 2)]
+
+        compute_type = promote_type(A_type, B_type)
+
         @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]], [[2048, 2048, 2048]])
-            alpha = convert(A_type, 2)
+            alpha = convert(compute_type, 2)
             beta  = convert(CD_type, 3)
 
             if A_type <: Integer
@@ -39,7 +42,7 @@ using LinearAlgebra
             conf = GemmKernels.get_config(
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 64, N = 64, K = 32),
-                                            operator = Operator.FPUOp{OP_M, OP_N, OP_K, CD_type, A_type},
+                                            operator = Operator.FPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
                                             global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
                                             global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
 
@@ -75,7 +78,9 @@ using LinearAlgebra
             (M, N, K) = (128, 128, 128)
             (A_type, B_type, CD_type) = (Float32, Float32, Float32)
 
-            alpha = convert(A_type, 2)
+            compute_type = promote_type(A_type, B_type)
+
+            alpha = convert(compute_type, 2)
             beta  = convert(CD_type, 3)
 
             a_h = rand(A_type, (M, K)) / sqrt(A_type(K))
@@ -94,7 +99,7 @@ using LinearAlgebra
             conf = GemmKernels.get_config(
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 128, N = 64, K = 32),
-                                            operator = Operator.FPUOp{OP_M, OP_N, OP_K, CD_type, A_type},
+                                            operator = Operator.FPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
                                             global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
                                             global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
 
@@ -125,6 +130,8 @@ using LinearAlgebra
         transpose_b = [false, true],
         (OP_M, OP_N, OP_K) in [(8, 16, 2)]
 
+        compute_type = promote_type(A_type, B_type)
+
         @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2, 2, 1], [1, 1, 2], [2, 2, 2]])
             a_h = rand(A_type, (M, K)) / sqrt(A_type(K))
             b_h = rand(B_type, (K, N)) / sqrt(B_type(K))
@@ -152,7 +159,7 @@ using LinearAlgebra
             conf = GemmKernels.get_config(
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 64, N = 64, K = 32),
-                                            operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, CD_type, A_type},
+                                            operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
                                             global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
                                             global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
 
@@ -170,15 +177,15 @@ using LinearAlgebra
     end
 
 
-    @testset "WMMA GEMM $(A_type)*$(B_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
+    @testset "WMMA GEMM $(AB_type)*$(AB_type)+$(CD_type)=$(CD_type) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' ))" for transpose_a = [false, true],
         transpose_b = [false, true],
-        (A_type, B_type, CD_type, min_dimension) in [(Float16, Float16, Float16, 256), (Float16, Float16, Float32, 128)]
+        (AB_type, CD_type, min_dimension) in [(Float16, Float16, 256), (Float16, Float32, 128)]
         @testcase "(M = $M, N = $N, K = $K)" for (M, N, K) in vcat(min_dimension.*[[1,1,1], [2,2,1], [1,1,2], [2,2,2]], [[2048, 2048, 2048]])
-            alpha = convert(A_type, 2)
+            alpha = convert(AB_type, 2)
             beta  = convert(CD_type, 3)
 
-            a_h = rand(A_type, (M, K)) / sqrt(A_type(K))
-            b_h = rand(B_type, (K, N)) / sqrt(B_type(K))
+            a_h = rand(AB_type, (M, K)) / sqrt(AB_type(K))
+            b_h = rand(AB_type, (K, N)) / sqrt(AB_type(K))
             c_h = rand(CD_type, (M, N))
 
             # Transpose input if necessary
@@ -192,9 +199,9 @@ using LinearAlgebra
 
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
-                                          operator = Operator.WMMAOp{16, 16, 16, CD_type},
-                                          global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
-                                          global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
+                                          operator = Operator.WMMAOp{16, 16, 16, AB_type, CD_type},
+                                          global_a_layout = transpose_a ? Layout.AlignedRowMajor{AB_type} : Layout.AlignedColMajor{AB_type},
+                                          global_b_layout = transpose_b ? Layout.AlignedRowMajor{AB_type} : Layout.AlignedColMajor{AB_type},
 
                                           global_c_layout = Layout.AlignedColMajor{CD_type},
                                           global_d_layout = Layout.AlignedColMajor{CD_type},
@@ -213,7 +220,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            @test all(isapprox.(alpha * CD_type.(new_a_h) * CD_type.(new_b_h) + beta * c_h, Array(d); rtol = sqrt(eps(A_type))))
+            @test all(isapprox.(alpha * CD_type.(new_a_h) * CD_type.(new_b_h) + beta * c_h, Array(d); rtol = sqrt(eps(AB_type))))
         end
     end
 
@@ -244,7 +251,7 @@ using LinearAlgebra
 
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
-                                          operator = Operator.WMMAOp{16, 16, 16, Float32},
+                                          operator = Operator.WMMAOp{16, 16, 16, Float16, Float32},
                                           global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
                                           global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 
@@ -289,7 +296,7 @@ using LinearAlgebra
 
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
-                                          operator = Operator.WMMAOp{16, 16, 16, Float32},
+                                          operator = Operator.WMMAOp{16, 16, 16, Float16, Float32},
                                           global_a_layout = Layout.Diagonal{Float16},
                                           global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
 

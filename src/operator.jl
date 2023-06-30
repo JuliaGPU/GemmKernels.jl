@@ -20,23 +20,25 @@ end
 # FPU
 # ---
 
-abstract type GeneralFPUOp{M, N, K, DT, CT} end
+# CT is the compute type used to perform scalar operations in.
+# AT is the accumulator type used to accumulate partial results.
+abstract type GeneralFPUOp{M, N, K, CT, AT} end
 
-@inline shape(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}) where {M, N, K, DT, CT} = (M = M, N = N, K = K)
+@inline shape(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}) where {M, N, K, CT, AT} = (M = M, N = N, K = K)
 
 for (layout_type, convert_index_func) in [
                                         (Layout.AlignedColMajor, identity),
                                         (Layout.AlignedRowMajor, x -> reverse(Tuple(x)))
                                        ]
     @eval begin
-        @inline fragtype_a(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{CT}}) where {M, N, K, DT, CT} = NTuple{M * K ÷ 4, CT}
-        @inline fragtype_b(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{CT}}) where {M, N, K, DT, CT} = NTuple{K * N ÷ 8, CT}
+        @inline fragtype_a(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT} = NTuple{M * K ÷ 4, CT}
+        @inline fragtype_b(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT} = NTuple{K * N ÷ 8, CT}
 
-        @inline function fragtype_accum(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{DT}}) where {M, N, K, DT, CT}
-            return NTuple{M * N ÷ 32, DT}
+        @inline function fragtype_accum(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT}
+            return NTuple{M * N ÷ 32, AT}
         end
 
-        @inline function load_a(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, DT, CT}
+        @inline function load_a(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
             op_y = (laneId - 1) % 4 + 1
@@ -53,7 +55,7 @@ for (layout_type, convert_index_func) in [
             return NTuple{M * K ÷ 4, CT}(frag)
         end
 
-        @inline function load_b(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, DT, CT}
+        @inline function load_b(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
             op_x = (laneId - 1) ÷ 4 + 1
@@ -70,7 +72,7 @@ for (layout_type, convert_index_func) in [
             return NTuple{K * N ÷ 8, CT}(frag)
         end
 
-        @inline function load_c(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, DT, CT}
+        @inline function load_c(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
             op_y = (laneId - 1) % 4 + 1
@@ -78,17 +80,17 @@ for (layout_type, convert_index_func) in [
 
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(undef)
+            frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, AT}(undef)
             @loopinfo unroll for m = 1 : M ÷ 4
                 @loopinfo unroll for n = 1 : N ÷ 8
                     @inbounds @immutable frag[m,n] = workspace[y + 4 * (m - 1), x + 8 * (n - 1)]
                 end
             end
 
-            return NTuple{M * N ÷ 32, DT}(frag)
+            return NTuple{M * N ÷ 32, AT}(frag)
         end
 
-        @inline function store_d(::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, ::Type{$layout_type{DT}}, workspace, frag, tile::Tile) where {M, N, K, DT, CT}
+        @inline function store_d(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, frag, tile::Tile) where {M, N, K, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
             op_y = (laneId - 1) % 4 + 1
@@ -96,7 +98,7 @@ for (layout_type, convert_index_func) in [
 
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(frag)
+            frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, AT}(frag)
             @loopinfo unroll for m = 1 : M ÷ 4
                 @loopinfo unroll for n = 1 : N ÷ 8
                     @inbounds workspace[y + 4 * (m - 1), x + 8 * (n - 1)] = frag[m, n]
@@ -106,20 +108,20 @@ for (layout_type, convert_index_func) in [
     end
 end
 
-abstract type FPUOp{M, N, K, DT, CT} <: GeneralFPUOp{M, N, K, DT, CT} end
-function operator_fma(::Type{FPUOp{M, N, K, DT, CT}}, a::CT, b::CT, c::DT) where {M, N, K, DT, CT}
+abstract type FPUOp{M, N, K, CT, AT} <: GeneralFPUOp{M, N, K, CT, AT} end
+function operator_fma(::Type{FPUOp{M, N, K, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, CT, AT}
     return fma(a, b, c)
 end
 
-abstract type TropicalFPUOp{M, N, K, DT, CT} <: GeneralFPUOp{M, N, K, DT, CT} end
-function operator_fma(::Type{TropicalFPUOp{M, N, K, DT, CT}}, a::CT, b::CT, c::DT) where {M, N, K, DT, CT}
+abstract type TropicalFPUOp{M, N, K, CT, AT} <: GeneralFPUOp{M, N, K, CT, AT} end
+function operator_fma(::Type{TropicalFPUOp{M, N, K, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, CT, AT}
     return max(a + b, c)
 end
 
-@inline function mma(operator_type::Type{<:GeneralFPUOp{M, N, K, DT, CT}}, a_frag, b_frag, c_frag) where {M, N, K, DT, CT}
+@inline function mma(operator_type::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, a_frag, b_frag, c_frag) where {M, N, K, CT, AT}
     a_frag = LocalArray{Tuple{M ÷ 4, K}, CT}(a_frag)
     b_frag = LocalArray{Tuple{K, N ÷ 8}, CT}(b_frag)
-    c_frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, DT}(c_frag)
+    c_frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, AT}(c_frag)
 
     @loopinfo unroll for m = 1 : M ÷ 4
         @loopinfo unroll for n = 1 : N ÷ 8
@@ -129,16 +131,20 @@ end
         end
     end
 
-    return NTuple{M * N ÷ 32, DT}(c_frag)
+    return NTuple{M * N ÷ 32, AT}(c_frag)
 end
 
 # ----
 # WMMA
 # ----
 
-struct WMMAOp{M, N, K, T} end
+# WMMAOp's register types cannot be configured, and CT/AT should be identical to their
+# respective shared memory layouts eltypes. this is because WMMA intrinsics are used
+# to load/store shared memory, so we cannot perform any conversions on the fly.
+# note that there still can be a conversion between global and shared memory.
+struct WMMAOp{M, N, K, CT, AT} end
 
-@inline shape(::Type{WMMAOp{M, N, K, T}}) where {M, N, K, T} = (M = M, N = N, K = K)
+@inline shape(::Type{WMMAOp{M, N, K, CT, AT}}) where {M, N, K, CT, AT} = (M = M, N = N, K = K)
 
 # convert_index_func: function used to transpose the index in case of a row-major layout
 for (layout_type, wmma_layout_type, convert_index_func) in [
@@ -146,54 +152,54 @@ for (layout_type, wmma_layout_type, convert_index_func) in [
                                         (Layout.AlignedRowMajor, WMMA.RowMajor, x -> reverse(Tuple(x)))
                                        ]
     @eval begin
-        @inline fragtype_a(::Type{WMMAOp{16, 16, 16, T}}, ::Type{$layout_type{Float16}}) where {T} = WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixA}
-        @inline fragtype_b(::Type{WMMAOp{16, 16, 16, T}}, ::Type{$layout_type{Float16}}) where {T} = WMMA.Fragment{16, 16, 16, 16, Float16, $wmma_layout_type, WMMA.MatrixB}
-        @inline fragtype_accum(::Type{WMMAOp{16, 16, 16, T}}, ::Type{$layout_type{T}}) where {T} = WMMA.Fragment{16, 16, 16, 8, T, WMMA.Unspecified, WMMA.Accumulator}
+        @inline fragtype_a(::Type{WMMAOp{16, 16, 16, CT, AT}}, ::Type{$layout_type{CT}}) where {CT, AT} = WMMA.Fragment{16, 16, 16, 16, CT, $wmma_layout_type, WMMA.MatrixA}
+        @inline fragtype_b(::Type{WMMAOp{16, 16, 16, CT, AT}}, ::Type{$layout_type{CT}}) where {CT, AT} = WMMA.Fragment{16, 16, 16, 16, CT, $wmma_layout_type, WMMA.MatrixB}
+        @inline fragtype_accum(::Type{WMMAOp{16, 16, 16, CT, AT}}, ::Type{$layout_type{AT}}) where {CT, AT} = WMMA.Fragment{16, 16, 16, 8, AT, WMMA.Unspecified, WMMA.Accumulator}
 
-        @inline function load_a(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K, T}
-            conf = WMMA.Config{M, N, K, T}
+        @inline function load_a(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
+            conf = WMMA.Config{M, N, K, AT}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(Float16)
+            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(CT)
             return WMMA.load_a(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function load_b(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{Float16}}, workspace, tile::Tile) where {M, N, K, T}
-            conf = WMMA.Config{M, N, K, T}
+        @inline function load_b(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
+            conf = WMMA.Config{M, N, K, AT}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(Float16)
+            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(CT)
             return WMMA.load_b(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function load_c(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{T}}, workspace, tile::Tile) where {M, N, K, T}
-            conf = WMMA.Config{M, N, K, T}
+        @inline function load_c(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{AT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
+            conf = WMMA.Config{M, N, K, AT}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(T)
+            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(AT)
             return WMMA.load_c(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function store_d(::Type{WMMAOp{M, N, K, T}}, ::Type{$layout_type{T}}, workspace, frag, tile::Tile) where {M, N, K, T}
-            conf = WMMA.Config{M, N, K, T}
+        @inline function store_d(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{AT}}, workspace, frag, tile::Tile) where {M, N, K, CT, AT}
+            conf = WMMA.Config{M, N, K, AT}
 
             linear_base = linearise($convert_index_func(tile.base), size(workspace))
             linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(T)
+            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(AT)
             WMMA.store_d(ptr, frag, size(workspace, 1), $wmma_layout_type, conf)
         end
     end
 end
 
-function mma(::Type{WMMAOp{M, N, K, T}}, a_frag, b_frag, c_frag) where {M, N, K, T}
-    conf = WMMA.Config{M, N, K, T}
+function mma(::Type{WMMAOp{M, N, K, CT, AT}}, a_frag, b_frag, c_frag) where {M, N, K, CT, AT}
+    conf = WMMA.Config{M, N, K, AT}
     return WMMA.mma(a_frag, b_frag, c_frag, conf)
 end
 
