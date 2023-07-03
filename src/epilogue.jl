@@ -48,7 +48,7 @@ end
     col = thread_tile.index.N + 1
     b = unsafe_load(dev_ptr, col)
 
-    return ntuple(k -> VecElement{Float32}(x[k].value + b), Val(4))
+    return ntuple(k -> Float32(x[k] + b), Val(4))
 end
 
 @inline function (ep::Bias{B})(d, shmem_d, transform, ::Type{conf}) where {B, conf <: GemmKernels.Config}

@@ -24,7 +24,8 @@ struct Vec{N, T} end
 
     return quote
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-        return unsafe_load(vec_ptr, 1, Val($alignment))
+        vec = unsafe_load(vec_ptr, 1, Val($alignment))
+        return @ntuple $N i -> vec[i].value
     end
 end
 
@@ -38,11 +39,12 @@ end
     # (e.g., when types mismatch, storing 8 Float16s in a Float32 shared memory layout)
     for offset = 0:N:M-1
         append!(ex.args, (quote
-            y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
+            y = @ntuple $N j -> VecElement(x[j+$offset])
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
             unsafe_store!(vec_ptr, y, $offset ÷ N + 1, Val($alignment))
         end).args)
     end
+    push!(ex.args, :(nothing))
 
     return ex
 end
@@ -64,7 +66,7 @@ abstract type Zero{T} <: LayoutBase{T} end
 
 @inline function load(::Type{<:Zero{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
-    return ntuple(i -> VecElement{T}(zero(T)), Val(N))
+    return ntuple(i -> zero(T), Val(N))
 end
 
 @inline store!(::Type{<:Zero{T}}, workspace, value, tile::Tile) where {T} = return
@@ -174,7 +176,7 @@ abstract type UnsafeAlignedColMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{UnsafeAlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 
-@inline fragtype(::Type{<:UnsafeAlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:UnsafeAlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), T}
 
 @inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
@@ -211,7 +213,7 @@ abstract type Diagonal{T} <: LayoutBase{T} end
     # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
     # Only load on the diagonal, i.e. if row and column are equal.
     # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
-    return ntuple(k -> VecElement{Float16}(tile.index[1] + k - 1 == tile.index[2] ? workspace[tile.index[2] + 1] : 0), Val(8))
+    return ntuple(k -> Float16(tile.index[1] + k - 1 == tile.index[2] ? workspace[tile.index[2] + 1] : 0), Val(8))
 end
 
 @inline threadblock_condition(layout_a::Type{<:Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
@@ -226,7 +228,7 @@ abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{UnsafeAlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
-@inline fragtype(::Type{<:UnsafeAlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:UnsafeAlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), T}
 
 @inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
