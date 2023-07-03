@@ -11,9 +11,6 @@ rng = StableRNG(123)
 # to find untuned benchmarks
 BenchmarkTools.DEFAULT_PARAMETERS.evals = 0
 
-# allow benchmarks to take quite a while
-BenchmarkTools.DEFAULT_PARAMETERS.seconds = 60
-
 @info "Loading previous benchmark results"
 github_token = get(ENV, "GITHUB_TOKEN", nothing)
 benchmark_results = mktempdir()
@@ -48,7 +45,7 @@ end
 
 @info "Loading benchmarks"
 SUITE = BenchmarkGroup()
-include("wmma.jl")
+include("blas.jl")
 
 @info "Warming-up benchmarks"
 warmup(SUITE; verbose=false)
@@ -73,7 +70,7 @@ else
         return false
     end
     if has_untuned(SUITE)
-        @info "Re-runing benchmarks"
+        @info "Re-tuning benchmarks"
         tune!(SUITE)
         params_updated = true
     end
