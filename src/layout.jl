@@ -19,18 +19,17 @@ using Base.Cartesian: @ntuple
 
 struct Vec{N, T} end
 
-@inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
-                                   i::Integer = 1) where {N, T, AS}
+@inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}) where {N, T, AS}
     alignment = sizeof(T) * N
 
     return quote
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-        return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
+        return unsafe_load(vec_ptr, 1, Val($alignment))
     end
 end
 
 @inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
-                                     x::NTuple{M,<:Any}, i::Integer = 1) where {N, T, AS, M}
+                                     x::NTuple{M,<:Any}) where {N, T, AS, M}
     alignment = sizeof(T) * N
 
     ex = quote end
@@ -41,7 +40,7 @@ end
         append!(ex.args, (quote
             y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-            unsafe_store!(vec_ptr, y, (i+$offset-1) ÷ N + 1, Val($alignment))
+            unsafe_store!(vec_ptr, y, $offset ÷ N + 1, Val($alignment))
         end).args)
     end
 
@@ -101,17 +100,21 @@ abstract type AlignedColMajor{T} <: LayoutBase{T} end
 
     linear_base = linearise(tile.base, Base.size(workspace))
     linear_offset = linearise(tile.offset, Base.size(workspace))
+    linear_idx = linear_base + linear_offset - 1
 
-    return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
+    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
+    return vloada(Vec{N, T}, pointer(workspace, linear_idx))
 end
 
-@inline function store!(::Type{<:AlignedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+@inline function store!(::Type{<:AlignedColMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     linear_base = linearise(tile.base, Base.size(workspace))
     linear_offset = linearise(tile.offset, Base.size(workspace))
+    linear_idx = linear_base + linear_offset - 1
 
-    vstorea!(Vec{N, T}, pointer(workspace), value, linear_base + linear_offset - 1)
+    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
+    vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
 end
 
 # --------
@@ -146,17 +149,21 @@ abstract type AlignedRowMajor{T} <: LayoutBase{T} end
 
     linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
     linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
+    linear_idx = linear_base + linear_offset - 1
 
-    return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
+    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
+    return vloada(Vec{N, T}, pointer(workspace, linear_idx))
 end
 
-@inline function store!(::Type{<:AlignedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
+@inline function store!(::Type{<:AlignedRowMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
     linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
 
-    vstorea!(Vec{N, T}, pointer(workspace), value, linear_base + linear_offset - 1)
+    linear_idx = linear_base + linear_offset - 1
+    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
+    vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
 end
 
 # -------------------
