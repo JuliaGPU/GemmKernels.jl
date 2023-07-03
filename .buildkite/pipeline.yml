@@ -7,7 +7,8 @@ steps:
           - JuliaCI/julia#v1:
               version: "{{matrix.julia}}"
           - JuliaCI/julia-test#v1: ~
-          - JuliaCI/julia-coverage#v1: ~
+          - JuliaCI/julia-coverage#v1:
+              coverage: "{{matrix.coverage}}"
         agents:
           queue: "juliagpu"
           cuda: "*"
@@ -31,12 +32,16 @@ steps:
               - "1.6"
               - "1.7"
               - "1.8"
-              - "1.9"
-          #     - "nightly"
-          # adjustments:
-          #   - with:
-          #       julia: "nightly"
-          #     soft_fail: true
+            coverage:
+              - "false"
+          adjustments:
+            - with:
+                julia: "1.9"
+                coverage: true
+          # - with:
+          #     julia: "nightly"
+          #     coverage: "false"
+          #   soft_fail: true
 
   - group: ":racehorse: Benchmarks"
     steps:
