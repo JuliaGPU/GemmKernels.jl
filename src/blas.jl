@@ -64,11 +64,14 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMa
             is_b_col_major = !transpose_b
                                 )
 
+    alpha = convert(compute_type, alpha)
+    beta = convert(eltype(C), beta)
     GemmKernels.matmul(A, B, C, C, conf;
                        transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
                        kernel = kernel(global_a_layout, global_b_layout)
                       )
+    C
 end
 
 end
