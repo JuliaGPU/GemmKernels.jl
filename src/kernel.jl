@@ -31,9 +31,9 @@ function matmul_singlestage(a, b, c, d,
 
     @loopinfo unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
         @loopinfo unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
-            x = Layout.load(conf.global_c_layout, c, translate_base(thread_tile, (M = block_i, N = block_j)))
+            x = @inbounds Layout.load(conf.global_c_layout, c, translate_base(thread_tile, (M = block_i, N = block_j)))
             x = transf_gl2sh_c(x, thread_tile)
-            Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
+            @inbounds Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
         end
     end
 
@@ -63,18 +63,18 @@ function matmul_singlestage(a, b, c, d,
             # (3.1) Cooperatively load a block_shape.M x block_shape.K tile of A from global to shared memory within one threadblock
             @loopinfo unroll for warp_tile = parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major)
                 @loopinfo unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major)
-                    x = Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_k)))
+                    x = @inbounds Layout.load(conf.global_a_layout, a, translate_base(thread_tile, (M = block_i, K = block_k)))
                     x = transf_gl2sh_a(x, thread_tile)
-                    Layout.store!(conf.shared_a_layout, shmem_a, x, thread_tile)
+                    @inbounds Layout.store!(conf.shared_a_layout, shmem_a, x, thread_tile)
                 end
             end
 
             # (3.2) Cooperatively load a block_shape.K x block_shape.N tile of B from global to shared memory within one threadblock
             @loopinfo unroll for warp_tile = parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major)
                 @loopinfo unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major)
-                    x = Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_k, N = block_j)))
+                    x = @inbounds Layout.load(conf.global_b_layout, b, translate_base(thread_tile, (K = block_k, N = block_j)))
                     x = transf_gl2sh_b(x, thread_tile)
-                    Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
+                    @inbounds Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
                 end
             end
 
@@ -170,9 +170,9 @@ function matmul_pipelined(a, b, c, d,
 
     @loopinfo unroll for warp_tile = parallellise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
         @loopinfo unroll for thread_tile = parallellise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
-            x = Layout.load(conf.global_c_layout, c, translate_base(thread_tile, (M = block_i, N = block_j)))
+            x = @inbounds Layout.load(conf.global_c_layout, c, translate_base(thread_tile, (M = block_i, N = block_j)))
             x = transf_gl2sh_c(x, thread_tile)
-            Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
+            @inbounds Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
         end
     end
 
@@ -227,15 +227,15 @@ function matmul_pipelined(a, b, c, d,
     # st.shared()
     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-            @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
-            Layout.store!(conf.shared_a_layout, shmem_a, x, thread_tile)
+            x = transf_gl2sh_a(@inbounds(a_fragment[i, j]), thread_tile)
+            @inbounds Layout.store!(conf.shared_a_layout, shmem_a, x, thread_tile)
         end
     end
 
     @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
         @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-            @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
-            Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
+            x = transf_gl2sh_b(@inbounds(b_fragment[i, j]), thread_tile)
+            @inbounds Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
         end
     end
 
@@ -278,15 +278,15 @@ function matmul_pipelined(a, b, c, d,
                 # st.shared()
                 @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
                     @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
-                        @inbounds x = transf_gl2sh_a(a_fragment[i, j], thread_tile)
-                        Layout.store!(conf.shared_a_layout, shmem_a, x, thread_tile)
+                        x = transf_gl2sh_a(@inbounds(a_fragment[i, j]), thread_tile)
+                        @inbounds Layout.store!(conf.shared_a_layout, shmem_a, x, thread_tile)
                     end
                 end
 
                 @loopinfo unroll for (i, warp_tile) = enumerate(parallellise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
                     @loopinfo unroll for (j, thread_tile) = enumerate(parallellise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
-                        @inbounds x = transf_gl2sh_b(b_fragment[i, j], thread_tile)
-                        Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
+                        x = transf_gl2sh_b(@inbounds(b_fragment[i, j]), thread_tile)
+                        @inbounds Layout.store!(conf.shared_b_layout, shmem_b, x, thread_tile)
                     end
                 end
 
