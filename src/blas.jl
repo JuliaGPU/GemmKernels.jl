@@ -19,25 +19,23 @@ const configs = Dict{}()
     end
     return val
 end
-@noinline function create_config(A::Type, sizeA::Dims, stridesA::Dims, transA::Char,
-                                 B::Type, sizeC::Dims, stridesC::Dims, transB::Char,
-                                 C::Type, sizeB::Dims, stridesB::Dims,
+@noinline function create_config(A::Type, sizeA::Dims, stridesA::Dims, transA::Bool,
+                                 B::Type, sizeB::Dims, stridesB::Dims, transB::Bool,
+                                 C::Type, sizeC::Dims, stridesC::Dims,
                                  alpha::Type, zeroAlpha::Bool,
                                  beta::Type, zeroBeta::Bool,
                                  wmma::Union{Bool,Nothing})
-    m = transA == 'N' ? sizeA[1] : sizeA[2]
-    k = transA == 'N' ? sizeA[2] : sizeA[1]
-    n = transB == 'N' ? sizeB[2] : sizeB[1]
-    if m != sizeC[1] || n != sizeC[2] || k != (transB == 'N' ? sizeB[1] : sizeB[2])
+    m = sizeA[transA ? 2 : 1]
+    k = sizeA[transA ? 1 : 2]
+    n = sizeB[transB ? 1 : 2]
+    if m != sizeC[1] || n != sizeC[2] || k != sizeB[transB ? 2 : 1]
         throw(DimensionMismatch("Dimensions do not match"))
     end
 
-    transpose_a = (transA == 'T')
-    transpose_b = (transB == 'T')
-    a_layout_base = transpose_a ? Layout.RowMajor : Layout.ColMajor
-    b_layout_base = transpose_b ? Layout.RowMajor : Layout.ColMajor
-    a_aligned_layout_base = transpose_a ? Layout.UnsafeAlignedRowMajor : Layout.UnsafeAlignedColMajor
-    b_aligned_layout_base = transpose_b ? Layout.UnsafeAlignedRowMajor : Layout.UnsafeAlignedColMajor
+    a_layout_base = transA ? Layout.RowMajor : Layout.ColMajor
+    b_layout_base = transB ? Layout.RowMajor : Layout.ColMajor
+    a_aligned_layout_base = transA ? Layout.UnsafeAlignedRowMajor : Layout.UnsafeAlignedColMajor
+    b_aligned_layout_base = transB ? Layout.UnsafeAlignedRowMajor : Layout.UnsafeAlignedColMajor
 
     # determine operator to use
     wmma_types = [
@@ -73,8 +71,8 @@ end
 
     # determine global memory layouts
     ## check if tiles begin at aligned addresses, allowing use of vectorized loads & stores
-    a_aligned = (stridesA[2] * sizeof(eltype(A))) % 16 == 0
-    b_aligned = (stridesB[2] * sizeof(eltype(B))) % 16 == 0
+    a_aligned = (stridesA[transA ? 1 : 2] * sizeof(eltype(A))) % 16 == 0
+    b_aligned = (stridesB[transB ? 1 : 2] * sizeof(eltype(B))) % 16 == 0
     c_aligned = (stridesC[2] * sizeof(eltype(C))) % 16 == 0
     ## if alpha is zero, we don't need to load A or B
     if zeroAlpha
@@ -116,8 +114,8 @@ end
             global_a_layout, global_b_layout, global_c_layout, global_d_layout,
             shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout,
 
-            is_a_col_major = !transpose_a,
-            is_b_col_major = !transpose_b
+            is_a_col_major = !transA,
+            is_b_col_major = !transB
         )
     else
         GemmKernels.get_config(;
@@ -127,8 +125,8 @@ end
             global_a_layout, global_b_layout, global_c_layout, global_d_layout,
             shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout,
 
-            is_a_col_major = !transpose_a,
-            is_b_col_major = !transpose_b
+            is_a_col_major = !transA,
+            is_b_col_major = !transB
         )
     end
 
@@ -138,8 +136,8 @@ end
 function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMatrix,
                  beta::Number, C::CuMatrix; wmma::Union{Bool,Nothing}=nothing)
     conf, compute_type, kernel = get_config(
-        typeof(A), size(A), strides(A), transA,
-        typeof(B), size(B), strides(B), transB,
+        typeof(A), size(A), strides(A), transA == 'T',
+        typeof(B), size(B), strides(B), transB == 'T',
         typeof(C), size(C), strides(C),
         typeof(alpha), iszero(alpha),
         typeof(beta), iszero(beta),
