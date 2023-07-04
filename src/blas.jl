@@ -71,8 +71,8 @@ end
 
     # determine global memory layouts
     ## check if tiles begin at aligned addresses, allowing use of vectorized loads & stores
-    a_aligned = (stridesA[transA ? 1 : 2] * sizeof(eltype(A))) % 16 == 0
-    b_aligned = (stridesB[transB ? 1 : 2] * sizeof(eltype(B))) % 16 == 0
+    a_aligned = (stridesA[2] * sizeof(eltype(A))) % 16 == 0
+    b_aligned = (stridesB[2] * sizeof(eltype(B))) % 16 == 0
     c_aligned = (stridesC[2] * sizeof(eltype(C))) % 16 == 0
     ## if alpha is zero, we don't need to load A or B
     if zeroAlpha
@@ -133,11 +133,11 @@ end
     return conf, compute_type, kernel(global_a_layout, global_b_layout)
 end
 
-function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMatrix,
-                 beta::Number, C::CuMatrix; wmma::Union{Bool,Nothing}=nothing)
+function matmatmul!(C::CuArray, transA::Char, transB::Char, A::CuArray, B::CuArray,
+                    alpha::Number, beta::Number; wmma::Union{Bool,Nothing}=nothing)
     conf, compute_type, kernel = get_config(
-        typeof(A), size(A), strides(A), transA == 'T',
-        typeof(B), size(B), strides(B), transB == 'T',
+        typeof(A), size(A), strides(A), transA=='T',
+        typeof(B), size(B), strides(B), transB=='T',
         typeof(C), size(C), strides(C),
         typeof(alpha), iszero(alpha),
         typeof(beta), iszero(beta),
@@ -146,7 +146,7 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMa
 
     alpha = convert(compute_type, alpha)
     beta = convert(eltype(C), beta)
-    GemmKernels.matmul(A, B, C, C, conf;
+    GemmKernels.matmul(parent(A), parent(B), parent(C), parent(C), conf;
                        transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
                        kernel
