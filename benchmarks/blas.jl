@@ -45,9 +45,10 @@ let group = addgroup!(group, "WMMA")
             blas_benchmark(group, ab_type, ab_type, cd_type, N; alpha, beta, wmma=true)
         end
 
-    # test the effect of transposing
-    for a_transpose in (true, false), b_transpose in (true, false)
-        blas_benchmark(ab_type, ab_type, cd_type, N; a_transpose, b_transpose, wmma=true)
+        # test the effect of transposing
+        for a_transpose in (true, false), b_transpose in (true, false)
+            blas_benchmark(group, ab_type, ab_type, cd_type, N; a_transpose, b_transpose, wmma=true)
+        end
     end
 end
 
