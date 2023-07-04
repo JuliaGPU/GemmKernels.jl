@@ -11,13 +11,24 @@ kernel(::Type{Layout.UnsafeAlignedColMajor{T}}, ::Type{Layout.UnsafeAlignedRowMa
 kernel(::Type{Layout.UnsafeAlignedRowMajor{T}}, ::Type{Layout.UnsafeAlignedColMajor{T}}) where {T} = Kernel.matmul_pipelined
 kernel(::Type{Layout.UnsafeAlignedRowMajor{T}}, ::Type{Layout.UnsafeAlignedRowMajor{T}}) where {T} = Kernel.matmul_pipelined
 
-# Based on https://github.com/JuliaGPU/CUDA.jl/blob/bd5a2a8800e91eb6a7df89eb5dd4bb8fc503541d/lib/cublas/wrappers.jl#L743-L769
-function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMatrix,
-                 beta::Number, C::CuMatrix; wmma::Union{Bool,Nothing}=nothing)
-    m = size(A, transA == 'N' ? 1 : 2)
-    k = size(A, transA == 'N' ? 2 : 1)
-    n = size(B, transB == 'N' ? 2 : 1)
-    if m != size(C, 1) || n != size(C, 2) || k != size(B, transB == 'N' ? 1 : 2)
+const configs = Dict{}()
+@inline function get_config(args...)
+    val = get(configs, args, nothing)
+    if val === nothing
+        val = configs[args] = create_config(args...)
+    end
+    return val
+end
+@noinline function create_config(A::Type, sizeA::Dims, stridesA::Dims, transA::Char,
+                                 B::Type, sizeC::Dims, stridesC::Dims, transB::Char,
+                                 C::Type, sizeB::Dims, stridesB::Dims,
+                                 alpha::Type, zeroAlpha::Bool,
+                                 beta::Type, zeroBeta::Bool,
+                                 wmma::Union{Bool,Nothing})
+    m = transA == 'N' ? sizeA[1] : sizeA[2]
+    k = transA == 'N' ? sizeA[2] : sizeA[1]
+    n = transB == 'N' ? sizeB[2] : sizeB[1]
+    if m != sizeC[1] || n != sizeC[2] || k != (transB == 'N' ? sizeB[1] : sizeB[2])
         throw(DimensionMismatch("Dimensions do not match"))
     end
 
@@ -62,11 +73,11 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMa
 
     # determine global memory layouts
     ## check if tiles begin at aligned addresses, allowing use of vectorized loads & stores
-    a_aligned = (stride(A, 2) * sizeof(eltype(A))) % 16 == 0
-    b_aligned = (stride(B, 2) * sizeof(eltype(B))) % 16 == 0
-    c_aligned = (stride(C, 2) * sizeof(eltype(C))) % 16 == 0
+    a_aligned = (stridesA[2] * sizeof(eltype(A))) % 16 == 0
+    b_aligned = (stridesB[2] * sizeof(eltype(B))) % 16 == 0
+    c_aligned = (stridesC[2] * sizeof(eltype(C))) % 16 == 0
     ## if alpha is zero, we don't need to load A or B
-    if iszero(alpha)
+    if zeroAlpha
         global_a_layout = Layout.Zero{eltype(A)}
         global_b_layout = Layout.Zero{eltype(B)}
     else
@@ -82,7 +93,7 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMa
         end
     end
     ## if beta is zero, we don't need to load C
-    global_c_layout = if iszero(beta)
+    global_c_layout = if zeroBeta
         Layout.Zero{eltype(C)}
     else
         if c_aligned && m%block_shape.M == 0 && n%block_shape.N == 0
@@ -121,12 +132,26 @@ function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMa
         )
     end
 
+    return conf, compute_type, kernel(global_a_layout, global_b_layout)
+end
+
+function gemmEx!(transA::Char, transB::Char, alpha::Number, A::CuMatrix, B::CuMatrix,
+                 beta::Number, C::CuMatrix; wmma::Union{Bool,Nothing}=nothing)
+    conf, compute_type, kernel = get_config(
+        typeof(A), size(A), strides(A), transA,
+        typeof(B), size(B), strides(B), transB,
+        typeof(C), size(C), strides(C),
+        typeof(alpha), iszero(alpha),
+        typeof(beta), iszero(beta),
+        wmma
+    )
+
     alpha = convert(compute_type, alpha)
     beta = convert(eltype(C), beta)
     GemmKernels.matmul(A, B, C, C, conf;
                        transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
                        transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-                       kernel = kernel(global_a_layout, global_b_layout)
+                       kernel
                       )
     C
 end
