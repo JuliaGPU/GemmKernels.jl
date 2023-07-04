@@ -54,11 +54,11 @@ function main()
         block_shape = block_shape,
         operator = Operator.FPUOp{operator_shape.M, operator_shape.N, operator_shape.K, data_type, compute_type},
 
-        global_a_layout = Layout.AlignedColMajor{compute_type},
-        global_b_layout = Layout.AlignedColMajor{compute_type},
+        global_a_layout = Layout.UnsafeAlignedColMajor{compute_type},
+        global_b_layout = Layout.UnsafeAlignedColMajor{compute_type},
 
-        global_c_layout = Layout.AlignedColMajor{data_type},
-        global_d_layout = Layout.AlignedColMajor{data_type},
+        global_c_layout = Layout.UnsafeAlignedColMajor{data_type},
+        global_d_layout = Layout.UnsafeAlignedColMajor{data_type},
 
         is_a_col_major = true,
         is_b_col_major = true,

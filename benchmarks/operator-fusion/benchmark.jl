@@ -115,11 +115,11 @@ function bench_gemmkernels(a, b, c, M, N, K, transpose_a, transpose_b)
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+        global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+        global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,
@@ -137,11 +137,11 @@ function bench_gemmkernels_relu(a, b, c, M, N, K, transpose_a, transpose_b)
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+        global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+        global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,
@@ -160,11 +160,11 @@ function bench_gemmkernels_bias(a, b, c, bias, M, N, K, transpose_a, transpose_b
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+        global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+        global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,
@@ -183,11 +183,11 @@ function bench_gemmkernels_biasrelu(a, b, c, bias, M, N, K, transpose_a, transpo
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+        global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+        global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,
@@ -207,11 +207,11 @@ function bench_gemmkernels_biasrelutwice(a, b, c, bias, M, N, K, transpose_a, tr
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+        global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+        global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,
@@ -232,11 +232,11 @@ function bench_gemmkernels_biasrelutwice_ab_elop(a, b, c, bias, M, N, K, transpo
         conf = GemmKernels.get_config(
                                       gemm_shape = (M = M, N = N, K = K),
         operator = Operator.WMMAOp{16, 16, 16, Float32},
-        global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-        global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-        global_c_layout = Layout.AlignedColMajor{Float32},
-        global_d_layout = Layout.AlignedColMajor{Float32},
+        global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+        global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
         is_a_col_major = !transpose_a,
         is_b_col_major = !transpose_b,

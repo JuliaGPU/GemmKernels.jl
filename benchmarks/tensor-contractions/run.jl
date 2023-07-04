@@ -19,7 +19,7 @@ A = CuArray(rand(Float16, (SB, SD, SA)))
 B = CuArray(rand(Float16, (SD, SC)))
 
 # layout for the A tensor
-abstract type LayoutA{T} <: Layout.AlignedColMajor{T} end
+abstract type LayoutA{T} <: Layout.UnsafeAlignedColMajor{T} end
 
 @inline function Layout.load(::Type{LayoutA{T}}, workspace, tile::Tile{size}) where {T, size}
     NUMEL = 16 ÷ sizeof(T)
@@ -38,7 +38,7 @@ abstract type LayoutA{T} <: Layout.AlignedColMajor{T} end
 end
 
 # layout for the B tensor
-abstract type LayoutB{T} <: Layout.AlignedColMajor{T} end
+abstract type LayoutB{T} <: Layout.UnsafeAlignedColMajor{T} end
 
 @inline function Layout.load(::Type{LayoutB{T}}, workspace, tile::Tile{size}) where {T, size}
     NUMEL = 16 ÷ sizeof(T)
@@ -55,7 +55,7 @@ abstract type LayoutB{T} <: Layout.AlignedColMajor{T} end
 end
 
 # layout for the C tensor
-abstract type LayoutC{T} <: Layout.AlignedColMajor{T} end
+abstract type LayoutC{T} <: Layout.UnsafeAlignedColMajor{T} end
 
 @inline function Layout.load(::Type{LayoutC{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
@@ -66,7 +66,7 @@ abstract type LayoutC{T} <: Layout.AlignedColMajor{T} end
 end
 
 # layout for the D tensor
-abstract type LayoutD{T} <: Layout.AlignedColMajor{T} end
+abstract type LayoutD{T} <: Layout.UnsafeAlignedColMajor{T} end
 
 @inline function Layout.store!(::Type{LayoutD{T}}, workspace, value, tile::Tile{size}) where {T, size}
     NUMEL = 16 ÷ sizeof(T)
@@ -101,10 +101,10 @@ function gemmkernels_impl(;benchmark = false)
                                   global_c_layout = LayoutC{Float16},
                                   global_d_layout = LayoutD{Float16},
 
-                                  shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
-                                  shared_b_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
-                                  shared_c_layout = Layout.AlignedColMajor{Float16},
-                                  shared_d_layout = Layout.AlignedColMajor{Float16},
+                                  shared_a_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float16}, 8},
+                                  shared_b_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float16}, 8},
+                                  shared_c_layout = Layout.UnsafeAlignedColMajor{Float16},
+                                  shared_d_layout = Layout.UnsafeAlignedColMajor{Float16},
 
                                   is_a_col_major = true,
                                   is_b_col_major = true,

@@ -57,12 +57,12 @@ function bench_gemmkernels(a, b, c, M, N, K, transpose_a, transpose_b, num_itera
                                   gemm_shape = (M = M, N = N, K = K),
                                   operator = Operator.WMMAOp{16, 16, 16, Float32},
                                   global_a_layout = Layout.Diagonal{Float16},
-                                  global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+                                  global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-                                  global_c_layout = Layout.AlignedColMajor{Float32},
-                                  global_d_layout = Layout.AlignedColMajor{Float32},
+                                  global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+                                  global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
-                                  shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
+                                  shared_a_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float16}, 8},
 
                                   is_a_col_major = !transpose_a,
                                   is_b_col_major = !transpose_b,
