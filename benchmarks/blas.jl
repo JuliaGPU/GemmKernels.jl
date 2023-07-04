@@ -42,13 +42,12 @@ let group = addgroup!(group, "WMMA")
     for N in [256, 4096], (ab_type, cd_type) in [(Float16, Float16), (Float16, Float32)]
         # test the effect of alpha and beta
         for (alpha, beta) in [(true, true), (true, false), (false, true)]
-            blas_benchmark(group, ab_type, ab_type, cd_type, N; alpha, beta)
+            blas_benchmark(group, ab_type, ab_type, cd_type, N; alpha, beta, wmma=true)
         end
 
-        # test the effect of transposing
-        for a_transpose in (true, false), b_transpose in (true, false)
-            blas_benchmark(group, ab_type, ab_type, cd_type, N; a_transpose, b_transpose)
-        end
+    # test the effect of transposing
+    for a_transpose in (true, false), b_transpose in (true, false)
+        blas_benchmark(ab_type, ab_type, cd_type, N; a_transpose, b_transpose, wmma=true)
     end
 end
 
@@ -56,12 +55,12 @@ let group = addgroup!(group, "FPU")
     for N in [256, 4096], (a_type, b_type, cd_type) in [(Float32, Float32, Float32)]
         # test the effect of alpha and beta
         for (alpha, beta) in [(true, true), (true, false), (false, true)]
-            blas_benchmark(group, a_type, b_type, cd_type, N; alpha, beta)
+            blas_benchmark(group, a_type, b_type, cd_type, N; alpha, beta, wmma=false)
         end
 
         # test the effect of transposing
         for a_transpose in (true, false), b_transpose in (true, false)
-            blas_benchmark(group, a_type, b_type, cd_type, N; a_transpose, b_transpose)
+            blas_benchmark(group, a_type, b_type, cd_type, N; a_transpose, b_transpose, wmma=false)
         end
     end
 end
