@@ -6,10 +6,12 @@ using Printf
 using Statistics
 
 using StableRNGs
-rng = StableRNG(123)
 
-# to find untuned benchmarks
-BenchmarkTools.DEFAULT_PARAMETERS.evals = 0
+
+# we use setup/teardown phases to allocate/free GPU memory,
+# so make sure to run a couple of evaluations to amortize
+# the effects of using newly-allocated memory.
+BenchmarkTools.DEFAULT_PARAMETERS.evals = 5
 
 @info "Loading previous benchmark results"
 github_token = get(ENV, "GITHUB_TOKEN", nothing)
@@ -49,43 +51,6 @@ include("blas.jl")
 
 @info "Warming-up benchmarks"
 warmup(SUITE; verbose=false)
-
-# load params
-params_file = joinpath(benchmark_results, "params.json")
-params_updated = false
-if !isfile(params_file)
-    @info "Tuning benchmarks"
-    tune!(SUITE)
-    params_updated = true
-else
-    loadparams!(SUITE, BenchmarkTools.load(params_file)[1], :evals, :samples)
-
-    # find untuned benchmarks for which we have the default evals==0
-    function has_untuned(suite)
-        for (ids, benchmark) in BenchmarkTools.leaves(suite)
-            if params(benchmark).evals == 0
-                return true
-            end
-        end
-        return false
-    end
-    if has_untuned(SUITE)
-        @info "Re-tuning benchmarks"
-        tune!(SUITE)
-        params_updated = true
-    end
-end
-if params_updated
-    BenchmarkTools.save(params_file, params(SUITE))
-    if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
-        BenchmarkTools.save(params_file, params(SUITE))
-
-        # commit and push
-        run(`$(git()) -C $benchmark_results add $params_file`)
-        run(`$(git()) -C $benchmark_results commit -q -m "Re-tune benchmarks."`)
-        run(`$(git()) -C $benchmark_results push -q`)
-    end
-end
 
 @info "Running benchmarks"
 timings = run(SUITE; verbose=true)
@@ -165,8 +130,8 @@ if previous_results !== nothing
     else
         print(io, """
 
-            | ID | before | after | change |
-            |----|--------|-------|--------|
+            | ID | mean₁ | mean₂ | Δmin |
+            |----|-------|-------|------|
             """)
         for (ids, j) in judgements
             old = rmskew(before[ids])
