@@ -140,12 +140,13 @@ abstract type RowMajor{T} <: LayoutBase{T} end
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
-            if checkbounds(Bool, workspace, t.index[1] + 1, t.index[2] + 1)
-                @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1]
-                @inbounds @immutable x[(j - 1) * tile.size[1] + i] = VecElement(val)
+            if checkbounds(Bool, workspace, t.index[2] + 1, t.index[1] + 1)
+                @inbounds val = workspace[t.index[2] + 1, t.index[1] + 1]
+                @inbounds @immutable x[(i - 1) * tile.size[2] + j] = VecElement(val)
             end
         end
     end
+
     return x
 end
 
@@ -153,9 +154,9 @@ end
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
-            @inbounds val = values[(j - 1) * tile.size[1] + i]
-            if checkbounds(Bool, workspace, t.index[1] + 1, t.index[2] + 1)
-                @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = val.value
+            @inbounds val = value[(i - 1) * tile.size[2] + j]
+            if checkbounds(Bool, workspace, t.index[2] + 1, t.index[1] + 1)
+                @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = val
             end
         end
     end
