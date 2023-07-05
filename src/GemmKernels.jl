@@ -1,17 +1,21 @@
 module GemmKernels
 
-include("tiling.jl")
+using CUDA
+using LinearAlgebra
 
+# utilities
+include("tiling.jl")
+include("array.jl")
+
+# framework
 include("config.jl")
 include("epilogue.jl")
-include("array.jl")
 include("kernel.jl")
 include("layout.jl")
 include("operator.jl")
 include("transform.jl")
 
-include("launch.jl")
-
-include("blas.jl")
+# instantiations
+include("matmul.jl")
 
 end

@@ -29,8 +29,8 @@ end
             b   = CuArray(parent(b_h))
             c   = CuArray(c_h)
 
-            GemmKernels.BLAS.matmatmul!(c, transpose_a ? 'T' : 'N', transpose_b ? 'T' : 'N',
-                                        a, b, alpha, beta; wmma=true)
+            GemmKernels.matmatmul!(c, transpose_a ? 'T' : 'N', transpose_b ? 'T' : 'N',
+                                   a, b, alpha, beta; wmma=true)
             mul!(c_h, a_h, b_h, alpha, beta)
 
             @test c_h ≈ Array(c) rtol=sqrt(eps(AB_type))
@@ -58,8 +58,8 @@ end
             b   = CuArray(parent(b_h))
             c   = CuArray(c_h)
 
-            GemmKernels.BLAS.matmatmul!(c, transpose_a ? 'T' : 'N', transpose_b ? 'T' : 'N',
-                                        a, b, alpha, beta; wmma=false)
+            GemmKernels.matmatmul!(c, transpose_a ? 'T' : 'N', transpose_b ? 'T' : 'N',
+                                   a, b, alpha, beta; wmma=false)
             mul!(c_h, a_h, b_h, alpha, beta)
 
             @test c_h ≈ Array(c) rtol=sqrt(eps(compute_type))
