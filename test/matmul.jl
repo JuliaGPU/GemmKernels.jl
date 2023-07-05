@@ -43,11 +43,11 @@ using LinearAlgebra
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 64, N = 64, K = 32),
                                             operator = Operator.FPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
-                                            global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
-                                            global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
+                                            global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
+                                            global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
-                                            global_c_layout = Layout.AlignedColMajor{CD_type},
-                                            global_d_layout = Layout.AlignedColMajor{CD_type},
+                                            global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                            global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
 
                                             is_a_col_major = !transpose_a,
                                             is_b_col_major = !transpose_b,
@@ -101,11 +101,11 @@ using LinearAlgebra
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 128, N = 64, K = 32),
                                             operator = Operator.FPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
-                                            global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
-                                            global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
+                                            global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
+                                            global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
-                                            global_c_layout = Layout.AlignedColMajor{CD_type},
-                                            global_d_layout = Layout.AlignedColMajor{CD_type},
+                                            global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                            global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
 
                                             is_a_col_major = !transpose_a,
                                             is_b_col_major = !transpose_b,
@@ -162,11 +162,11 @@ using LinearAlgebra
                                             gemm_shape = (M = M, N = N, K = K),
                                             block_shape = (M = 64, N = 64, K = 32),
                                             operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
-                                            global_a_layout = transpose_a ? Layout.AlignedRowMajor{A_type} : Layout.AlignedColMajor{A_type},
-                                            global_b_layout = transpose_b ? Layout.AlignedRowMajor{B_type} : Layout.AlignedColMajor{B_type},
+                                            global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
+                                            global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
-                                            global_c_layout = Layout.AlignedColMajor{CD_type},
-                                            global_d_layout = Layout.AlignedColMajor{CD_type},
+                                            global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                            global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
 
                                             is_a_col_major = !transpose_a,
                                             is_b_col_major = !transpose_b,
@@ -202,11 +202,11 @@ using LinearAlgebra
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
                                           operator = Operator.WMMAOp{16, 16, 16, AB_type, CD_type},
-                                          global_a_layout = transpose_a ? Layout.AlignedRowMajor{AB_type} : Layout.AlignedColMajor{AB_type},
-                                          global_b_layout = transpose_b ? Layout.AlignedRowMajor{AB_type} : Layout.AlignedColMajor{AB_type},
+                                          global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
+                                          global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
 
-                                          global_c_layout = Layout.AlignedColMajor{CD_type},
-                                          global_d_layout = Layout.AlignedColMajor{CD_type},
+                                          global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                          global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
 
                                           is_a_col_major = !transpose_a,
                                           is_b_col_major = !transpose_b,
@@ -255,11 +255,11 @@ using LinearAlgebra
             conf = GemmKernels.get_config(
                                           gemm_shape = (M = M, N = N, K = K),
                                           operator = Operator.WMMAOp{16, 16, 16, Float16, Float32},
-                                          global_a_layout = transpose_a ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
-                                          global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+                                          global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
+                                          global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-                                          global_c_layout = Layout.AlignedColMajor{Float32},
-                                          global_d_layout = Layout.AlignedColMajor{Float32},
+                                          global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+                                          global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
                                           is_a_col_major = !transpose_a,
                                           is_b_col_major = !transpose_b,
@@ -302,12 +302,12 @@ using LinearAlgebra
                                           gemm_shape = (M = M, N = N, K = K),
                                           operator = Operator.WMMAOp{16, 16, 16, Float16, Float32},
                                           global_a_layout = Layout.Diagonal{Float16},
-                                          global_b_layout = transpose_b ? Layout.AlignedRowMajor{Float16} : Layout.AlignedColMajor{Float16},
+                                          global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{Float16} : Layout.UnsafeAlignedColMajor{Float16},
 
-                                          global_c_layout = Layout.AlignedColMajor{Float32},
-                                          global_d_layout = Layout.AlignedColMajor{Float32},
+                                          global_c_layout = Layout.UnsafeAlignedColMajor{Float32},
+                                          global_d_layout = Layout.UnsafeAlignedColMajor{Float32},
 
-                                          shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
+                                          shared_a_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float16}, 8},
 
                                           is_a_col_major = !transpose_a,
                                           is_b_col_major = !transpose_b,

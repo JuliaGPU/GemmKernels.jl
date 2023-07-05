@@ -85,17 +85,98 @@ end
 @inline Base.@propagate_inbounds load(::Type{<:Padded{L, P}}, workspace, tile::Tile, logical_size::NamedTuple) where {L, P} = load(L, workspace, tile)
 @inline Base.@propagate_inbounds store!(::Type{<:Padded{L, P}}, workspace, value, tile::Tile) where {L, P} = store!(L, workspace, value, tile::Tile)
 
-# ---------------
-# AlignedColMajor
-# ---------------
+# --------
+# ColMajor
+# --------
 
-abstract type AlignedColMajor{T} <: LayoutBase{T} end
+abstract type ColMajor{T} <: LayoutBase{T} end
 
-@inline physical_size(::Type{<:Padded{AlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
+@inline physical_size(::Type{<:Padded{ColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 
-@inline fragtype(::Type{<:AlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:ColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
 
-@inline Base.@propagate_inbounds function load(::Type{<:AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+@inline Base.@propagate_inbounds function load(::Type{<:ColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+    x = ntuple(i -> VecElement(zero(T)), tile.size[1] * tile.size[2])
+
+    @loopinfo unroll for j = 1 : tile.size[2]
+        @loopinfo unroll for i = 1 : tile.size[1]
+            t = translate_offset(tile, (i - 1, j - 1))
+            if checkbounds(Bool, workspace, t.index[1] + 1, t.index[2] + 1)
+                @inbounds val = workspace[t.index[1] + 1, t.index[2] + 1]
+                @inbounds @immutable x[(i - 1) * tile.size[2] + j] = VecElement(val)
+            end
+        end
+    end
+    return x
+end
+
+@inline Base.@propagate_inbounds function store!(::Type{<:ColMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
+    @loopinfo unroll for j = 1 : tile.size[2]
+        @loopinfo unroll for i = 1 : tile.size[1]
+            t = translate_offset(tile, (i - 1, j - 1))
+            @inbounds val = values[(i - 1) * tile.size[2] + j]
+            if checkbounds(Bool, workspace, t.index[1] + 1, t.index[2] + 1)
+                @inbounds workspace[t.index[1] + 1, t.index[2] + 1] = val.value
+            end
+        end
+    end
+
+    return
+end
+
+# --------
+# RowMajor
+# --------
+
+abstract type RowMajor{T} <: LayoutBase{T} end
+
+@inline physical_size(::Type{<:Padded{RowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1], logical_size[2] + P)
+
+@inline fragtype(::Type{<:RowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+
+@inline Base.@propagate_inbounds function load(::Type{<:RowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+    x = ntuple(i -> VecElement(zero(T)), tile.size[1] * tile.size[2])
+
+    @loopinfo unroll for i = 1 : tile.size[1]
+        @loopinfo unroll for j = 1 : tile.size[2]
+            t = translate_offset(tile, (i - 1, j - 1))
+            if checkbounds(Bool, workspace, t.index[2] + 1, t.index[1] + 1)
+                @inbounds val = workspace[t.index[2] + 1, t.index[1] + 1]
+                @inbounds @immutable x[(i - 1) * tile.size[2] + j] = VecElement(val)
+            end
+        end
+    end
+
+    return x
+end
+
+@inline Base.@propagate_inbounds function store!(::Type{<:RowMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
+    @loopinfo unroll for i = 1 : tile.size[1]
+        @loopinfo unroll for j = 1 : tile.size[2]
+            t = translate_offset(tile, (i - 1, j - 1))
+            @inbounds val = value[(i - 1) * tile.size[2] + j]
+            if checkbounds(Bool, workspace, t.index[2] + 1, t.index[1] + 1)
+                @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = val
+            end
+        end
+    end
+
+    return
+end
+
+# ---------------------
+# UnsafeAlignedColMajor
+# ---------------------
+
+# assumes that memory is aligned, and that tiles exactly cover the workspace
+
+abstract type UnsafeAlignedColMajor{T} <: LayoutBase{T} end
+
+@inline physical_size(::Type{<:Padded{UnsafeAlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
+
+@inline fragtype(::Type{<:UnsafeAlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+
+@inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     linear_base = linearise(tile.base, Base.size(workspace))
@@ -106,7 +187,7 @@ abstract type AlignedColMajor{T} <: LayoutBase{T} end
     return vloada(Vec{N, T}, pointer(workspace, linear_idx))
 end
 
-@inline Base.@propagate_inbounds function store!(::Type{<:AlignedColMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
+@inline Base.@propagate_inbounds function store!(::Type{<:UnsafeAlignedColMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     linear_base = linearise(tile.base, Base.size(workspace))
@@ -115,6 +196,7 @@ end
 
     @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
     vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
+    return
 end
 
 # --------
@@ -134,17 +216,19 @@ end
 
 @inline threadblock_condition(layout_a::Type{<:Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
 
-# ---------------
-# AlignedRowMajor
-# ---------------
+# ---------------------
+# UnsafeAlignedRowMajor
+# ---------------------
 
-abstract type AlignedRowMajor{T} <: LayoutBase{T} end
+# assumes that memory is aligned, and that tiles exactly cover the workspace
 
-@inline physical_size(::Type{<:Padded{AlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
+abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
 
-@inline fragtype(::Type{<:AlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline physical_size(::Type{<:Padded{UnsafeAlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
-@inline Base.@propagate_inbounds function load(::Type{<:AlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
+@inline fragtype(::Type{<:UnsafeAlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+
+@inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
@@ -155,7 +239,7 @@ abstract type AlignedRowMajor{T} <: LayoutBase{T} end
     return vloada(Vec{N, T}, pointer(workspace, linear_idx))
 end
 
-@inline Base.@propagate_inbounds function store!(::Type{<:AlignedRowMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
+@inline Base.@propagate_inbounds function store!(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
     linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))

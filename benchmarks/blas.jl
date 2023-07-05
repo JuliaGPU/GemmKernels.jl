@@ -29,7 +29,7 @@ function blas_benchmark(group, a_type, b_type, cd_type, N, M=N, K=N; alpha=true,
     #       influence from the Julia scheduler
     group[name] = @benchmarkable(
         begin
-            GemmKernels.BLAS.gemmEx!($a_layout, $b_layout, $alpha, a, b, $beta, c; $(kwargs)...)
+            GemmKernels.BLAS.matmatmul!(c, $a_layout, $b_layout, a, b, $alpha, $beta; $(kwargs)...)
             CUDA.cuStreamSynchronize(stream())
         end,
         setup=(a=CuArray($a_h); b=CuArray($b_h); c=CuArray($c_h);

@@ -27,8 +27,10 @@ abstract type GeneralFPUOp{M, N, K, CT, AT} end
 @inline shape(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}) where {M, N, K, CT, AT} = (M = M, N = N, K = K)
 
 for (layout_type, convert_index_func) in [
-                                        (Layout.AlignedColMajor, identity),
-                                        (Layout.AlignedRowMajor, x -> reverse(Tuple(x)))
+                                        (Layout.ColMajor, identity),
+                                        (Layout.UnsafeAlignedColMajor, identity),
+                                        (Layout.RowMajor, x -> reverse(Tuple(x))),
+                                        (Layout.UnsafeAlignedRowMajor, x -> reverse(Tuple(x))),
                                        ]
     @eval begin
         @inline fragtype_a(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT} = NTuple{M * K ÷ 4, CT}
@@ -148,8 +150,10 @@ struct WMMAOp{M, N, K, CT, AT} end
 
 # convert_index_func: function used to transpose the index in case of a row-major layout
 for (layout_type, wmma_layout_type, convert_index_func) in [
-                                        (Layout.AlignedColMajor, WMMA.ColMajor, identity),
-                                        (Layout.AlignedRowMajor, WMMA.RowMajor, x -> reverse(Tuple(x)))
+                                        (Layout.ColMajor, WMMA.ColMajor, identity),
+                                        (Layout.UnsafeAlignedColMajor, WMMA.ColMajor, identity),
+                                        (Layout.RowMajor, WMMA.RowMajor, x -> reverse(Tuple(x))),
+                                        (Layout.UnsafeAlignedRowMajor, WMMA.RowMajor, x -> reverse(Tuple(x))),
                                        ]
     @eval begin
         @inline fragtype_a(::Type{WMMAOp{16, 16, 16, CT, AT}}, ::Type{$layout_type{CT}}) where {CT, AT} = WMMA.Fragment{16, 16, 16, 16, CT, $wmma_layout_type, WMMA.MatrixA}
