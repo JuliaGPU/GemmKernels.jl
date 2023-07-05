@@ -93,7 +93,7 @@ abstract type ColMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{ColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 
-@inline fragtype(::Type{<:ColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:ColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], T}
 
 @inline Base.@propagate_inbounds function load(::Type{<:ColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> VecElement(zero(T)), tile.size[1] * tile.size[2])
@@ -132,7 +132,7 @@ abstract type RowMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{RowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1], logical_size[2] + P)
 
-@inline fragtype(::Type{<:RowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:RowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], T}
 
 @inline Base.@propagate_inbounds function load(::Type{<:RowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> VecElement(zero(T)), tile.size[1] * tile.size[2])
