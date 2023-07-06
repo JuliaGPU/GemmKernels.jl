@@ -10,10 +10,13 @@ function main()
 
     # pow2-sized, 128-bit aligned inputs, so we can use aligned layouts.
     # we don't have transposed inputs, so everything is column major.
+    @assert stride(A, 2) % 16 == 0
     global_a_layout = Layout.UnsafeAlignedColMajor{eltype(A)}
+    @assert stride(B, 2) % 16 == 0
     global_b_layout = Layout.UnsafeAlignedColMajor{eltype(B)}
     # we want to do a simple C = A * B, so no need to load C first.
     global_c_layout = Layout.Zero{eltype(C)}
+    @assert stride(C, 2) % 16 == 0
     global_d_layout = Layout.UnsafeAlignedColMajor{eltype(C)}
 
     # shared layouts are similar.
@@ -29,11 +32,15 @@ function main()
     # we use the single-stage kernel, for simplicity
     kernel = Kernel.matmul_singlestage
 
-    # the block shape is determined by a heuristic. we assume that it will exactly cover
-    # the inputs, so we can use the unsafe layouts
+    # the block shape can be determined by a heuristic, but we'll just hard code it here.
+    # note that it exactly covers the inputs, so that we can use the unsafe layouts.
+    block_shape = (M = 128, N = 128, K = 32)
+    @assert M % block_shape.M == 0
+    @assert N % block_shape.N == 0
+    @assert K % block_shape.K == 0
 
     conf = GemmKernels.get_config(;
-        gemm_shape = (; M, N, K),
+        gemm_shape = (; M, N, K), block_shape,
         operator = Operator.FPUOp{8, 8, 1, compute_type, eltype(C)},
 
         global_a_layout, global_b_layout, global_c_layout, global_d_layout,
