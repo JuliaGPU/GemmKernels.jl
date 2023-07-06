@@ -261,7 +261,9 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
 end
 
 @inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S, col_major}, state = 1) where {tile_size, parent_size, names, T, S, col_major}
-    if state > length(it.subtile_indices)
+    # it.idx can be out of bounds if we spawned too many warps.
+    # state will be out of bounds when we finish processing this subtile.
+    if it.idx > length(it.subtile_indices) || state > length(it.subtile_indices)
         return nothing
     end
 
