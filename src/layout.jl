@@ -19,11 +19,26 @@ using Base.Cartesian: @ntuple
 
 struct Vec{N, T} end
 
+@noinline function throw_alignmenterror(ptr)
+    @cuprintln "ERROR: AlignmentError: Pointer $ptr is not properly aligned for vectorized load/store"
+    error()
+end
+
+@inline function checkalignment(ptr)
+    checkalignment(Bool, ptr) || throw_alignmenterror(ptr)
+    nothing
+end
+
+@inline function checkalignment(::Type{Bool}, ptr)
+    Int(ptr) % 16 == 0
+end
+
 @inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}) where {N, T, AS}
     alignment = sizeof(T) * N
 
     return quote
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
+        @boundscheck checkalignment(vec_ptr)
         return unsafe_load(vec_ptr, 1, Val($alignment))
     end
 end
@@ -40,6 +55,7 @@ end
         append!(ex.args, (quote
             y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
+            @boundscheck checkalignment(vec_ptr)
             unsafe_store!(vec_ptr, y, $offset ÷ N + 1, Val($alignment))
         end).args)
     end
