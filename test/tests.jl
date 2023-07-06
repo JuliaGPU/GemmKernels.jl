@@ -14,6 +14,7 @@ try
         include("tiling.jl")
         include("matmul.jl")
         include("blas.jl")
+        include("examples.jl")
     end
 finally
     if myid() == 1

@@ -41,7 +41,7 @@ julia> GemmKernels.mul!(C, A, B)
 ```
 
 For more control, e.g. to use optimized layouts, or fuse the multiplication with a bias, you
-need to use the low-level `GemmKernels.matmul` interface. For examples, see the test suite.
+need to use the low-level `GemmKernels.matmul` interface (see the `examples` directory).
 
 
 ## Performance
