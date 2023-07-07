@@ -30,11 +30,24 @@ function load_results()
     proc = open(`$(git()) -C $benchmark_results log --first-parent --pretty=format:"%H" origin/master`)
     while !eof(proc)
         commit = readline(proc)
+
+        details_file = joinpath(benchmark_results, "details-$commit.json")
+        details = if isfile(details_file)
+            json = JSON.parsefile(details_file)
+            # the named tuples got stored as dicts; convert them back to named tuples
+            reconstruct_details(d::Dict) = (; Dict(Symbol(k)=>v for (k,v) in d)...)
+            # the id arrays got stored as a string; parse them back
+            reconstruct_ids(d::Dict, f=identity) = Dict(eval(Meta.parse(k))=>f(v) for (k,v) in json)
+            reconstruct_ids(json, reconstruct_details)
+        else
+            nothing
+        end
+
         results_file = joinpath(benchmark_results, "results-$commit.json")
         if isfile(results_file)
             timings = BenchmarkTools.load(results_file)[1]
             close(proc)
-            return (; commit, timings)
+            return (; commit, timings, details)
         end
     end
     return nothing
@@ -128,12 +141,35 @@ function markdown_escaped_code(str)
 end
 idrepr(ids::Vector) = join(map(markdown_escaped_code, ids), " ")
 function resultrow(ids, j::BenchmarkTools.TrialJudgement,
-                   old::BenchmarkTools.Trial, new::BenchmarkTools.Trial)
-    t_old = prettytime(time(mean(old)), time(std(old)))
-    t_new = prettytime(time(mean(new)), time(std(new)))
+                   old::BenchmarkTools.Trial, new::BenchmarkTools.Trial,
+                   old_details, new_details)
+    str_old = prettytime(time(mean(old)), time(std(old)))
+    str_new = prettytime(time(mean(new)), time(std(new)))
+    if old_details !== nothing
+        if old_details.registers != new_details.registers
+            str_old *= "<br>$(old_details.registers) regs"
+            str_new *= "<br>$(new_details.registers) regs"
+        end
+        if old_details.dynamic_shared_mem != new_details.dynamic_shared_mem
+            str_old *= "<br>$(Base.format_bytes(old_details.dynamic_shared_mem)) dynamic shmem"
+            str_new *= "<br>$(Base.format_bytes(new_details.dynamic_shared_mem)) dynamic shmem"
+        end
+        if old_details.static_shared_mem != new_details.static_shared_mem
+            str_old *= "<br>$(Base.format_bytes(old_details.static_shared_mem)) static shmem"
+            str_new *= "<br>$(Base.format_bytes(new_details.static_shared_mem)) static shmem"
+        end
+        if old_details.local_mem != new_details.local_mem
+            str_old *= "<br>$(Base.format_bytes(old_details.local_mem)) local mem"
+            str_new *= "<br>$(Base.format_bytes(new_details.local_mem)) local mem"
+        end
+        if old_details.const_mem != new_details.const_mem
+            str_old *= "<br>$(Base.format_bytes(old_details.const_mem)) const mem"
+            str_new *= "<br>$(Base.format_bytes(new_details.const_mem)) const mem"
+        end
+    end
     ratio = @sprintf("%.1f%%", 100*(1-time(BenchmarkTools.ratio(j))))
     mark = resultmark(time(j))
-    return "| $(idrepr(ids)) | $(t_old) | $(t_new) | $(ratio) $(mark) |"
+    return "| $(idrepr(ids)) | $(str_old) | $(str_new) | $(ratio) $(mark) |"
 end
 const REGRESS_MARK = ":x:"
 const IMPROVE_MARK = ":white_check_mark:"
@@ -161,20 +197,34 @@ if previous_results !== nothing
     judgements = BenchmarkTools.leaves(comparison)
     judgements = judgements[sortperm(map(string∘first, judgements))]
     filter!(judgements) do (ids, j)
-        BenchmarkTools.isregression(time, j) || BenchmarkTools.isimprovement(time, j)
+        time_changed = BenchmarkTools.isregression(time, j) ||
+                       BenchmarkTools.isimprovement(time, j)
+        if previous_results.details !== nothing
+            previous_details = previous_results.details[ids]
+            time_changed ||
+                previous_details.registers != details[ids].registers ||
+                previous_details.dynamic_shared_mem != details[ids].dynamic_shared_mem ||
+                previous_details.static_shared_mem != details[ids].static_shared_mem ||
+                previous_details.local_mem != details[ids].local_mem ||
+                previous_details.const_mem != details[ids].const_mem
+        else
+            time_changed
+        end
     end
     if isempty(judgements)
         println(io, "No regressions or improvements detected.")
     else
         print(io, """
 
-            | ID | mean₁ | mean₂ | Δmin |
-            |----|-------|-------|------|
+            | test | master | PR | Δmin |
+            |------|--------|----|------|
             """)
         for (ids, j) in judgements
             old = rmskew(before[ids])
             new = rmskew(after[ids])
-            println(io, resultrow(ids, j, old, new))
+            old_details = previous_results.details === nothing ? nothing : previous_results.details[ids]
+            new_details = details[ids]
+            println(io, resultrow(ids, j, old, new, old_details, new_details))
         end
     end
     body = String(take!(io))
