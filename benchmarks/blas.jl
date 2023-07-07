@@ -25,6 +25,16 @@ function blas_benchmark(group, a_type, b_type, cd_type, N, M=N, K=N; alpha=true,
     print(io, ")")
     name = String(take!(io))
 
+    # abuse the BenchmarkGroup hierarchy to store some information about the execution
+    a = CuArray(a_h)
+    b = CuArray(b_h)
+    c = CuArray(c_h)
+    info = GemmKernels.Information()
+    GemmKernels.matmatmul!(c, a_layout, b_layout, a, b, alpha, beta; info, kwargs...)
+    group[name * " details"] =
+        (; info.registers,
+           info.dynamic_shared_mem, info.static_shared_mem, info.local_mem, info.const_mem)
+
     # NOTE: we use `cuStreamSynchronize` instead of `synchronize` to avoid
     #       influence from the Julia scheduler
     group[name] = @benchmarkable(

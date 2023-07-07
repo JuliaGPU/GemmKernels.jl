@@ -2,6 +2,17 @@
 # low-level
 #
 
+mutable struct Information
+    registers::Int
+
+    dynamic_shared_mem::Int
+    static_shared_mem::Int
+    local_mem::Int
+    const_mem::Int
+
+    Information() = new(0, 0, 0, 0, 0)
+end
+
 function matmul(a, b, c, d, conf;
                 transform_global_to_shared_a = Transform.Elementwise(),
                 transform_global_to_shared_b = Transform.Elementwise(),
@@ -12,7 +23,8 @@ function matmul(a, b, c, d, conf;
                 transform_shared_to_regs_c = Transform.Elementwise(),
                 transform_regs_to_shared_d = Transform.Elementwise(),
                 epilogue = Epilogue.Default(),
-                kernel = Kernel.matmul_singlestage)
+                kernel = Kernel.matmul_singlestage,
+                info = nothing)
 
     args = [a, b, c, d,
             transform_global_to_shared_a, transform_global_to_shared_b, transform_global_to_shared_c, transform_shared_to_global_d,
@@ -28,6 +40,13 @@ function matmul(a, b, c, d, conf;
 
     hostkernel = @cuda launch=false kernel(args...)
     attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
+    if info !== nothing
+        info.registers = CUDA.registers(hostkernel)
+        info.dynamic_shared_mem = shmem
+        info.static_shared_mem = CUDA.memory(hostkernel).shared
+        info.local_mem = CUDA.memory(hostkernel).local
+        info.const_mem = CUDA.memory(hostkernel).constant
+    end
     hostkernel(args...; shmem, conf.launch_args...)
 end
 
@@ -166,7 +185,8 @@ end
 end
 
 function matmatmul!(C::CuArray, transA::Char, transB::Char, A::CuArray, B::CuArray,
-                    alpha::Number, beta::Number; wmma::Union{Bool,Nothing}=nothing)
+                    alpha::Number, beta::Number; wmma::Union{Bool,Nothing}=nothing,
+                    info=nothing)
     conf, compute_type, kernel = get_config(
         typeof(A), size(A), strides(A), transA=='T',
         typeof(B), size(B), strides(B), transB=='T',
@@ -181,7 +201,7 @@ function matmatmul!(C::CuArray, transA::Char, transB::Char, A::CuArray, B::CuArr
     matmul(A, B, C, C, conf;
            transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
            transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-           kernel
+           kernel, info
           )
     C
 end
@@ -190,9 +210,9 @@ end
 function mul!(C::CuArray,
               A::Union{CuArray, Adjoint{<:Any,<:CuArray}, Transpose{<:Any,<:CuArray}},
               B::Union{CuArray, Adjoint{<:Any,<:CuArray}, Transpose{<:Any,<:CuArray}},
-              alpha=true, beta=false)
+              alpha=true, beta=false; info=nothing)
     transA = A isa Adjoint || A isa Transpose
     transB = B isa Adjoint || B isa Transpose
     matmatmul!(C, transA ? 'T' : 'N', transB ? 'T' : 'N',
-               parent(A), parent(B), alpha, beta)
+               parent(A), parent(B), alpha, beta; info)
 end

@@ -4,6 +4,7 @@ using Git: git
 import GitHub
 using Printf
 using Statistics
+using JSON
 
 using StableRNGs
 
@@ -49,8 +50,23 @@ end
 SUITE = BenchmarkGroup()
 include("blas.jl")
 
-@info "Warming-up benchmarks"
-warmup(SUITE; verbose=false)
+@info "Extracting execution details"
+extract_details(group::BenchmarkGroup) = extract_details!([], [], group)
+function extract_details!(results, parents, group::BenchmarkGroup)
+    for (k, v) in group
+        if isa(v, BenchmarkGroup)
+            keys = Base.typed_vcat(Any, parents, k)
+            extract_details!(results, keys, v)
+        elseif endswith(k, " details")
+            keys = Base.typed_vcat(Any, parents, replace(k, r" details$" => ""))
+            push!(results, (keys, v))
+        end
+    end
+    filter!(((k,v),) -> !endswith(k, " details"), group)
+    return results
+end
+details = Dict(extract_details(SUITE))
+display(details)
 
 @info "Running benchmarks"
 timings = run(SUITE; verbose=true)
@@ -61,9 +77,12 @@ if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
     commit = ENV["BUILDKITE_COMMIT"]
     results_file = joinpath(benchmark_results, "results-$commit.json")
     BenchmarkTools.save(results_file, timings)
+    details_file = joinpath(benchmark_results, "details-$commit.json")
+    JSON.write(details_file, details)
 
     # commit and push
     run(`$(git()) -C $benchmark_results add $results_file`)
+    run(`$(git()) -C $benchmark_results add $details_file`)
     run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
     run(`$(git()) -C $benchmark_results push -q`)
 end
