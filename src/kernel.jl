@@ -40,7 +40,7 @@ function matmul_singlestage(a, b, c, d,
     sync_threads()
 
     # (2) Load a compute_warp.M x compute_warp.N tile of C from shared memory into registers
-    warp_tile = subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
+    warp_tile = @inbounds subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
 
     c_frags = LocalArray{Tuple{num_fragments_m, num_fragments_n}, Operator.fragtype_accum(conf.operator, conf.shared_c_layout)}(undef)
 
@@ -113,7 +113,7 @@ function matmul_singlestage(a, b, c, d,
     # (4) Store the compute_warp.M x compute_warp.N tile of D from registers to shared memory
     shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
 
-    warp_tile = subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
+    warp_tile = @inbounds subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
 
     @loopinfo unroll for i = 1 : num_fragments_m
         @loopinfo unroll for j = 1 : num_fragments_n

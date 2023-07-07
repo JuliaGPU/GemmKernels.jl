@@ -190,11 +190,10 @@ A [`TileIterator`](@ref) represents an iterator over a set of [`Tile`](@ref)s.
 
 See also: [`subdivide`](@ref), [`parallellise`](@ref).
 """
-struct TileIterator{tile_size, parent_size, names, T, S, col_major}
+struct TileIterator{tile_size, parent_size, names, T, S, idxs, col_major}
     parent::Tile{parent_size, names, T}
     subtile_indices::S
     idx::Int32
-    step::Int32
 end
 
 # ----------------
@@ -222,7 +221,7 @@ the calling entity.
 - `idx`: The identity of the calling entity.
 - `count`: The number of cooperating entities.
 """
-@inline function parallellise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count, col_major::Bool=true) where {names, T, size, tile_sz}
+@inline function parallellise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, idxs, col_major::Bool=true) where {names, T, size, tile_sz}
     # Transpose
     tile = col_major ? tile : transpose(tile)
     tiling_size = col_major ? tiling_size : transpose(tiling_size)
@@ -232,9 +231,8 @@ the calling entity.
 
     parent = tile
     subtile_indices = CartesianIndices(num_tiles)
-    step = count
 
-    return TileIterator{_size(tiling_size), _size(tile), _names(tile), T, typeof(subtile_indices), col_major}(parent, subtile_indices, convert(Int32, idx), convert(Int32, step))
+    return TileIterator{_size(tiling_size), _size(tile), _names(tile), T, typeof(subtile_indices), idxs, col_major}(parent, subtile_indices, convert(Int32, idx))
 end
 
 """
@@ -256,12 +254,21 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
 """
 @inline function subdivide(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count) where {names, T, size, tile_sz}
     iter = iterate(parallellise(tile, tiling_size, idx, count))::Tuple{Tile,Any}
-    iter === nothing && throw(BoundsError())
+    @boundscheck begin
+        iter === nothing && throw(BoundsError())
+    end
     @inbounds iter[1]
 end
 
-@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S, col_major}, state = 1) where {tile_size, parent_size, names, T, S, col_major}
+@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S, idxs, col_major}, state = 1) where {tile_size, parent_size, names, T, S, idxs, col_major}
+    if idxs > length(it.subtile_indices) && it.idx > length(it.subtile_indices)
+        # the number of cooperating entities exceeds the number of subtiles.
+        # the short-circuiting check against a static value is crucial for performance,
+        # as it allows removing the dynamic check in many cases.
+        return nothing
+    end
     if state > length(it.subtile_indices)
+        # we've exhausted the iterator
         return nothing
     end
 
@@ -275,7 +282,7 @@ end
     # Transpose
     tile = col_major ? tile : transpose(tile)
 
-    return (tile, state + it.step)
+    return (tile, state + idxs)
 end
 
 end
