@@ -1,5 +1,13 @@
 group = addgroup!(SUITE, "BLAS")
 
+short_type(T::Type) = string(T)
+short_type(::Type{Float16}) = "FP16"
+short_type(::Type{Float32}) = "FP32"
+short_type(::Type{Float64}) = "FP64"
+short_type(::Type{ComplexF16}) = "cFP16"
+short_type(::Type{ComplexF32}) = "cFP32"
+short_type(::Type{ComplexF64}) = "cFP64"
+
 function blas_benchmark(group, a_type, b_type, cd_type, N, M=N, K=N; alpha=true, beta=false,
                         a_transpose=false, b_transpose=false, kwargs...)
     a_h = rand(a_type, (M, K))
@@ -14,14 +22,14 @@ function blas_benchmark(group, a_type, b_type, cd_type, N, M=N, K=N; alpha=true,
 
     # generate a name for the benchmark
     io = IOBuffer()
-    print(io, a_type)
+    print(io, short_type(a_type))
     a_transpose && print(io, "'")
     print(io, "*")
-    print(io, b_type)
+    print(io, short_type(b_type))
     b_transpose && print(io, "'")
-    print(io, "=$cd_type ($N×$K×$N")
-    alpha && print(io, ", alpha")
-    beta && print(io, ", beta")
+    print(io, "=$(short_type(cd_type)) ($N×$K×$N")
+    alpha && print(io, ", α")
+    beta && print(io, ", β")
     print(io, ")")
     name = String(take!(io))
 

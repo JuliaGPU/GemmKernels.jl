@@ -91,6 +91,32 @@ if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
 end
 
 # result rendering functions
+function prettytime(t, std)
+    # timescale
+    scale, unit = if t < 1e3
+        1, "ns"
+    elseif t < 1e6
+        1e3, "μs"
+    elseif t < 1e9
+        1e6, "ms"
+    else
+        1e9, "s"
+    end
+    t /= scale
+    std /= scale
+
+    # round according to the position of the first significant digit in the standard deviation
+    rounded_std = round(std; sigdigits=2)
+    pos = -floor(Int, log10(rounded_std))
+    if pos <= 0
+        rounded_std = round(Int, rounded_std)
+        rounded_t = round(Int, t / 10^abs(pos)) * 10^abs(pos)
+    else
+        rounded_t = round(t; digits=pos)
+    end
+
+    return "$(rounded_t) ± $(rounded_std) $unit"
+end
 function markdown_escaped_code(str)
     ticks = eachmatch(r"`+", str)
     isempty(ticks) && return "`$str`"
@@ -98,15 +124,13 @@ function markdown_escaped_code(str)
     ticks = "`"^ticks
     return string(ticks, startswith(str, '`') ? " " : "", str, endswith(str, '`') ? " " : "", ticks)
 end
-idrepr(ids::Vector) = join(map(markdown_escaped_code, ids), ": ")
+idrepr(ids::Vector) = join(map(markdown_escaped_code, ids), " ")
 function resultrow(ids, j::BenchmarkTools.TrialJudgement,
                    old::BenchmarkTools.Trial, new::BenchmarkTools.Trial)
-    t_old = @sprintf("%s ± %s", BenchmarkTools.prettytime(time(mean(old))),
-                                BenchmarkTools.prettytime(time(std(old))))
-    t_new = @sprintf("%s ± %s", BenchmarkTools.prettytime(time(mean(new))),
-                                BenchmarkTools.prettytime(time(std(new))))
-    ratio = @sprintf("%.1f%%", 100*(1-BenchmarkTools.time(BenchmarkTools.ratio(j))))
-    mark = resultmark(BenchmarkTools.time(j))
+    t_old = prettytime(time(mean(old)), time(std(old)))
+    t_new = prettytime(time(mean(new)), time(std(new)))
+    ratio = @sprintf("%.1f%%", 100*(1-time(BenchmarkTools.ratio(j))))
+    mark = resultmark(time(j))
     return "| $(idrepr(ids)) | $(t_old) | $(t_new) | $(ratio) $(mark) |"
 end
 const REGRESS_MARK = ":x:"
