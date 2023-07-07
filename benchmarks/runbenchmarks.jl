@@ -95,17 +95,7 @@ function markdown_escaped_code(str)
     ticks = "`"^ticks
     return string(ticks, startswith(str, '`') ? " " : "", str, endswith(str, '`') ? " " : "", ticks)
 end
-idrepr(id::Vector) = sprint(idrepr, id)
-function idrepr(io::IO, id::Vector)
-    print(io, "[")
-    first = true
-    for i in id
-        first ? (first = false) : print(io, ", ")
-        show(io, i)
-    end
-    print(io, "]")
-end
-idrepr_md(id::Vector) = markdown_escaped_code(idrepr(id))
+idrepr(ids::Vector) = join(map(markdown_escaped_code, ids), ": ")
 function resultrow(ids, j::BenchmarkTools.TrialJudgement,
                    old::BenchmarkTools.Trial, new::BenchmarkTools.Trial)
     t_old = @sprintf("%s ± %s", BenchmarkTools.prettytime(time(mean(old))),
@@ -114,7 +104,7 @@ function resultrow(ids, j::BenchmarkTools.TrialJudgement,
                                 BenchmarkTools.prettytime(time(std(new))))
     ratio = @sprintf("%.1f%%", 100*(1-BenchmarkTools.time(BenchmarkTools.ratio(j))))
     mark = resultmark(BenchmarkTools.time(j))
-    return "| $(idrepr_md(ids)) | $(t_old) | $(t_new) | $(ratio) $(mark) |"
+    return "| $(idrepr(ids)) | $(t_old) | $(t_new) | $(ratio) $(mark) |"
 end
 const REGRESS_MARK = ":x:"
 const IMPROVE_MARK = ":white_check_mark:"
