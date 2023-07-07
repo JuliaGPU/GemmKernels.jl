@@ -13,7 +13,7 @@ mutable struct Information
     Information() = new(0, 0, 0, 0, 0)
 end
 
-function matmul(a, b, c, d, conf;
+function matmul(conf::Config, a, b, c, d;
                 transform_global_to_shared_a = Transform.Elementwise(),
                 transform_global_to_shared_b = Transform.Elementwise(),
                 transform_global_to_shared_c = Transform.Elementwise(),
@@ -26,11 +26,14 @@ function matmul(a, b, c, d, conf;
                 kernel = Kernel.matmul_singlestage,
                 info = nothing)
 
-    args = [a, b, c, d,
+    args = [conf, a, b, c, d,
             transform_global_to_shared_a, transform_global_to_shared_b, transform_global_to_shared_c, transform_shared_to_global_d,
             transform_shared_to_regs_a, transform_shared_to_regs_b, transform_shared_to_regs_c, transform_regs_to_shared_d,
-            epilogue,
-            conf]
+            epilogue]
+
+    threads = conf.warps_per_block * 32
+    blocks = (cld(conf.matmul_shape.M, conf.block_shape.M),
+              cld(conf.matmul_shape.N, conf.block_shape.N))
 
     shmem = Kernel.shmem_size(conf, kernel)
     max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
@@ -47,7 +50,7 @@ function matmul(a, b, c, d, conf;
         info.local_mem = CUDA.memory(hostkernel).local
         info.const_mem = CUDA.memory(hostkernel).constant
     end
-    hostkernel(args...; shmem, conf.launch_args...)
+    hostkernel(args...; threads, blocks, shmem)
 end
 
 
@@ -121,7 +124,7 @@ end
     end
 
     # determine global memory layouts
-    ## check if tiles begin at aligned addresses, allowing use of vectorized loads & stores
+    ## check if columns begin at aligned addresses, allowing use of vectorized loads & stores
     a_aligned = (stridesA[2] * sizeof(eltype(A))) % 16 == 0
     b_aligned = (stridesB[2] * sizeof(eltype(B))) % 16 == 0
     c_aligned = (stridesC[2] * sizeof(eltype(C))) % 16 == 0
@@ -198,7 +201,7 @@ function matmatmul!(C::CuArray, transA::Char, transB::Char, A::CuArray, B::CuArr
 
     alpha = convert(compute_type, alpha)
     beta = convert(eltype(C), beta)
-    matmul(A, B, C, C, conf;
+    matmul(conf, A, B, C, C;
            transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
            transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
            kernel, info

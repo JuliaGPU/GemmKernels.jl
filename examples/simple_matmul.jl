@@ -50,7 +50,7 @@ function main()
         is_b_col_major = true
     )
 
-    GemmKernels.matmul(A, B, C, parent(C), conf; kernel)
+    GemmKernels.matmul(conf, A, B, C, C; kernel)
 
     @assert Array(C) ≈ Array(A) * Array(B)
 end

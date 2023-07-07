@@ -12,7 +12,7 @@ using LLVMLoopInfo: @loopinfo
 
 struct Default end
 
-@inline function (ep::Default)(d, shmem_d, transform, ::Type{conf}) where {conf <: GemmKernels.Config}
+@inline function (ep::Default)(conf::GemmKernels.Config, d, shmem_d, transform)
     # Constants
     block_i = (blockIdx().x - 1) * conf.block_shape.M
     block_j = (blockIdx().y - 1) * conf.block_shape.N
@@ -51,7 +51,7 @@ end
     return ntuple(k -> VecElement{Float32}(x[k].value + b), Val(4))
 end
 
-@inline function (ep::Bias{B})(d, shmem_d, transform, ::Type{conf}) where {B, conf <: GemmKernels.Config}
+@inline function (ep::Bias{B})(conf::GemmKernels.Config, d, shmem_d, transform) where {B}
     # Constants
     block_i = (blockIdx().x - 1) * conf.block_shape.M
     block_j = (blockIdx().y - 1) * conf.block_shape.N
