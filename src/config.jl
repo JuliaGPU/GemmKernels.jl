@@ -1,97 +1,38 @@
-struct Config{
+@staticdef struct Config
     #= Params =#
-    MATMUL_SHAPE,               # MNK, overall shape of the MATMUL operation
-    BLOCK_SHAPE,                # MNK, shape of each CTA tile
-    WARPS_PER_BLOCK,            # scalar, number of warps per CTA
+    matmul_shape                # MNK, overall shape of the MATMUL operation
+    block_shape                 # MNK, shape of each CTA tile
+    warps_per_block             # scalar, number of warps per CTA
 
-    MEM_A_WARP,                 # MK, shape of each warp tile during memory operations involving matrix A
-    MEM_A_THREAD,               # MK, shape of each thread tile during memory operations involving matrix A
+    mem_a_warp                  # MK, shape of each warp tile during memory operations involving matrix A
+    mem_a_thread                # MK, shape of each thread tile during memory operations involving matrix A
 
-    MEM_B_WARP,                 # KN, shape of each warp tile during memory operations involving matrix B
-    MEM_B_THREAD,               # KN, shape of each thread tile during memory operations involving matrix B
+    mem_b_warp                  # KN, shape of each warp tile during memory operations involving matrix B
+    mem_b_thread                # KN, shape of each thread tile during memory operations involving matrix B
 
-    MEM_CD_WARP,                # MN, shape of each warp tile during memory operations involving matrix C or D
-    MEM_CD_THREAD,              # MN, shape of each thread tile during memory operations involving matrix C or D
+    mem_cd_warp                 # MN, shape of each warp tile during memory operations involving matrix C or D
+    mem_cd_thread               # MN, shape of each thread tile during memory operations involving matrix C or D
 
-    COMPUTE_WARP,               # MNK, shape of each warp tile during the inner loop computations
-    COMPUTE_OP_SHAPE,           # MNK, shape of the operation used in the inner loop
+    compute_warp                # MNK, shape of each warp tile during the inner loop computations
+    compute_op_shape            # MNK, shape of the operation used in the inner loop
 
     #= Layouts =#
-    GLOBAL_A_LAYOUT,            # layout of the A matrix in global memory
-    GLOBAL_B_LAYOUT,            # layout of the B matrix in global memory
-    GLOBAL_C_LAYOUT,            # layout of the C matrix in global memory
-    GLOBAL_D_LAYOUT,            # layout of the D matrix in global memory
+    global_a_layout             # layout of the A matrix in global memory
+    global_b_layout             # layout of the B matrix in global memory
+    global_c_layout             # layout of the C matrix in global memory
+    global_d_layout             # layout of the D matrix in global memory
 
-    SHARED_A_LAYOUT,            # layout of the A matrix in shared memory
-    SHARED_B_LAYOUT,            # layout of the B matrix in shared memory
-    SHARED_C_LAYOUT,            # layout of the C matrix in shared memory
-    SHARED_D_LAYOUT,            # layout of the D matrix in shared memory
+    shared_a_layout             # layout of the A matrix in shared memory
+    shared_b_layout             # layout of the B matrix in shared memory
+    shared_c_layout             # layout of the C matrix in shared memory
+    shared_d_layout             # layout of the D matrix in shared memory
 
     #= Operator =#
-    OPERATOR,                   # which operator to use in the inner loop
+    operator                    # which operator to use in the inner loop
 
     #= Is A & B stored in Column major order? This determines the iteration order of the parallellisation =#
-    IS_A_COL_MAJOR,
-    IS_B_COL_MAJOR
-   }
-end
-
-@inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
-    if sym == :launch_args
-        (; threads = WARPS_PER_BLOCK * 32,
-           blocks = (cld(MATMUL_SHAPE.M, BLOCK_SHAPE.M),
-                     cld(MATMUL_SHAPE.N, BLOCK_SHAPE.N)))
-
-    # convenience accessors for typevars
-    elseif sym == :matmul_shape
-        MATMUL_SHAPE
-    elseif sym == :block_shape
-        BLOCK_SHAPE
-    elseif sym == :warps_per_block
-        WARPS_PER_BLOCK
-    elseif sym == :mem_a_warp
-        MEM_A_WARP
-    elseif sym == :mem_a_thread
-        MEM_A_THREAD
-    elseif sym == :mem_b_warp
-        MEM_B_WARP
-    elseif sym == :mem_b_thread
-        MEM_B_THREAD
-    elseif sym == :mem_cd_warp
-        MEM_CD_WARP
-    elseif sym == :mem_cd_thread
-        MEM_CD_THREAD
-    elseif sym == :compute_warp
-        COMPUTE_WARP
-    elseif sym == :compute_op_shape
-        COMPUTE_OP_SHAPE
-    elseif sym == :global_a_layout
-        GLOBAL_A_LAYOUT
-    elseif sym == :global_b_layout
-        GLOBAL_B_LAYOUT
-    elseif sym == :global_c_layout
-        GLOBAL_C_LAYOUT
-    elseif sym == :global_d_layout
-        GLOBAL_D_LAYOUT
-    elseif sym == :shared_a_layout
-        SHARED_A_LAYOUT
-    elseif sym == :shared_b_layout
-        SHARED_B_LAYOUT
-    elseif sym == :shared_c_layout
-        SHARED_C_LAYOUT
-    elseif sym == :shared_d_layout
-        SHARED_D_LAYOUT
-    elseif sym == :operator
-        OPERATOR
-    elseif sym == :is_a_col_major
-        IS_A_COL_MAJOR
-    elseif sym == :is_b_col_major
-        IS_B_COL_MAJOR
-
-    # fallback
-    else
-        getfield(conf, sym)
-    end
+    is_a_col_major
+    is_b_col_major
 end
 
 function heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout)
@@ -199,7 +140,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     mem_cd_thread = get(params, :mem_cd_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
 
-    return Config{
+    return Config(
         #= Params =#
         gemm_shape,
         block_shape,
@@ -230,5 +171,5 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         #= Is A & B Col Major? =#
         is_a_col_major,
         is_b_col_major,
-    }
+    )
 end

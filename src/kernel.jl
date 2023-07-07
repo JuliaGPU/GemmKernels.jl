@@ -7,11 +7,10 @@ using GemmKernels.Tiling
 using GemmKernels: LocalArray, @immutable
 using LLVMLoopInfo: @loopinfo
 
-function matmul_singlestage(a, b, c, d,
-                          transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
-                          transf_sh2rf_a, transf_sh2rf_b, transf_sh2rf_c, transf_rf2sh_d,
-                          epilogue,
-                          ::Type{conf}) where {conf <: GemmKernels.Config}
+function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
+                            transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
+                            transf_sh2rf_a, transf_sh2rf_b, transf_sh2rf_c, transf_rf2sh_d,
+                            epilogue)
     # Calculate the number of fragments needed to fully cover a warp tile
     num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
     num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
@@ -125,12 +124,12 @@ function matmul_singlestage(a, b, c, d,
     sync_threads()
 
     # (5) Run the epilogue
-    epilogue(d, shmem_d, transf_sh2gl_d, conf)
+    epilogue(conf, d, shmem_d, transf_sh2gl_d)
 
     return
 end
 
-function shmem_size(::Type{conf}, ::typeof(matmul_singlestage)) where {conf <: GemmKernels.Config}
+function shmem_size(conf::GemmKernels.Config, ::typeof(matmul_singlestage))
     size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
              prod(Layout.physical_size(conf.shared_a_layout,
                   (; conf.block_shape.M, conf.block_shape.K)))
@@ -146,11 +145,10 @@ function shmem_size(::Type{conf}, ::typeof(matmul_singlestage)) where {conf <: G
     max(size_c, size_a + size_b, size_d)
 end
 
-function matmul_pipelined(a, b, c, d,
+function matmul_pipelined(conf::GemmKernels.Config, a, b, c, d,
                           transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
                           transf_sh2rf_a, transf_sh2rf_b, transf_sh2rf_c, transf_rf2sh_d,
-                          epilogue,
-                          ::Type{conf}) where {conf <: GemmKernels.Config}
+                          epilogue)
     # Calculate the number of fragments needed to fully cover a warp tile
     num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
     num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
@@ -348,12 +346,12 @@ function matmul_pipelined(a, b, c, d,
     sync_threads()
 
     # (5) Run the epilogue
-    epilogue(d, shmem_d, transf_sh2gl_d, conf)
+    epilogue(conf, d, shmem_d, transf_sh2gl_d)
 
     return
 end
 
-function shmem_size(::Type{conf}, ::typeof(matmul_pipelined)) where {conf <: GemmKernels.Config}
+function shmem_size(conf::GemmKernels.Config, ::typeof(matmul_pipelined))
     size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
              prod(Layout.physical_size(conf.shared_a_layout,
                   (; conf.block_shape.M, conf.block_shape.K)))
