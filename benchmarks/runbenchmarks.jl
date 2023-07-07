@@ -68,6 +68,9 @@ end
 details = Dict(extract_details(SUITE))
 display(details)
 
+@info "Warming-up benchmarks"
+warmup(SUITE; verbose=false)
+
 @info "Running benchmarks"
 timings = run(SUITE; verbose=true)
 println(timings)
