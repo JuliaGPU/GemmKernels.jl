@@ -1,7 +1,26 @@
 using CUDA
 using ForwardDiff
 using GemmKernels
-using LinearAlgebra
+import Octavian, LinearAlgebra
+
+# for large, non-BLAS-compatible matrices, use Octavian.
+matmul!(C, A, B, alpha=true, beta=false) = LinearAlgebra.mul!(C, A, B, alpha, beta)
+function matmul!(C::Array,
+                 A::Union{Array, LinearAlgebra.Transpose{<:Any, <:Array},
+                                 LinearAlgebra.Adjoint{<:Any, <:Array}},
+                 B::Union{Array, LinearAlgebra.Transpose{<:Any, <:Array},
+                                 LinearAlgebra.Adjoint{<:Any, <:Array}},
+                 alpha::Bool=true, beta::Bool=false)
+    supported = eltype(C) <: LinearAlgebra.BlasFloat &&
+                eltype(A) <: LinearAlgebra.BlasFloat &&
+                eltype(B) <: LinearAlgebra.BlasFloat &&
+                eltype(C) == eltype(A) == eltype(B)
+    if !supported && (sizeof(C) > 2^20 || sizeof(A) > 2^20 || sizeof(B) > 2^20)
+        Octavian.matmul!(C, A, B, alpha, beta)
+    else
+        LinearAlgebra.mul!(C, A, B, alpha, beta)
+    end
+end
 
 ################################################################################
 
@@ -62,7 +81,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            mul!(c_h, new_a_h, new_b_h, alpha, beta)
+            matmul!(c_h, new_a_h, new_b_h, alpha, beta)
             if A_type <: Integer
                 @test c_h ≈ Array(d)
             else
@@ -120,7 +139,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            mul!(c_h, new_a_h, new_b_h, alpha, beta)
+            matmul!(c_h, new_a_h, new_b_h, alpha, beta)
             @test c_h ≈ Array(d) rtol=sqrt(eps(A_type))
         end
     end
@@ -221,7 +240,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            mul!(c_h, new_a_h, new_b_h, alpha, beta)
+            matmul!(c_h, new_a_h, new_b_h, alpha, beta)
             @test c_h ≈ Array(d) rtol=sqrt(eps(AB_type))
         end
     end
@@ -273,7 +292,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            mul!(c_h, new_a_h, new_b_h, true, true)
+            matmul!(c_h, new_a_h, new_b_h, true, true)
             @test c_h .+ Array(bias) ≈ Array(d) rtol=sqrt(eps(Float16))
         end
     end
@@ -318,7 +337,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(a_h) : a_h
             new_b_h = transpose_b ? transpose(b_h) : b_h
 
-            mul!(c_h, Diagonal(new_a_h), new_b_h, true, true)
+            matmul!(c_h, Diagonal(new_a_h), new_b_h, true, true)
             @test c_h ≈ Array(d) rtol=sqrt(eps(Float16))
         end
     end
@@ -382,7 +401,7 @@ using LinearAlgebra
             new_a_h = transpose_a ? transpose(new_a_h) : new_a_h
             new_b_h = transpose_b ? transpose(new_b_h) : new_b_h
 
-            mul!(c_h, new_a_h, new_b_h, true, true)
+            matmul!(c_h, new_a_h, new_b_h, true, true)
             @test c_h ≈ Array(d) rtol=sqrt(eps(Float16))
         end
     end
@@ -435,7 +454,7 @@ using LinearAlgebra
             c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_h)
             d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Array(d))
 
-            mul!(c_dual, a_dual, b_dual, true, true)
+            matmul!(c_dual, a_dual, b_dual, true, true)
             @test c_dual ≈ d_dual rtol=sqrt(eps(Float16))
         end
     end
