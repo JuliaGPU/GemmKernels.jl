@@ -11,7 +11,7 @@ LLVMLoopInfo = "8b046642-f1f6-4319-8d3c-209ddc03c586"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [compat]
-CUDA = "3.5, 4"
+CUDA = "3.5, 4, 5"
 ForwardDiff = "0.10"
 LLVM = "3, 4, 5, 6"
 LLVMLoopInfo = "1"
