@@ -14,42 +14,55 @@ using StableRNGs
 # the effects of using newly-allocated memory.
 BenchmarkTools.DEFAULT_PARAMETERS.evals = 5
 
-@info "Loading previous benchmark results"
-github_token = get(ENV, "GITHUB_TOKEN", nothing)
-benchmark_results = mktempdir()
-if github_token === nothing
-    run(`$(git()) clone -q https://github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
-else
-    run(`$(git()) clone -q https://$github_token:x-oauth-basic@github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
+if haskey(ENV, "BUILDKITE_BRANCH")
+    @info "Loading previous benchmark results"
+    github_token = get(ENV, "GITHUB_TOKEN", nothing)
+    benchmark_results = mktempdir()
+    if github_token === nothing
+        run(`$(git()) clone -q https://github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
+    else
+        run(`$(git()) clone -q https://$github_token:x-oauth-basic@github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
+    end
+    run(`$(git()) -C $benchmark_results config --local user.name "JuliaGPU BenchmarkBot"`)
+    run(`$(git()) -C $benchmark_results config --local user.email "nobody@juliagpu.org"`)
 end
-run(`$(git()) -C $benchmark_results config --local user.name "JuliaGPU BenchmarkBot"`)
-run(`$(git()) -C $benchmark_results config --local user.email "nobody@juliagpu.org"`)
 
 # load timings
 function load_results()
-    proc = open(`$(git()) -C $benchmark_results log --first-parent --pretty=format:"%H" origin/master`)
-    while !eof(proc)
-        commit = readline(proc)
+    results_file = joinpath(@__DIR__, "reference-results.json")
+    details_file = joinpath(@__DIR__, "reference-details.json")
+    commit = "local"
 
-        details_file = joinpath(benchmark_results, "details-$commit.json")
-        details = if isfile(details_file)
-            json = JSON.parsefile(details_file)
-            # the named tuples got stored as dicts; convert them back to named tuples
-            reconstruct_details(d::Dict) = (; Dict(Symbol(k)=>v for (k,v) in d)...)
-            # the id arrays got stored as a string; parse them back
-            reconstruct_ids(d::Dict, f=identity) = Dict(eval(Meta.parse(k))=>f(v) for (k,v) in json)
-            reconstruct_ids(json, reconstruct_details)
-        else
-            nothing
-        end
+    if haskey(ENV, "BUILDKITE_BRANCH")
+        proc = open(`$(git()) -C $benchmark_results log --first-parent --pretty=format:"%H" origin/master`)
+        while !eof(proc)
+            commit = readline(proc)
 
-        results_file = joinpath(benchmark_results, "results-$commit.json")
-        if isfile(results_file)
-            timings = BenchmarkTools.load(results_file)[1]
-            close(proc)
-            return (; commit, timings, details)
+            details_file = joinpath(benchmark_results, "details-$commit.json")
+            results_file = joinpath(benchmark_results, "results-$commit.json")
+            if isfile(results_file)
+                break
+            end
         end
+        close(proc)
     end
+
+    details = if isfile(details_file)
+        json = JSON.parsefile(details_file)
+        # the named tuples got stored as dicts; convert them back to named tuples
+        reconstruct_details(d::Dict) = (; Dict(Symbol(k)=>v for (k,v) in d)...)
+        # the id arrays got stored as a string; parse them back
+        reconstruct_ids(d::Dict, f=identity) = Dict(eval(Meta.parse(k))=>f(v) for (k,v) in json)
+        reconstruct_ids(json, reconstruct_details)
+    else
+        nothing
+    end
+
+    if isfile(results_file)
+        timings = BenchmarkTools.load(results_file)[1]
+        return (; commit, timings, details)
+    end
+
     return nothing
 end
 previous_results = load_results()
@@ -103,6 +116,14 @@ if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
     run(`$(git()) -C $benchmark_results add $details_file`)
     run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
     run(`$(git()) -C $benchmark_results push -q`)
+else
+    results_file = joinpath(@__DIR__, "results.json")
+    BenchmarkTools.save(results_file, timings)
+
+    details_file = joinpath(@__DIR__, "details.json")
+    open(details_file, "w") do io
+        JSON.print(io, details)
+    end
 end
 
 # result rendering functions
@@ -231,7 +252,7 @@ if previous_results !== nothing
     println(body)
 
     # comment on PR
-    if github_token !== nothing && get(ENV, "BUILDKITE_PULL_REQUEST", "false") !== "false"
+    if get(ENV, "BUILDKITE_PULL_REQUEST", "false") !== "false" && github_token !== nothing
         auth = GitHub.authenticate(github_token)
         repo = GitHub.repo("JuliaGPU/GemmKernels.jl"; auth)
         pr = parse(Int, ENV["BUILDKITE_PULL_REQUEST"])
