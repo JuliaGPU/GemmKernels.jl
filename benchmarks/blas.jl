@@ -45,15 +45,10 @@ function blas_benchmark(group, a_type, b_type, cd_type, N, M=N, K=N; alpha=true,
 
     # NOTE: we use `cuStreamSynchronize` instead of `synchronize` to avoid
     #       influence from the Julia scheduler
-    group[name] = @benchmarkable(
-        begin
-            GemmKernels.matmatmul!(c, $a_layout, $b_layout, a, b, $alpha, $beta; $(kwargs)...)
-            CUDA.cuStreamSynchronize(stream())
-        end,
-        setup=(a=CuArray($a_h); b=CuArray($b_h); c=CuArray($c_h);
-               CUDA.cuStreamSynchronize(stream())),
-        teardown=(CUDA.unsafe_free!(a); CUDA.unsafe_free!(b); CUDA.unsafe_free!(c))
-    )
+    group[name] = @benchmarkable begin
+        GemmKernels.matmatmul!($c, $a_layout, $b_layout, $a, $b, $alpha, $beta; $(kwargs)...)
+        CUDA.cuStreamSynchronize(stream())
+    end
 end
 
 let group = addgroup!(group, "WMMA")
