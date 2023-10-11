@@ -22,9 +22,12 @@ end
 
 # CT is the compute type used to perform scalar operations in.
 # AT is the accumulator type used to accumulate partial results.
-abstract type GeneralFPUOp{M, N, K, CT, AT} end
+# mb, nb, kb are the base operator shapes (kb must be equal to 1 for now).
+# M, N, K must be multiples of mb, nb, and kb respectively.
+abstract type GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT} end
 
-@inline shape(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}) where {M, N, K, CT, AT} = (M = M, N = N, K = K)
+@inline shape(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}) where {M, N, K, mb, nb, kb, CT, AT} = (M = M, N = N, K = K)
+@inline base_shape(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}) where {M, N, K, mb, nb, kb, CT, AT} = (M = M, N = N, K = K, mb = mb, nb = nb, kb = kb)
 
 for (layout_type, convert_index_func) in [
                                         (Layout.ColMajor, identity),
@@ -33,100 +36,105 @@ for (layout_type, convert_index_func) in [
                                         (Layout.UnsafeAlignedRowMajor, x -> reverse(Tuple(x))),
                                        ]
     @eval begin
-        @inline fragtype_a(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT} = NTuple{M * K ÷ 4, CT}
-        @inline fragtype_b(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT} = NTuple{K * N ÷ 8, CT}
+        @inline function fragtype_a(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, mb, nb, kb, CT, AT, DT} 
+            return NTuple{M * K ÷ mb, CT}
+        end
+        @inline function fragtype_b(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, mb, nb, kb, CT, AT, DT}
+            return NTuple{K * N ÷ nb, CT}
+        end
 
-        @inline function fragtype_accum(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, CT, AT, DT}
+        @inline function fragtype_accum(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}) where {M, N, K, mb, nb, kb, CT, AT, DT}
             return NTuple{M * N ÷ 32, AT}
         end
 
-        @inline function load_a(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, CT, AT, DT}
+        @inline function load_a(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, mb, nb, kb, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
-            op_y = (laneId - 1) % 4 + 1
+            op_y = (laneId - 1) % mb + 1
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.K + tile.offset.K + 1)
 
-            frag = LocalArray{Tuple{M ÷ 4, K}, CT}(undef)
-            @loopinfo unroll for m = 1 : M ÷ 4
+            frag = LocalArray{Tuple{M ÷ mb, K}, CT}(undef)
+            @loopinfo unroll for m = 1 : M ÷ mb
                 @loopinfo unroll for k = 1 : K
-                    y_layout, x_layout = $convert_index_func((y + 4 * (m - 1), x + (k - 1)))
+                    y_layout, x_layout = $convert_index_func((y + mb * (m - 1), x + (k - 1)))
                     @inbounds @immutable frag[m,k] = workspace[y_layout, x_layout]
                 end
             end
 
-            return NTuple{M * K ÷ 4, CT}(frag)
+            return NTuple{M * K ÷ mb, CT}(frag)
         end
 
-        @inline function load_b(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, CT, AT, DT}
+        @inline function load_b(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, mb, nb, kb, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
-            op_x = (laneId - 1) ÷ 4 + 1
+            op_x = (laneId - 1) ÷ mb + 1
             y, x = (tile.base.K + tile.offset.K + 1, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{K, N ÷ 8}, CT}(undef)
-            @loopinfo unroll for n = 1 : N ÷ 8
+            frag = LocalArray{Tuple{K, N ÷ nb}, CT}(undef)
+            @loopinfo unroll for n = 1 : N ÷ nb
                 @loopinfo unroll for k = 1 : K
-                    y_layout, x_layout = $convert_index_func((y + (k - 1), x + 8 * (n - 1)))
+                    y_layout, x_layout = $convert_index_func((y + (k - 1), x + nb * (n - 1)))
                     @inbounds @immutable frag[k,n] = workspace[y_layout, x_layout]
                 end
             end
 
-            return NTuple{K * N ÷ 8, CT}(frag)
+            return NTuple{K * N ÷ nb, CT}(frag)
         end
 
-        @inline function load_c(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, CT, AT, DT}
+        @inline function load_c(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}, workspace, tile::Tile) where {M, N, K, mb, nb, kb, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
-            op_y = (laneId - 1) % 4 + 1
-            op_x = (laneId - 1) ÷ 4 + 1
+            op_y = (laneId - 1) % mb + 1
+            op_x = (laneId - 1) ÷ mb + 1
 
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, AT}(undef)
-            @loopinfo unroll for m = 1 : M ÷ 4
-                @loopinfo unroll for n = 1 : N ÷ 8
-                    @inbounds @immutable frag[m,n] = workspace[y + 4 * (m - 1), x + 8 * (n - 1)]
+
+            frag = LocalArray{Tuple{M ÷ mb, N ÷ nb}, AT}(undef)
+            @loopinfo unroll for m = 1 : M ÷ mb
+                @loopinfo unroll for n = 1 : N ÷ nb
+                    @inbounds @immutable frag[m,n] = workspace[y + mb * (m - 1), x + nb * (n - 1)]
                 end
             end
 
             return NTuple{M * N ÷ 32, AT}(frag)
         end
 
-        @inline function store_d(::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, ::Type{$layout_type{DT}}, workspace, frag, tile::Tile) where {M, N, K, CT, AT, DT}
+        @inline function store_d(::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, ::Type{$layout_type{DT}}, workspace, frag, tile::Tile) where {M, N, K, mb, nb, kb, CT, AT, DT}
             laneId = (threadIdx().x - 1) % 32 + 1
 
-            op_y = (laneId - 1) % 4 + 1
-            op_x = (laneId - 1) ÷ 4 + 1
+            op_y = (laneId - 1) % mb + 1
+            op_x = (laneId - 1) ÷ mb + 1
 
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x)
 
-            frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, AT}(frag)
-            @loopinfo unroll for m = 1 : M ÷ 4
-                @loopinfo unroll for n = 1 : N ÷ 8
-                    @inbounds workspace[y + 4 * (m - 1), x + 8 * (n - 1)] = frag[m, n]
+            frag = LocalArray{Tuple{M ÷ mb, N ÷ nb}, AT}(frag)
+            @loopinfo unroll for m = 1 : M ÷ mb
+                @loopinfo unroll for n = 1 : N ÷ nb
+                    @inbounds workspace[y + mb * (m - 1), x + nb * (n - 1)] = frag[m,n]
                 end
             end
         end
     end
 end
 
-abstract type FPUOp{M, N, K, CT, AT} <: GeneralFPUOp{M, N, K, CT, AT} end
-function operator_fma(::Type{FPUOp{M, N, K, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, CT, AT}
+abstract type FPUOp{M, N, K, mb, nb, kb, CT, AT} <: GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT} end
+function operator_fma(::Type{FPUOp{M, N, K, mb, nb, kb, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, mb, nb, kb, CT, AT}
     return fma(a, b, c)
 end
 
-abstract type TropicalFPUOp{M, N, K, CT, AT} <: GeneralFPUOp{M, N, K, CT, AT} end
+abstract type TropicalFPUOp{M, N, K, CT, AT} <: GeneralFPUOp{M, N, K, 4, 8, 1, CT, AT} end
 function operator_fma(::Type{TropicalFPUOp{M, N, K, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, CT, AT}
     return max(a + b, c)
 end
 
-@inline function mma(operator_type::Type{<:GeneralFPUOp{M, N, K, CT, AT}}, a_frag, b_frag, c_frag) where {M, N, K, CT, AT}
-    a_frag = LocalArray{Tuple{M ÷ 4, K}, CT}(a_frag)
-    b_frag = LocalArray{Tuple{K, N ÷ 8}, CT}(b_frag)
-    c_frag = LocalArray{Tuple{M ÷ 4, N ÷ 8}, AT}(c_frag)
+@inline function mma(operator_type::Type{<:GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT}}, a_frag, b_frag, c_frag) where {M, N, K, mb, nb, kb, CT, AT}
+    a_frag = LocalArray{Tuple{M ÷ mb, K}, CT}(a_frag)
+    b_frag = LocalArray{Tuple{K, N ÷ nb}, CT}(b_frag)
+    c_frag = LocalArray{Tuple{M ÷ mb, N ÷ nb}, AT}(c_frag)
 
-    @loopinfo unroll for m = 1 : M ÷ 4
-        @loopinfo unroll for n = 1 : N ÷ 8
+    @loopinfo unroll for m = 1 : M ÷ mb
+        @loopinfo unroll for n = 1 : N ÷ nb
             @loopinfo unroll for k = 1 : K
                 @inbounds @immutable c_frag[m,n] = operator_fma(operator_type, a_frag[m, k], b_frag[k, n], c_frag[m, n])
             end

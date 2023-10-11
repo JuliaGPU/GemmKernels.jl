@@ -41,7 +41,7 @@ function main()
 
     conf = GemmKernels.get_config(;
         gemm_shape = (; M, N, K), block_shape,
-        operator = Operator.FPUOp{8, 8, 1, compute_type, eltype(C)},
+        operator = Operator.FPUOp{8, 8, 1, 4, 8, 1, compute_type, eltype(C)},
 
         global_a_layout, global_b_layout, global_c_layout, global_d_layout,
         shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout,
