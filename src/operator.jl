@@ -123,8 +123,8 @@ function operator_fma(::Type{FPUOp{M, N, K, mb, nb, kb, CT, AT}}, a::CT, b::CT, 
     return fma(a, b, c)
 end
 
-abstract type TropicalFPUOp{M, N, K, CT, AT} <: GeneralFPUOp{M, N, K, 4, 8, 1, CT, AT} end
-function operator_fma(::Type{TropicalFPUOp{M, N, K, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, CT, AT}
+abstract type TropicalFPUOp{M, N, K, mb, nb, kb, CT, AT} <: GeneralFPUOp{M, N, K, mb, nb, kb, CT, AT} end
+function operator_fma(::Type{TropicalFPUOp{M, N, K, mb, nb, kb, CT, AT}}, a::CT, b::CT, c::AT) where {M, N, K, mb, nb, kb, CT, AT}
     return max(a + b, c)
 end
 
