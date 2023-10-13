@@ -108,14 +108,14 @@ for cf in get_configs()
 
     # benchmark
     for sample in 1:NUM_SAMPLES
-        time = 1e9 * CUDA.@elapsed begin
+        time = 1e9 * CUDA.@elapsed blocking=true begin
             for eval in 1:NUM_EVALS_PER_SAMPLE
                 run_gemm(cf, a, b, c, d)
             end
         end
 
         push!(times, time)
-        synchronize()
+        synchronize(; blocking=true)
     end
 
     mu, sigma = mean(times), std(times)
