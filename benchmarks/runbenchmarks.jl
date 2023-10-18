@@ -1,5 +1,6 @@
 using GemmKernels, CUDA
 using Git: git
+import GitHub
 using Printf
 using Statistics
 using JSON
