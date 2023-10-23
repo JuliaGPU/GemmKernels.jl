@@ -7,11 +7,8 @@ using JSON
 
 using StableRNGs
 
-# XXX: Small matrix sizes seem to have quite high std. Do we just run the
-# larger matrices?
 # XXX: How to choose good values here?
-const NUM_SAMPLES = 100
-const NUM_EVALS_PER_SAMPLE = 10
+const NUM_SAMPLES = 1000
 
 if haskey(ENV, "BUILDKITE_BRANCH")
     @info "Cloning previous benchmark results"
@@ -105,22 +102,24 @@ for cf in get_configs()
     # warmup
     run_gemm(cf, a, b, c, d)
 
-    times = []
-
     # benchmark
-    for sample in 1:NUM_SAMPLES
-        time = 1e9 * CUDA.@elapsed blocking=true begin
-            for eval in 1:NUM_EVALS_PER_SAMPLE
-                run_gemm(cf, a, b, c, d)
-            end
+    profile_results = CUDA.@profiled begin
+        for sample in 1:NUM_SAMPLES
+            run_gemm(cf, a, b, c, d)
         end
-
-        push!(times, time)
-        synchronize(; blocking=true)
     end
 
+    # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
+    # operations consisting of multiple kernel launches...
+    # XXX: Will this always work with mangling?
+    matmul_results = filter(row -> contains(row.name, String(Symbol(cf.kernel))), profile_results.device)
+
+    @assert size(matmul_results, 1) == NUM_SAMPLES
+
+    times = 1e9 .* (matmul_results[!, "stop"] - matmul_results[!, "start"])
+
     mu, sigma = mean(times), std(times)
-    @info "Benchmark $( cf.name): $(prettytime(mu, sigma))"
+    @info "\t$(prettytime(mu, sigma))"
     results[cf.name] = Dict("times" => times)
 end
 
