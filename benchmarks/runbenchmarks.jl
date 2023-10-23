@@ -67,7 +67,23 @@ else
 end
 
 # result rendering functions
-function prettytime(t, std)
+function prettyflops(times, matmul_shape)
+    # in ns
+    t = minimum(times)
+
+    # in GFlops
+    flops = (2 * prod(matmul_shape)) / t
+    rounded_flops = round(flops; sigdigits=4)
+
+    return "$(rounded_flops) GFlops"
+end
+
+function prettytime(times)
+    t = mean(times)
+    sigma = std(times)
+    min = minimum(times)
+    max = maximum(times)
+
     # timescale
     scale, unit = if t < 1e3
         1, "ns"
@@ -78,12 +94,14 @@ function prettytime(t, std)
     else
         1e9, "s"
     end
-    cv = round(100 * std / abs(t); sigdigits=3)
+    cv = round(100 * sigma / abs(t); sigdigits=3)
 
     rounded_t = round(t / scale; sigdigits=3)
     rounded_cv = round(cv; sigdigits=3)
+    rounded_min = round(min / scale; sigdigits=3)
+    rounded_max = round(max / scale; sigdigits=3)
 
-    return "$(rounded_t) $unit ± $(rounded_cv)%"
+    return "$(rounded_t) $unit ± $(rounded_cv)% ($(rounded_min) … $(rounded_max) $unit)"
 end
 
 @info "Running benchmarks"
@@ -118,8 +136,7 @@ for cf in get_configs()
 
     times = 1e9 .* (matmul_results[!, "stop"] - matmul_results[!, "start"])
 
-    mu, sigma = mean(times), std(times)
-    @info "\t$(prettytime(mu, sigma))"
+    @info "\t$(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
     results[cf.name] = Dict("times" => times)
 end
 
@@ -190,8 +207,8 @@ function resultrow(k, judgement, old, new, old_details, new_details)
     old_times = old["times"]
     new_times = new["times"]
 
-    str_old = prettytime(mean(old_times), std(old_times))
-    str_new = prettytime(mean(new_times), std(new_times))
+    str_old = prettytime(old_times)
+    str_new = prettytime(new_times)
 
     if old_details !== nothing
         if old_details.registers != new_details.registers
