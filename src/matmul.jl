@@ -169,8 +169,7 @@ end
 end
 
 function matmatmul!(C::CuArray, transA::Char, transB::Char, A::CuArray, B::CuArray,
-                    alpha::Number, beta::Number; wmma::Union{Bool,Nothing}=nothing,
-                    info=nothing)
+                    alpha::Number, beta::Number; wmma::Union{Bool,Nothing}=nothing)
     conf, compute_type, kernel = get_config(
         typeof(A), size(A), strides(A), transA=='T',
         typeof(B), size(B), strides(B), transB=='T',
@@ -185,7 +184,7 @@ function matmatmul!(C::CuArray, transA::Char, transB::Char, A::CuArray, B::CuArr
     matmul(conf, A, B, C, C;
            transform_shared_to_regs_a = Transform.Elementwise(x -> x * alpha),
            transform_shared_to_regs_c = Transform.Elementwise(x -> x * beta),
-           kernel, info
+           kernel
           )
     C
 end
@@ -194,7 +193,7 @@ end
 function mul!(C::CuArray,
               A::Union{CuArray, Adjoint{<:Any,<:CuArray}, Transpose{<:Any,<:CuArray}},
               B::Union{CuArray, Adjoint{<:Any,<:CuArray}, Transpose{<:Any,<:CuArray}},
-              alpha=true, beta=false; info=nothing)
+              alpha=true, beta=false)
     transA = A isa Adjoint || A isa Transpose
     transB = B isa Adjoint || B isa Transpose
     matmatmul!(C, transA ? 'T' : 'N', transB ? 'T' : 'N',
