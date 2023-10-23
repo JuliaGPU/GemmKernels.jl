@@ -54,9 +54,9 @@ version = "0.4.2"
 
 [[deps.CUDA]]
 deps = ["AbstractFFTs", "Adapt", "BFloat16s", "CEnum", "CUDA_Driver_jll", "CUDA_Runtime_Discovery", "CUDA_Runtime_jll", "Crayons", "DataFrames", "ExprTools", "GPUArrays", "GPUCompiler", "KernelAbstractions", "LLVM", "LazyArtifacts", "Libdl", "LinearAlgebra", "Logging", "NVTX", "Preferences", "PrettyTables", "Printf", "Random", "Random123", "RandomNumbers", "Reexport", "Requires", "SparseArrays", "Statistics", "UnsafeAtomicsLLVM"]
-git-tree-sha1 = "605672fcb720f44fb087b0da66718ed1fe8285f5"
-repo-rev = "tf/fix-at-elapsed"
-repo-url = "https://github.com/thomasfaingnaert/CUDA.jl"
+git-tree-sha1 = "e98b888c3f5e47acdaceb32b2909806a28846245"
+repo-rev = "tb/cupti_lmem"
+repo-url = "https://github.com/JuliaGPU/CUDA.jl.git"
 uuid = "052768ef-5323-5732-b1bb-66c8b64840ba"
 version = "5.0.0"
 weakdeps = ["ChainRulesCore", "SpecialFunctions"]
@@ -84,10 +84,14 @@ uuid = "76a88914-d11a-5bdc-97e0-2f5a05c973a2"
 version = "0.9.2+3"
 
 [[deps.ChainRulesCore]]
-deps = ["Compat", "LinearAlgebra", "SparseArrays"]
+deps = ["Compat", "LinearAlgebra"]
 git-tree-sha1 = "e0af648f0692ec1691b5d094b8724ba1346281cf"
 uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 version = "1.18.0"
+weakdeps = ["SparseArrays"]
+
+    [deps.ChainRulesCore.extensions]
+    ChainRulesCoreSparseArraysExt = "SparseArrays"
 
 [[deps.ChangesOfVariables]]
 deps = ["LinearAlgebra", "Test"]

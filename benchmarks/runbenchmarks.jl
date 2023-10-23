@@ -45,9 +45,6 @@ function load_results()
 
     details = if isfile(details_file)
         json = JSON.parsefile(details_file)
-
-        # Convert the JSON to a named tuple so we can access the fields by name.
-        Dict(K => (; (Symbol(k) => v for (k, v) in V)...) for (K, V) in json)
     else
         nothing
     end
@@ -114,9 +111,6 @@ for cf in get_configs()
     @info "Running benchmark $( cf.name )..."
     c_h, a, b, c, d = generate_inputs(cf)
 
-    # get info
-    details[cf.name] = get_info(cf, a, b, c, d)
-
     # warmup
     run_gemm(cf, a, b, c, d)
 
@@ -133,6 +127,14 @@ for cf in get_configs()
     matmul_results = filter(row -> contains(row.name, String(Symbol(cf.kernel))), profile_results.device)
 
     @assert size(matmul_results, 1) == NUM_SAMPLES
+
+    # get info
+    details[cf.name] = Dict(
+        "registers" => matmul_results[1, "registers"],
+        "dynamic_shared_mem" => matmul_results[1, "shared_mem"].dynamic,
+        "static_shared_mem" => matmul_results[1, "shared_mem"].static,
+        "local_mem" => matmul_results[1, "local_mem"].thread
+    )
 
     times = 1e9 .* (matmul_results[!, "stop"] - matmul_results[!, "start"])
 
@@ -211,25 +213,21 @@ function resultrow(k, judgement, old, new, old_details, new_details)
     str_new = prettytime(new_times)
 
     if old_details !== nothing
-        if old_details.registers != new_details.registers
-            str_old *= "<br>$(old_details.registers) regs"
-            str_new *= "<br>$(new_details.registers) regs"
+        if old_details["registers"] != new_details["registers"]
+            str_old *= "<br>$(old_details["registers"]) regs"
+            str_new *= "<br>$(new_details["registers"]) regs"
         end
-        if old_details.dynamic_shared_mem != new_details.dynamic_shared_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.dynamic_shared_mem)) dynamic shmem"
-            str_new *= "<br>$(Base.format_bytes(new_details.dynamic_shared_mem)) dynamic shmem"
+        if old_details["dynamic_shared_mem"] != new_details["dynamic_shared_mem"]
+            str_old *= "<br>$(Base.format_bytes(old_details["dynamic_shared_mem"])) dynamic shmem"
+            str_new *= "<br>$(Base.format_bytes(new_details["dynamic_shared_mem"])) dynamic shmem"
         end
-        if old_details.static_shared_mem != new_details.static_shared_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.static_shared_mem)) static shmem"
-            str_new *= "<br>$(Base.format_bytes(new_details.static_shared_mem)) static shmem"
+        if old_details["static_shared_mem"] != new_details["static_shared_mem"]
+            str_old *= "<br>$(Base.format_bytes(old_details["static_shared_mem"])) static shmem"
+            str_new *= "<br>$(Base.format_bytes(new_details["static_shared_mem"])) static shmem"
         end
-        if old_details.local_mem != new_details.local_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.local_mem)) local mem"
-            str_new *= "<br>$(Base.format_bytes(new_details.local_mem)) local mem"
-        end
-        if old_details.const_mem != new_details.const_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.const_mem)) const mem"
-            str_new *= "<br>$(Base.format_bytes(new_details.const_mem)) const mem"
+        if old_details["local_mem"] != new_details["local_mem"]
+            str_old *= "<br>$(Base.format_bytes(old_details["local_mem"])) local mem"
+            str_new *= "<br>$(Base.format_bytes(new_details["local_mem"])) local mem"
         end
     end
 
@@ -277,13 +275,10 @@ if previous_results !== nothing
             current_details = details[k]
 
             details_changed =
-                previous_details.registers != current_details.registers ||
-                previous_details.dynamic_shared_mem != current_details.dynamic_shared_mem ||
-                previous_details.static_shared_mem != current_details.static_shared_mem ||
-                previous_details.local_mem != current_details.local_mem ||
-                previous_details.const_mem != current_details.const_mem
-
-
+                previous_details["registers"] != current_details["registers"] ||
+                previous_details["dynamic_shared_mem"] != current_details["dynamic_shared_mem"] ||
+                previous_details["static_shared_mem"] != current_details["static_shared_mem"] ||
+                previous_details["local_mem"] != current_details["local_mem"]
         end
 
         time_changed || details_changed

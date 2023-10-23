@@ -68,23 +68,6 @@ function generate_inputs(cf::Configuration)
     c_h, a, b, c, d
 end
 
-# Get the kernel info.
-function get_info(cf::Configuration, a, b, c, d)
-    alpha = cf.alpha
-    beta = cf.beta
-    a_transf = (alpha == one(alpha)) ? Transform.Elementwise(identity) : Transform.Elementwise(x -> x * alpha)
-    c_transf = (beta == one(beta)) ? Transform.Elementwise(identity) : Transform.Elementwise(x -> x * beta)
-
-    info = GemmKernels.Information()
-    GemmKernels.matmul(cf.config, a, b, c, d;
-                       transform_shared_to_regs_a = a_transf,
-                       transform_shared_to_regs_c = c_transf,
-                       epilogue = cf.epilogue,
-                       kernel = cf.kernel,
-                       info = info)
-    info
-end
-
 # Run the GEMM.
 function run_gemm(cf::Configuration, a, b, c, d)
     alpha = cf.alpha
