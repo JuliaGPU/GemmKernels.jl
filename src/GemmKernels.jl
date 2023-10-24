@@ -9,11 +9,11 @@ include("array.jl")
 include("utils.jl")
 
 # framework
+include("layout.jl")
+include("operator.jl")
 include("config.jl")
 include("epilogue.jl")
 include("kernel.jl")
-include("layout.jl")
-include("operator.jl")
 include("transform.jl")
 
 # instantiations
