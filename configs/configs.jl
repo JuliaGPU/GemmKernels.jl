@@ -115,19 +115,19 @@ function get_configs()
             (Int64, Int64, Int64)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(8, 16, 2)],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
         N in GEMM_SIZES
 
         # XXX: Should we do non-square matrices as well?
         M = K = N
 
-        name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+        name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
         compute_type = promote_type(A_type, B_type)
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
                                         block_shape = (M = 64, N = 64, K = 32),
-                                        operator = Operator.FPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
+                                        operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
                                         global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
                                         global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
@@ -159,24 +159,33 @@ function get_configs()
             (Float32, Float32, Float32)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [
-            (4, 8, 1),
-            (8, 8, 1),
-            (4, 16, 1),
-            (4, 8, 2),
-            (8, 16, 2)],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
+            # First, test some shapes with the default base shape (4, 8, 1).
+            map(tup -> (tup..., 4, 8, 1),
+            [( 4, 8,  1),
+             ( 8, 8,  1),
+             ( 4, 16, 1),
+             ( 4, 8,  2),
+             ( 8, 16, 2)]),
+            # Then, test some different combinations of op shape + base shape.
+            [(4,  32, 1, 1,  32, 1),
+             (4,  32, 1, 2,  16, 1),
+             (16, 16, 1, 4,  8,  1),
+             (16, 16, 1, 8,  4,  1),
+             (32, 4,  1, 16, 2,  1),
+             (32, 4,  1, 32, 1,  1)]),
         N in [128]
 
         # We'll only test square matrices.
         M = K = N
 
-        name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+        name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
         compute_type = promote_type(A_type, B_type)
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
                                         block_shape = (M = 128, N = 64, K = 32),
-                                        operator = Operator.FPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
+                                        operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
                                         global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
                                         global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
@@ -208,20 +217,20 @@ function get_configs()
             (Float32, Float32, Float32, 128)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(8, 16, 2)],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
         (M, N, K) in min_dimension .* [
             [1, 1, 1],
             [2, 2, 1],
             [1, 1, 2],
             [2, 2, 2]]
 
-        name = "Tropical GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+        name = "Tropical GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
         compute_type = promote_type(A_type, B_type)
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
                                         block_shape = (M = 64, N = 64, K = 32),
-                                        operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, compute_type, CD_type},
+                                        operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
                                         global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
                                         global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
