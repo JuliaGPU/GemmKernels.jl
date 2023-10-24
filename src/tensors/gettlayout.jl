@@ -17,9 +17,9 @@ end
     end
 end
 
-abstract type GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.AlignedColMajor{T} end
+abstract type GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.UnsafeAlignedColMajor{T} end
 
-abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.AlignedRowMajor{T} end
+abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.UnsafeAlignedRowMajor{T} end
 
 @inline function Layout.load(
         ::Union{

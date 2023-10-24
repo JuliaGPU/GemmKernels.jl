@@ -179,15 +179,15 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator)
     ) = createGETTContractionPlan(desc)
 
     if (isColMajorA)
-        SharedLayoutA = Layout.Padded{Layout.AlignedColMajor{desc.descA.dataType}, 16 ÷ sizeof(desc.descA.dataType)}
+        SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descA.dataType}, 16 ÷ sizeof(desc.descA.dataType)}
     else
-        SharedLayoutA = Layout.Padded{Layout.AlignedRowMajor{desc.descA.dataType}, 16 ÷ sizeof(desc.descA.dataType)}
+        SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedRowMajor{desc.descA.dataType}, 16 ÷ sizeof(desc.descA.dataType)}
     end
 
     if (isColMajorB)
-        SharedLayoutB = Layout.Padded{Layout.AlignedColMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
+        SharedLayoutB = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
     else
-        SharedLayoutB = Layout.Padded{Layout.AlignedRowMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
+        SharedLayoutB = Layout.Padded{Layout.UnsafeAlignedRowMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
     end
 
     if (operator == Operator.WMMAOp)
@@ -207,8 +207,8 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator)
 
         shared_a_layout = SharedLayoutA,
         shared_b_layout = SharedLayoutB,
-        shared_c_layout = Layout.AlignedColMajor{desc.descC.dataType},
-        shared_d_layout = Layout.AlignedColMajor{desc.descD.dataType},
+        shared_c_layout = Layout.UnsafeAlignedColMajor{desc.descC.dataType},
+        shared_d_layout = Layout.UnsafeAlignedColMajor{desc.descD.dataType},
 
         is_a_col_major = isColMajorA,
         is_b_col_major = isColMajorB,
