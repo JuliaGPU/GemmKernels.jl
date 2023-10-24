@@ -1,4 +1,3 @@
-using BenchmarkTools
 using GemmKernels, CUDA
 using Git: git
 import GitHub
@@ -8,14 +7,11 @@ using JSON
 
 using StableRNGs
 
-
-# we use setup/teardown phases to allocate/free GPU memory,
-# so make sure to run a couple of evaluations to amortize
-# the effects of using newly-allocated memory.
-BenchmarkTools.DEFAULT_PARAMETERS.evals = 5
+# XXX: How to choose good values here?
+const NUM_SAMPLES = 1000
 
 if haskey(ENV, "BUILDKITE_BRANCH")
-    @info "Loading previous benchmark results"
+    @info "Cloning previous benchmark results"
     github_token = get(ENV, "GITHUB_TOKEN", nothing)
     benchmark_results = mktempdir()
     if github_token === nothing
@@ -27,7 +23,7 @@ if haskey(ENV, "BUILDKITE_BRANCH")
     run(`$(git()) -C $benchmark_results config --local user.email "nobody@juliagpu.org"`)
 end
 
-# load timings
+# load previous results.
 function load_results()
     results_file = joinpath(@__DIR__, "reference-results.json")
     details_file = joinpath(@__DIR__, "reference-details.json")
@@ -49,17 +45,12 @@ function load_results()
 
     details = if isfile(details_file)
         json = JSON.parsefile(details_file)
-        # the named tuples got stored as dicts; convert them back to named tuples
-        reconstruct_details(d::Dict) = (; Dict(Symbol(k)=>v for (k,v) in d)...)
-        # the id arrays got stored as a string; parse them back
-        reconstruct_ids(d::Dict, f=identity) = Dict(eval(Meta.parse(k))=>f(v) for (k,v) in json)
-        reconstruct_ids(json, reconstruct_details)
     else
         nothing
     end
 
     if isfile(results_file)
-        timings = BenchmarkTools.load(results_file)[1]
+        timings = JSON.parsefile(results_file)
         return (; commit, timings, details)
     end
 
@@ -72,62 +63,24 @@ else
     @info "Found previous timings for commit $(previous_results.commit)"
 end
 
-@info "Loading benchmarks"
-SUITE = BenchmarkGroup()
-include("blas.jl")
-
-@info "Extracting execution details"
-extract_details(group::BenchmarkGroup) = extract_details!([], [], group)
-function extract_details!(results, parents, group::BenchmarkGroup)
-    for (k, v) in group
-        if isa(v, BenchmarkGroup)
-            keys = Base.typed_vcat(Any, parents, k)
-            extract_details!(results, keys, v)
-        elseif endswith(k, " details")
-            keys = Base.typed_vcat(Any, parents, replace(k, r" details$" => ""))
-            push!(results, (keys, v))
-        end
-    end
-    filter!(((k,v),) -> !endswith(k, " details"), group)
-    return results
-end
-details = Dict(extract_details(SUITE))
-display(details)
-
-@info "Warming-up benchmarks"
-warmup(SUITE; verbose=false)
-
-@info "Running benchmarks"
-timings = run(SUITE; verbose=true)
-println(timings)
-
-# write results
-if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
-    commit = ENV["BUILDKITE_COMMIT"]
-    results_file = joinpath(benchmark_results, "results-$commit.json")
-    BenchmarkTools.save(results_file, timings)
-    details_file = joinpath(benchmark_results, "details-$commit.json")
-    open(details_file, "w") do io
-        JSON.print(io, details)
-    end
-
-    # commit and push
-    run(`$(git()) -C $benchmark_results add $results_file`)
-    run(`$(git()) -C $benchmark_results add $details_file`)
-    run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
-    run(`$(git()) -C $benchmark_results push -q`)
-else
-    results_file = joinpath(@__DIR__, "results.json")
-    BenchmarkTools.save(results_file, timings)
-
-    details_file = joinpath(@__DIR__, "details.json")
-    open(details_file, "w") do io
-        JSON.print(io, details)
-    end
-end
-
 # result rendering functions
-function prettytime(t, std)
+function prettyflops(times, matmul_shape)
+    # in ns
+    t = minimum(times)
+
+    # in GFlops
+    flops = (2 * prod(matmul_shape)) / t
+    rounded_flops = round(flops; sigdigits=4)
+
+    return "$(rounded_flops) GFlops"
+end
+
+function prettytime(times)
+    t = mean(times)
+    sigma = std(times)
+    min = minimum(times)
+    max = maximum(times)
+
     # timescale
     scale, unit = if t < 1e3
         1, "ns"
@@ -138,21 +91,85 @@ function prettytime(t, std)
     else
         1e9, "s"
     end
-    t /= scale
-    std /= scale
+    cv = round(100 * sigma / abs(t); sigdigits=3)
 
-    # round according to the position of the first significant digit in the standard deviation
-    rounded_std = round(std; sigdigits=2)
-    pos = -floor(Int, log10(rounded_std))
-    if pos <= 0
-        rounded_std = round(Int, rounded_std)
-        rounded_t = round(Int, t / 10^abs(pos)) * 10^abs(pos)
-    else
-        rounded_t = round(t; digits=pos)
+    rounded_t = round(t / scale; sigdigits=3)
+    rounded_cv = round(cv; sigdigits=3)
+    rounded_min = round(min / scale; sigdigits=3)
+    rounded_max = round(max / scale; sigdigits=3)
+
+    return "$(rounded_t) $unit ± $(rounded_cv)% ($(rounded_min) … $(rounded_max) $unit)"
+end
+
+@info "Running benchmarks"
+include("../configs/configs.jl")
+
+results = Dict()
+details = Dict()
+
+for cf in get_configs()
+    @info "Running benchmark $( cf.name )..."
+    c_h, a, b, c, d = generate_inputs(cf)
+
+    # warmup
+    run_gemm(cf, a, b, c, d)
+
+    # benchmark
+    profile_results = CUDA.@profiled begin
+        for sample in 1:NUM_SAMPLES
+            run_gemm(cf, a, b, c, d)
+        end
     end
 
-    return "$(rounded_t) ± $(rounded_std) $unit"
+    # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
+    # operations consisting of multiple kernel launches...
+    # XXX: Will this always work with mangling?
+    matmul_results = filter(row -> contains(row.name, String(Symbol(cf.kernel))), profile_results.device)
+
+    @assert size(matmul_results, 1) == NUM_SAMPLES
+
+    # get info
+    details[cf.name] = Dict(
+        "registers" => matmul_results[1, "registers"],
+        "dynamic_shared_mem" => matmul_results[1, "shared_mem"].dynamic,
+        "static_shared_mem" => matmul_results[1, "shared_mem"].static,
+        "local_mem" => matmul_results[1, "local_mem"].thread
+    )
+
+    times = 1e9 .* (matmul_results[!, "stop"] - matmul_results[!, "start"])
+
+    @info "\t$(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
+    results[cf.name] = Dict("times" => times)
 end
+
+function save_results(results_file, details_file, results, details)
+    open(results_file, "w") do io
+        JSON.print(io, results)
+    end
+
+    open(details_file, "w") do io
+        JSON.print(io, details)
+    end
+end
+
+# write results
+if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
+    commit = ENV["BUILDKITE_COMMIT"]
+    results_file = joinpath(benchmark_results, "results-$commit.json")
+    details_file = joinpath(benchmark_results, "details-$commit.json")
+    save_results(results_file, details_file, results, details)
+
+    # commit and push
+    run(`$(git()) -C $benchmark_results add $results_file`)
+    run(`$(git()) -C $benchmark_results add $details_file`)
+    run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
+    run(`$(git()) -C $benchmark_results push -q`)
+else
+    results_file = joinpath(@__DIR__, "results.json")
+    details_file = joinpath(@__DIR__, "details.json")
+    save_results(results_file, details_file, results, details)
+end
+
 function markdown_escaped_code(str)
     ticks = eachmatch(r"`+", str)
     isempty(ticks) && return "`$str`"
@@ -160,78 +177,113 @@ function markdown_escaped_code(str)
     ticks = "`"^ticks
     return string(ticks, startswith(str, '`') ? " " : "", str, endswith(str, '`') ? " " : "", ticks)
 end
+
 idrepr(ids::Vector) = join(map(markdown_escaped_code, ids), " ")
-function resultrow(ids, j::BenchmarkTools.TrialJudgement,
-                   old::BenchmarkTools.Trial, new::BenchmarkTools.Trial,
-                   old_details, new_details)
-    str_old = prettytime(time(mean(old)), time(std(old)))
-    str_new = prettytime(time(mean(new)), time(std(new)))
-    if old_details !== nothing
-        if old_details.registers != new_details.registers
-            str_old *= "<br>$(old_details.registers) regs"
-            str_new *= "<br>$(new_details.registers) regs"
-        end
-        if old_details.dynamic_shared_mem != new_details.dynamic_shared_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.dynamic_shared_mem)) dynamic shmem"
-            str_new *= "<br>$(Base.format_bytes(new_details.dynamic_shared_mem)) dynamic shmem"
-        end
-        if old_details.static_shared_mem != new_details.static_shared_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.static_shared_mem)) static shmem"
-            str_new *= "<br>$(Base.format_bytes(new_details.static_shared_mem)) static shmem"
-        end
-        if old_details.local_mem != new_details.local_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.local_mem)) local mem"
-            str_new *= "<br>$(Base.format_bytes(new_details.local_mem)) local mem"
-        end
-        if old_details.const_mem != new_details.const_mem
-            str_old *= "<br>$(Base.format_bytes(old_details.const_mem)) const mem"
-            str_new *= "<br>$(Base.format_bytes(new_details.const_mem)) const mem"
-        end
-    end
-    ratio = @sprintf("%.1f%%", 100*(1-time(BenchmarkTools.ratio(j))))
-    mark = resultmark(time(j))
-    return "| $(idrepr(ids)) | $(str_old) | $(str_new) | $(ratio) $(mark) |"
+
+@enum TrialJudgement begin
+    improvement
+    regression
+    invariant
 end
+
+ratio(old, new) = new / old
+
+function judge(old, new; tolerance=0.05)
+    r = ratio(old, new)
+
+    if isnan(r) || (r - tolerance) > 1.0
+        return regression
+    elseif (r + tolerance) < 1.0
+        return improvement
+    else
+        return invariant
+    end
+end
+
 const REGRESS_MARK = ":x:"
 const IMPROVE_MARK = ":white_check_mark:"
-resultmark(sym::Symbol) = sym == :regression ? REGRESS_MARK : (sym == :improvement ? IMPROVE_MARK : "")
+
+resultmark(j::TrialJudgement) = j == regression ? REGRESS_MARK : (j == improvement ? IMPROVE_MARK : "")
+
+function resultrow(k, judgement, old, new, old_details, new_details)
+    old_times = old["times"]
+    new_times = new["times"]
+
+    str_old = prettytime(old_times)
+    str_new = prettytime(new_times)
+
+    if old_details !== nothing
+        if old_details["registers"] != new_details["registers"]
+            str_old *= "<br>$(old_details["registers"]) regs"
+            str_new *= "<br>$(new_details["registers"]) regs"
+        end
+        if old_details["dynamic_shared_mem"] != new_details["dynamic_shared_mem"]
+            str_old *= "<br>$(Base.format_bytes(old_details["dynamic_shared_mem"])) dynamic shmem"
+            str_new *= "<br>$(Base.format_bytes(new_details["dynamic_shared_mem"])) dynamic shmem"
+        end
+        if old_details["static_shared_mem"] != new_details["static_shared_mem"]
+            str_old *= "<br>$(Base.format_bytes(old_details["static_shared_mem"])) static shmem"
+            str_new *= "<br>$(Base.format_bytes(new_details["static_shared_mem"])) static shmem"
+        end
+        if old_details["local_mem"] != new_details["local_mem"]
+            str_old *= "<br>$(Base.format_bytes(old_details["local_mem"])) local mem"
+            str_new *= "<br>$(Base.format_bytes(new_details["local_mem"])) local mem"
+        end
+    end
+
+    r = ratio(minimum(old_times), minimum(new_times))
+    r = @sprintf("%+.1f%%", 100*(r-1))
+    mark = resultmark(judgement)
+    return "| $(markdown_escaped_code(k)) | $(str_old) | $(str_new) | $(r) $(mark) |"
+end
 
 # compare against previous timings
 if previous_results !== nothing
     @info "Comparing results"
 
-    before = Dict(BenchmarkTools.leaves(previous_results.timings))
-    after = Dict(BenchmarkTools.leaves(timings))
+    before = previous_results.timings
+    after = results
 
-    comparison = judge(minimum(timings), minimum(previous_results.timings))
+    before_min = Dict(k => minimum(v["times"]) for (k, v) in before)
+    after_min = Dict(k => minimum(v["times"]) for (k, v) in after)
+
+    judgements = Dict(k => judge(before_min[k], v) for (k, v) in after_min)
 
     println("Improvements:")
-    println(improvements(comparison))
+
+    for (k, v) in judgements
+        (v == improvement) && println(k)
+    end
 
     println("Regressions:")
-    println(regressions(comparison))
+
+    for (k, v) in judgements
+        (v == regression) && println(k)
+    end
 
     # generate some text
     io = IOBuffer()
     commit = get(ENV, "BUILDKITE_COMMIT", "HEAD")
     println(io, "Benchmark results for commit $commit (comparing to $(previous_results.commit)):")
-    judgements = BenchmarkTools.leaves(comparison)
-    judgements = judgements[sortperm(map(string∘first, judgements))]
-    filter!(judgements) do (ids, j)
-        time_changed = BenchmarkTools.isregression(time, j) ||
-                       BenchmarkTools.isimprovement(time, j)
+
+    filter!(judgements) do (k, v)
+        time_changed = (v != invariant)
+        details_changed = false
+
         if previous_results.details !== nothing
-            previous_details = previous_results.details[ids]
-            time_changed ||
-                previous_details.registers != details[ids].registers ||
-                previous_details.dynamic_shared_mem != details[ids].dynamic_shared_mem ||
-                previous_details.static_shared_mem != details[ids].static_shared_mem ||
-                previous_details.local_mem != details[ids].local_mem ||
-                previous_details.const_mem != details[ids].const_mem
-        else
-            time_changed
+            previous_details = previous_results.details[k]
+            current_details = details[k]
+
+            details_changed =
+                previous_details["registers"] != current_details["registers"] ||
+                previous_details["dynamic_shared_mem"] != current_details["dynamic_shared_mem"] ||
+                previous_details["static_shared_mem"] != current_details["static_shared_mem"] ||
+                previous_details["local_mem"] != current_details["local_mem"]
         end
+
+        time_changed || details_changed
     end
+
     if isempty(judgements)
         println(io, "No regressions or improvements detected.")
     else
@@ -240,14 +292,17 @@ if previous_results !== nothing
             | test | master | PR | Δmin |
             |------|--------|----|------|
             """)
-        for (ids, j) in judgements
-            old = rmskew(before[ids])
-            new = rmskew(after[ids])
-            old_details = previous_results.details === nothing ? nothing : previous_results.details[ids]
-            new_details = details[ids]
-            println(io, resultrow(ids, j, old, new, old_details, new_details))
+        for (k, v) in judgements
+            old = before[k]
+            new = after[k]
+
+            old_details = previous_results.details === nothing ? nothing : previous_results.details[k]
+            new_details = details[k]
+
+            println(io, resultrow(k, v, old, new, old_details, new_details))
         end
     end
+
     body = String(take!(io))
     println(body)
 
