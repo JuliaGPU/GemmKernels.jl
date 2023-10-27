@@ -171,8 +171,8 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     # Best effort to make sure that the compute warp shape is not smaller than the operator shape.
     if (block_shape.M ÷ op_shape.M) < 4 || (block_shape.N ÷ op_shape.N) < 2
         compute_warp_default = (
-            M = max(op_shape, block_shape ÷ 4),
-            N = max(op_shape, block_shape ÷ 2),
+            M = max(op_shape.M, block_shape.M ÷ 4),
+            N = max(op_shape.N, block_shape.N ÷ 2),
             K = op_shape.K
         )
         warps_per_block_default = min(block_shape.M ÷ op_shape.M, 4) * min(block_shape.N ÷ op_shape.N, 2)
