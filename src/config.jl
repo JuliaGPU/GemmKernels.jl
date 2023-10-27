@@ -116,6 +116,18 @@ function check_operator_config(operator::Type{<:Operator.GeneralFPUOp})
     end
 end
 
+function check_wmma_shape(operator::Type)
+    op_shape = Operator.shape(operator)
+
+    if op_shape ∉ [(M=16, N=16, K=16)]
+        throw(ConfigError("Unsupported WMMA Operator shape $(op_shape)!"))
+    end
+end
+
+check_operator_config(operator::Type{<:Operator.WMMAOp}) = check_wmma_shape(operator)
+check_operator_config(operator::Type{<:Operator.WMMAComplexOp}) = check_wmma_shape(operator)
+check_operator_config(operator::Type{<:Operator.WMMADualOp}) = check_wmma_shape(operator)
+
 function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kwargs...)
     params = Dict(kwargs)
 
