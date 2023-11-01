@@ -44,7 +44,7 @@ end
 end
 
 @inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
-                                     x::NTuple{M,<:Any}) where {N, T, AS, M}
+                                     x::NTuple{M,<:Any}, i::Integer = 1) where {N, T, AS, M}
     alignment = sizeof(T) * N
 
     ex = quote end
@@ -55,8 +55,8 @@ end
         append!(ex.args, (quote
             y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-            @boundscheck checkalignment(vec_ptr, $alignment)
-            unsafe_store!(vec_ptr, y, $offset ÷ N + 1, Val($alignment))
+            @boundscheck checkalignment(vec_ptr)
+            unsafe_store!(vec_ptr, y, $offset ÷ N + (i - 1) ÷ N + 1, Val($alignment))
         end).args)
     end
 
