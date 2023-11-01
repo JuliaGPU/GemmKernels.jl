@@ -52,12 +52,12 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d)
 
     if plan.algo == ALGO_GETT
         GemmKernels.matmul(
-            a, b, c, d, plan.algorithmPlan.gemmConf,
+            plan.algorithmPlan.gemmConf, a, b, c, d;
             transform_shared_to_regs_a = Transform.Elementwise(x -> unaryOpA(α * x)),
             transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
             transform_shared_to_regs_c = Transform.Elementwise(x -> β * unaryOpC(x)),
             transform_regs_to_shared_d = Transform.Elementwise(x -> unaryOpD(x)),
-            kernel = Kernel.matmul_pipelined,
+            kernel = Kernel.matmul_singlestage,
         )
     else 
         throw(ArgumentError("Unsupported algorithm!"))

@@ -33,13 +33,13 @@ end
     Int(ptr) % alignment == 0
 end
 
-@inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}) where {N, T, AS}
+@inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, i::Integer = 1) where {N, T, AS}
     alignment = sizeof(T) * N
 
     return quote
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-        @boundscheck checkalignment(vec_ptr, $alignment)
-        return unsafe_load(vec_ptr, 1, Val($alignment))
+        @boundscheck checkalignment(vec_ptr)
+        return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
     end
 end
 

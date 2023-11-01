@@ -191,9 +191,9 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator)
     end
 
     if (operator == Operator.WMMAOp)
-        operator = Operator.WMMAOp{16, 16, 16, desc.dataType}
+        operator = Operator.WMMAOp{16, 16, 16, desc.dataType, desc.computeType}
     elseif (operator <: Operator.GeneralFPUOp)
-        operator = operator{8, 8, 1, desc.dataType, desc.computeType}
+        operator = operator{8, 8, 1, 4, 8, 1, desc.dataType, desc.computeType}
     end
 
     gemmConf = GemmKernels.get_config(

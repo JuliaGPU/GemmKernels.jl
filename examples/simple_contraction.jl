@@ -2,9 +2,27 @@ using CUDA
 using cuTENSOR
 using GemmKernels.Operator
 using GemmKernels.Tensors
-using JSON
 
-function testContraction(extents, tensorModes, operator, dataType)
+
+function main()
+    parseableName = "1.2.3.4.5-5.3.2.6.1-6.4"
+
+    tensorModes = Vector{Vector{Int}}(undef, 0)
+    for tensor in split(parseableName, "-")
+        tensorMode = Vector{Int}(undef, 0)
+
+        for mode in split(tensor, ".")
+            push!(tensorMode, parse(Int, mode))
+        end
+
+        push!(tensorModes, tensorMode)
+    end
+
+    extents = Tuple(x for x in [8, 8, 4, 2048, 8, 2048])
+
+    operator = Operator.WMMAOp
+    dataType = Float16
+
     A = CuArray(rand(dataType, extents[tensorModes[2]]) / sqrt(dataType(2048)))
     B = CuArray(rand(dataType, extents[tensorModes[3]]) / sqrt(dataType(2048)))
     C = CuArray(rand(dataType, extents[tensorModes[1]]))
@@ -46,34 +64,4 @@ function testContraction(extents, tensorModes, operator, dataType)
     D2 = Array(C)
 
     return all(isapprox.(Array(D1), Array(D2); rtol = sqrt(eps(dataType))))
-end
-
-@testset "Tensor Contraction" begin
-    fp = open("./benchmark-suite.json", "r")
-
-    jsonData = JSON.parse(read(fp, String))
-
-    @testset "TCCG benchmark suite against cuTENSOR with $(operator)" for (operator, dataType) in [(Operator.WMMAOp, Float16) , (Operator.FPUOp, Float32)] 
-        for el in jsonData
-            parseableName = el["parseableName"]
-
-            tensorModes = Vector{Vector{Int}}(undef, 0)
-            for tensor in split(parseableName, "-")
-                tensorMode = Vector{Int}(undef, 0)
-
-                for mode in split(tensor, ".")
-                    push!(tensorMode, parse(Int, mode))
-                end
-
-                push!(tensorModes, tensorMode)
-            end
-
-            extents = Tuple(x for x in el["extents"])
-
-            name = el["name"]
-            @testset "$name" begin
-                @test testContraction(extents, tensorModes, operator, dataType)
-            end
-        end
-    end
 end
