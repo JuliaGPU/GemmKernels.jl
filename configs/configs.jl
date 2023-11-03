@@ -21,6 +21,7 @@ struct Configuration
     epilogue       # The epilogue to use.
     verify         # Verify function to use.
     kernel         # The kernel function to use.
+    baseline       # Baseline implementation to compare performance against
 end
 
 function get_custom_mul!(element_update)
@@ -82,6 +83,12 @@ function run_gemm(cf::Configuration, a, b, c, d)
                        kernel = cf.kernel)
 end
 
+# Run the baseline.
+function run_baseline(cf::Configuration, a, b, c, d)
+    @assert !isnothing(cf.baseline)
+    cf.baseline(a, b, c, d, cf.alpha, cf.beta, cf.transpose_a, cf.transpose_b)
+end
+
 # Verify results.
 function verify(cf::Configuration, c_h, d)
     cf.verify(c_h, d)
@@ -101,18 +108,28 @@ function verify_dual(c_h, d)
     isapprox(c_dual, d_dual)
 end
 
+function fpu_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
+    CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
+    CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+end
+
+function wmma_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
+    CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
+    CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+end
+
 function get_configs()
     rv = []
 
     # FPU Op
-    for (A_type, B_type, CD_type) in [
-            (Float16, Float16, Float32),
-            (Float32, Float32, Float32),
-            (Float32, Float32, Float64),
-            (Float64, Float64, Float64),
-            (Int16, Int16, Int16),
-            (Int32, Int32, Int32),
-            (Int64, Int64, Int64)],
+    for (A_type, B_type, CD_type, baseline_func) in [
+            (Float16, Float16, Float32, fpu_baseline),
+            (Float32, Float32, Float32, fpu_baseline),
+            (Float32, Float32, Float64, nothing),
+            (Float64, Float64, Float64, fpu_baseline),
+            (Int16, Int16, Int16, nothing),
+            (Int32, Int32, Int32, nothing),
+            (Int64, Int64, Int64, nothing)],
         transpose_a = [false, true],
         transpose_b = [false, true],
         (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
@@ -151,7 +168,8 @@ function get_configs()
                                 mul!,
                                 Epilogue.Default(),
                                 verify_default,
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                baseline_func))
     end
 
     # FPU Op shapes
@@ -209,7 +227,8 @@ function get_configs()
                                 mul!,
                                 Epilogue.Default(),
                                 verify_default,
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                fpu_baseline))
     end
 
     # Tropical GEMM
@@ -254,7 +273,8 @@ function get_configs()
                                 get_custom_mul!((a, b, c) -> max(a + b, c)),
                                 Epilogue.Default(),
                                 verify_default,
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                nothing))
     end
 
     # WMMA GEMM
@@ -298,7 +318,8 @@ function get_configs()
                                 mul!,
                                 Epilogue.Default(),
                                 verify_default,
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                wmma_baseline))
     end
 
     # WMMA GEMM + bias
@@ -344,7 +365,8 @@ function get_configs()
                                 mul!,
                                 Epilogue.Bias(pointer(bias)),
                                 (c_h, d) -> verify_bias(c_h, d, bias),
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                nothing))
     end
 
     # WMMA Diagonal GEMM
@@ -394,7 +416,8 @@ function get_configs()
                                 (C, A, B, alpha, beta) -> mul!(C, Diagonal(A[1:M,1]), B, true, true),
                                 Epilogue.Default(),
                                 verify_default,
-                                Kernel.matmul_singlestage))
+                                Kernel.matmul_singlestage,
+                                nothing))
     end
 
     # WMMA Complex GEMM
@@ -453,7 +476,8 @@ function get_configs()
                                 mul!,
                                 Epilogue.Default(),
                                 verify_default,
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                nothing))
     end
 
     # WMMA Dual GEMM
@@ -511,7 +535,8 @@ function get_configs()
                                 (C, A, B, alpha, beta) -> mul!(dual_conv(C), dual_conv(Complex{Float32}.(A)), dual_conv(Complex{Float32}.(B)), true, true),
                                 Epilogue.Default(),
                                 verify_dual,
-                                Kernel.matmul_pipelined))
+                                Kernel.matmul_pipelined,
+                                nothing))
     end
 
     rv
