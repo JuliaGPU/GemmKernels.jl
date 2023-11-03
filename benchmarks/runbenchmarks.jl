@@ -115,7 +115,7 @@ for cf in get_configs()
     run_gemm(cf, a, b, c, d)
 
     # benchmark
-    profile_results = CUDA.@profiled begin
+    profile_results = CUDA.@profile begin
         for sample in 1:NUM_SAMPLES
             run_gemm(cf, a, b, c, d)
         end
