@@ -105,6 +105,7 @@ end
 include("../configs/configs.jl")
 
 results = Dict()
+baseline_results = Dict()
 details = Dict()
 
 for cf in get_configs()
@@ -123,22 +124,41 @@ for cf in get_configs()
 
     # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
     # operations consisting of multiple kernel launches...
-    # XXX: Will this always work with mangling?
-    matmul_results = filter(row -> contains(row.name, String(Symbol(cf.kernel))), profile_results.device)
-
-    @assert size(matmul_results, 1) == NUM_SAMPLES
+    profile_results = profile_results.device
 
     # get info
     details[cf.name] = Dict(
-        "registers" => matmul_results[1, "registers"],
-        "dynamic_shared_mem" => matmul_results[1, "shared_mem"].dynamic,
-        "static_shared_mem" => matmul_results[1, "shared_mem"].static,
-        "local_mem" => matmul_results[1, "local_mem"].thread
+        "registers" => profile_results[1, "registers"],
+        "dynamic_shared_mem" => profile_results[1, "shared_mem"].dynamic,
+        "static_shared_mem" => profile_results[1, "shared_mem"].static,
+        "local_mem" => profile_results[1, "local_mem"].thread
     )
 
-    times = 1e9 .* (matmul_results[!, "stop"] - matmul_results[!, "start"])
+    times = 1e9 .* (profile_results[!, "stop"] - profile_results[!, "start"])
+    @assert length(times) == NUM_SAMPLES
 
-    @info "\t$(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
+    @info "\tGemmKernels: $(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
+
+    if !isnothing(cf.baseline)
+        # benchmark baseline
+        baseline_profile_results = CUDA.@profile begin
+            for sample in 1:NUM_SAMPLES
+                run_baseline(cf, a, b, c, d)
+            end
+        end
+
+        baseline_profile_results = baseline_profile_results.device
+        @assert size(baseline_profile_results, 1) % NUM_SAMPLES == 0
+
+        baseline_times = 1e9 .* sum.(Iterators.partition(baseline_profile_results[!, "stop"] - baseline_profile_results[!, "start"], size(baseline_profile_results, 1) ÷ NUM_SAMPLES))
+        @assert length(baseline_times) == NUM_SAMPLES
+
+        baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
+        @info "\tBaseline:    $(prettytime(baseline_times)) $(prettyflops(baseline_times, cf.config.matmul_shape)) (GemmKernels: $(baseline_ratio)%)"
+
+        baseline_results[cf.name] = Dict("times" => baseline_times)
+    end
+
     results[cf.name] = Dict("times" => times)
 end
 
@@ -301,6 +321,20 @@ if previous_results !== nothing
 
             println(io, resultrow(k, v, old, new, old_details, new_details))
         end
+    end
+
+    # Print results compared to baseline.
+    println(io, "# Comparison with baseline")
+
+    println(io, "| test | GemmKernels | Baseline | % |")
+    println(io, "|------|-------------|----------|---|")
+
+    for k in keys(baseline_results)
+        times = results[k]["times"]
+        baseline_times = baseline_results[k]["times"]
+        baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
+
+        println(io, "| $(markdown_escaped_code(k)) | $(prettytime(times)) | $(prettytime(baseline_times)) | $(baseline_ratio) |")
     end
 
     body = String(take!(io))
