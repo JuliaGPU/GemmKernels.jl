@@ -26,7 +26,12 @@ function matmul(conf::Config, a, b, c, d;
     shmem = Kernel.shmem_size(conf, kernel)
     max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
     if shmem > max_shmem
-        error("Requested too much shared memory: The current GPU can use at most $(Base.format_bytes(max_shmem)), while this configuration required $(Base.format_bytes(shmem))")
+        throw(ConfigError("Requested too much shared memory: The current GPU can use at most $(Base.format_bytes(max_shmem)), while this configuration required $(Base.format_bytes(shmem))"))
+    end
+
+    # Check that there are at least two stages for pipelined kernels.
+    if kernel == Kernel.matmul_pipelined
+        conf.block_shape.K ≥ 2 * conf.compute_op_shape.K || throw(ConfigError("Need at least two stages to use a pipelined kernel, i.e. BLOCK_K ≥ 2 * OPERATOR_K"))
     end
 
     hostkernel = @cuda launch=false kernel(args...)
