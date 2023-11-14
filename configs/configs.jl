@@ -4,8 +4,6 @@ using GemmKernels
 using LinearAlgebra
 using ForwardDiff
 
-GEMM_SIZES = [128, 256, 2048]
-
 struct Configuration
     name           # Human-readable name of the configuration.
     config         # GemmKernels.Config instance to use.
@@ -118,131 +116,56 @@ function wmma_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
     CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
 end
 
-function get_configs()
-    rv = []
+macro get_fpu_config()
+    esc(quote let
+        baseline_func = Dict(
+                (Float16, Float16, Float32) => fpu_baseline,
+                (Float32, Float32, Float32) => fpu_baseline,
+                (Float32, Float32, Float64) => nothing,
+                (Float64, Float64, Float64) => fpu_baseline,
+                (Int16, Int16, Int16) => nothing,
+                (Int32, Int32, Int32) => nothing,
+                (Int64, Int64, Int64) => nothing,
+            )[(A_type, B_type, CD_type)]
 
-    # FPU Op
-    for (A_type, B_type, CD_type, baseline_func) in [
-            (Float16, Float16, Float32, fpu_baseline),
-            (Float32, Float32, Float32, fpu_baseline),
-            (Float32, Float32, Float64, nothing),
-            (Float64, Float64, Float64, fpu_baseline),
-            (Int16, Int16, Int16, nothing),
-            (Int32, Int32, Int32, nothing),
-            (Int64, Int64, Int64, nothing)],
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
-        N in GEMM_SIZES
-
-        # XXX: Should we do non-square matrices as well?
-        M = K = N
-
-        name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
         compute_type = promote_type(A_type, B_type)
 
         conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        block_shape = (M = 64, N = 64, K = 32),
-                                        operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
-                                        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
-                                        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
+                gemm_shape = (M = M, N = N, K = K),
+                block_shape = (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+                operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
+                global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
+                global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
 
-                                        global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
-                                        global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
 
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b,
-                                        )
-
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(compute_type, 2),
-                                convert(compute_type, 3),
-                                A_type,
-                                B_type,
-                                CD_type,
-                                CD_type,
-                                transpose_a,
-                                transpose_b,
-                                mul!,
-                                Epilogue.Default(),
-                                verify_default,
-                                Kernel.matmul_pipelined,
-                                baseline_func))
-    end
-
-    # FPU Op shapes
-    for (A_type, B_type, CD_type) in [
-            (Float32, Float32, Float32)],
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
-            # First, test some shapes with the default base shape (4, 8, 1).
-            map(tup -> (tup..., 4, 8, 1),
-            [( 4, 8,  1),
-             ( 8, 8,  1),
-             ( 4, 16, 1),
-             ( 4, 8,  2),
-             ( 8, 16, 2)]),
-            # Then, test some different combinations of op shape + base shape.
-            [(4,  32, 1, 1,  32, 1),
-             (4,  32, 1, 2,  16, 1),
-             (16, 16, 1, 4,  8,  1),
-             (16, 16, 1, 8,  4,  1),
-             (32, 4,  1, 16, 2,  1),
-             (32, 4,  1, 32, 1,  1)]),
-        N in [128]
-
-        # We'll only test square matrices.
-        M = K = N
+                is_a_col_major = !transpose_a,
+                is_b_col_major = !transpose_b,
+        )
 
         name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
-        compute_type = promote_type(A_type, B_type)
 
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        block_shape = (M = 128, N = 64, K = 32),
-                                        operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
-                                        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
-                                        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
+        Configuration(name,
+                      conf,
+                      convert(compute_type, 2),
+                      convert(compute_type, 3),
+                      A_type,
+                      B_type,
+                      CD_type,
+                      CD_type,
+                      transpose_a,
+                      transpose_b,
+                      mul!,
+                      Epilogue.Default(),
+                      verify_default,
+                      Kernel.matmul_pipelined,
+                      baseline_func)
+    end end)
+end
 
-                                        global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
-                                        global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
-
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b,
-                                        )
-
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(compute_type, 2),
-                                convert(compute_type, 3),
-                                A_type,
-                                B_type,
-                                CD_type,
-                                CD_type,
-                                transpose_a,
-                                transpose_b,
-                                mul!,
-                                Epilogue.Default(),
-                                verify_default,
-                                Kernel.matmul_pipelined,
-                                fpu_baseline))
-    end
-
-    # Tropical GEMM
-    for (A_type, B_type, CD_type, min_dimension) in [
-            (Float32, Float32, Float32, 128)],
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
-        (M, N, K) in min_dimension .* [
-            [1, 1, 1],
-            [2, 2, 1],
-            [1, 1, 2],
-            [2, 2, 2]]
-
+macro get_tropical_config()
+    esc(quote let
         name = "Tropical GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
         compute_type = promote_type(A_type, B_type)
 
@@ -260,78 +183,71 @@ function get_configs()
                                         is_b_col_major = !transpose_b,
                                         )
 
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(compute_type, 1),
-                                convert(compute_type, 1),
-                                A_type,
-                                B_type,
-                                CD_type,
-                                CD_type,
-                                transpose_a,
-                                transpose_b,
-                                get_custom_mul!((a, b, c) -> max(a + b, c)),
-                                Epilogue.Default(),
-                                verify_default,
-                                Kernel.matmul_pipelined,
-                                nothing))
-    end
+        Configuration(name,
+                      conf,
+                      convert(compute_type, 1),
+                      convert(compute_type, 1),
+                      A_type,
+                      B_type,
+                      CD_type,
+                      CD_type,
+                      transpose_a,
+                      transpose_b,
+                      get_custom_mul!((a, b, c) -> max(a + b, c)),
+                      Epilogue.Default(),
+                      verify_default,
+                      Kernel.matmul_pipelined,
+                      nothing)
+    end end)
+end
 
-    # WMMA GEMM
-    for (AB_type, CD_type, min_dimension) in [
-        (Float16, Float16, 256),
-        (Float16, Float32, 128)],
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
-        (M, N, K) in vcat(min_dimension .* [
-            [1, 1, 1],
-            [2, 2, 1],
-            [1, 1, 2],
-            [2, 2, 2]], [[2048, 2048, 2048]])
-
-        name = "WMMA GEMM $(AB_type)*$(AB_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+macro get_wmma_config()
+    esc(quote let
+                name = "WMMA GEMM $(AB_type)*$(AB_type)$(zero_c ? "" : "+$(CD_type)")=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) Block ($BLOCK_M, $BLOCK_N, $BLOCK_K) Warps ($WARPS_M, $WARPS_N) OP ($(OP_M), $(OP_N), $(OP_K))"
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, AB_type, CD_type},
+                                        block_shape = (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+                                        warps_per_block = WARPS_M * WARPS_N,
+
+                                        compute_warp = (M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
+
                                         global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
                                         global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
-
-                                        global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                        global_c_layout = zero_c ? Layout.Zero{CD_type} : Layout.UnsafeAlignedColMajor{CD_type},
                                         global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
+
+                                        shared_a_layout = Layout.Padded{transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type}, 16 ÷ sizeof(AB_type)},
+                                        shared_b_layout = Layout.Padded{transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type}, 16 ÷ sizeof(AB_type)},
+                                        shared_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                        shared_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
+
+                                        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, AB_type, CD_type},
 
                                         is_a_col_major = !transpose_a,
                                         is_b_col_major = !transpose_b,
                                         )
 
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(AB_type, 2),
-                                convert(AB_type, 3),
-                                AB_type,
-                                AB_type,
-                                CD_type,
-                                CD_type,
-                                transpose_a,
-                                transpose_b,
-                                mul!,
-                                Epilogue.Default(),
-                                verify_default,
-                                Kernel.matmul_pipelined,
-                                wmma_baseline))
-    end
+        Configuration(name,
+                      conf,
+                      convert(AB_type, 2),
+                      convert(AB_type, zero_c ? 0 : 3),
+                      AB_type,
+                      AB_type,
+                      CD_type,
+                      CD_type,
+                      transpose_a,
+                      transpose_b,
+                      mul!,
+                      Epilogue.Default(),
+                      verify_default,
+                      Kernel.matmul_pipelined,
+                      wmma_baseline)
+    end end)
+end
 
-    # WMMA GEMM + bias
-    for (AB_type, CD_type, min_dimension) in [
-        (Float16, Float32, 128)],
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
-        (M, N, K) in vcat(min_dimension .* [
-            [1, 1, 1],
-            [2, 2, 2]], [[4096, 4096, 4096]])
-
+macro get_wmma_bias_config()
+    esc(quote let
         name = "WMMA GEMM+bias $(AB_type)*$(AB_type)+$(CD_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
 
         # Bias vector: this vector contains 1 element per column of the result matrix.
@@ -352,32 +268,26 @@ function get_configs()
                                         is_b_col_major = !transpose_b,
                                         )
 
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(AB_type, 1),
-                                convert(AB_type, 1),
-                                AB_type,
-                                AB_type,
-                                CD_type,
-                                CD_type,
-                                transpose_a,
-                                transpose_b,
-                                mul!,
-                                Epilogue.Bias(pointer(bias)),
-                                (c_h, d) -> verify_bias(c_h, d, bias),
-                                Kernel.matmul_pipelined,
-                                nothing))
-    end
+        Configuration(name,
+                      conf,
+                      convert(AB_type, 1),
+                      convert(AB_type, 1),
+                      AB_type,
+                      AB_type,
+                      CD_type,
+                      CD_type,
+                      transpose_a,
+                      transpose_b,
+                      mul!,
+                      Epilogue.Bias(pointer(bias)),
+                      (c_h, d) -> verify_bias(c_h, d, bias),
+                      Kernel.matmul_pipelined,
+                      nothing)
+    end end)
+end
 
-    # WMMA Diagonal GEMM
-    for (AB_type, CD_type, min_dimension) in [
-        (Float16, Float32, 128)],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
-        (M, N, K) in vcat(min_dimension .* [
-            [1, 1, 1],
-            [2, 2, 2]], [[4096, 4096, 4096]])
-
+macro get_wmma_diagonal_config()
+    esc(quote let
         @assert M == K "Diagonal only supports square A matrix (A == M)"
 
         transpose_a = false
@@ -403,32 +313,26 @@ function get_configs()
                                         )
 
 
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(AB_type, 1),
-                                convert(AB_type, 1),
-                                AB_type,
-                                AB_type,
-                                CD_type,
-                                CD_type,
-                                transpose_a,
-                                transpose_b,
-                                (C, A, B, alpha, beta) -> mul!(C, Diagonal(A[1:M,1]), B, true, true),
-                                Epilogue.Default(),
-                                verify_default,
-                                Kernel.matmul_singlestage,
-                                nothing))
-    end
+        Configuration(name,
+                      conf,
+                      convert(AB_type, 1),
+                      convert(AB_type, 1),
+                      AB_type,
+                      AB_type,
+                      CD_type,
+                      CD_type,
+                      transpose_a,
+                      transpose_b,
+                      (C, A, B, alpha, beta) -> mul!(C, Diagonal(A[1:M,1]), B, true, true),
+                      Epilogue.Default(),
+                      verify_default,
+                      Kernel.matmul_singlestage,
+                      nothing)
+    end end)
+end
 
-    # WMMA Complex GEMM
-    for (AB_type, CD_type) in [(Float16, Float32)],
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
-        (M, N, K) in [
-            (128, 128, 128),
-            (256, 256, 256),
-            (2048, 2048, 2048)]
+macro get_wmma_complex_config()
+    esc(quote let
         name = "WMMA Complex GEMM $(AB_type)*$(AB_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
 
         conf = GemmKernels.get_config(
@@ -463,32 +367,26 @@ function get_configs()
                                         is_b_col_major = !transpose_b
                                         )
 
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(Complex{AB_type}, 1),
-                                convert(Complex{AB_type}, 1),
-                                Complex{AB_type},
-                                Complex{AB_type},
-                                Complex{CD_type},
-                                Complex{CD_type},
-                                transpose_a,
-                                transpose_b,
-                                mul!,
-                                Epilogue.Default(),
-                                verify_default,
-                                Kernel.matmul_pipelined,
-                                nothing))
-    end
+        Configuration(name,
+                      conf,
+                      convert(Complex{AB_type}, 1),
+                      convert(Complex{AB_type}, 1),
+                      Complex{AB_type},
+                      Complex{AB_type},
+                      Complex{CD_type},
+                      Complex{CD_type},
+                      transpose_a,
+                      transpose_b,
+                      mul!,
+                      Epilogue.Default(),
+                      verify_default,
+                      Kernel.matmul_pipelined,
+                      nothing)
+    end end)
+end
 
-    # WMMA Dual GEMM
-    for (AB_type, CD_type) in [(Float16, Float32)],
-        transpose_a = [false],
-        transpose_b = [false],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
-        (M, N, K) in [
-            (128, 128, 128),
-            (256, 256, 256),
-            (2048, 2048, 2048)]
+macro get_wmma_dual_config()
+    esc(quote let
         name = "WMMA Dual GEMM d$(AB_type)*d$(AB_type)=d$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
 
         conf = GemmKernels.get_config(
@@ -522,21 +420,159 @@ function get_configs()
 
         dual_conv(M) = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, M)
 
-        push!(rv, Configuration(name,
-                                conf,
-                                convert(Complex{AB_type}, 1),
-                                convert(Complex{AB_type}, 1),
-                                Complex{AB_type},
-                                Complex{AB_type},
-                                Complex{CD_type},
-                                Complex{CD_type},
-                                transpose_a,
-                                transpose_b,
-                                (C, A, B, alpha, beta) -> mul!(dual_conv(C), dual_conv(Complex{Float32}.(A)), dual_conv(Complex{Float32}.(B)), true, true),
-                                Epilogue.Default(),
-                                verify_dual,
-                                Kernel.matmul_pipelined,
-                                nothing))
+        Configuration(name,
+                      conf,
+                      convert(Complex{AB_type}, 1),
+                      convert(Complex{AB_type}, 1),
+                      Complex{AB_type},
+                      Complex{AB_type},
+                      Complex{CD_type},
+                      Complex{CD_type},
+                      transpose_a,
+                      transpose_b,
+                      (C, A, B, alpha, beta) -> mul!(dual_conv(C), dual_conv(Complex{Float32}.(A)), dual_conv(Complex{Float32}.(B)), true, true),
+                      Epilogue.Default(),
+                      verify_dual,
+                      Kernel.matmul_pipelined,
+                      nothing)
+    end end)
+end
+
+function get_configs()
+    rv = []
+
+    # FPU Op
+    for (A_type, B_type, CD_type) in [
+            (Float16, Float16, Float32),
+            (Float32, Float32, Float32),
+            (Float32, Float32, Float64),
+            (Float64, Float64, Float64),
+            (Int16, Int16, Int16),
+            (Int32, Int32, Int32),
+            (Int64, Int64, Int64)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
+        (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 64, 32)],
+        N in [128, 256, 2048]
+
+        # XXX: Should we do non-square matrices as well?
+        M = K = N
+
+        push!(rv, @get_fpu_config)
+    end
+
+    # FPU Op shapes
+    for (A_type, B_type, CD_type) in [
+            (Float32, Float32, Float32)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
+            # First, test some shapes with the default base shape (4, 8, 1).
+            map(tup -> (tup..., 4, 8, 1),
+            [( 4, 8,  1),
+             ( 8, 8,  1),
+             ( 4, 16, 1),
+             ( 4, 8,  2),
+             ( 8, 16, 2)]),
+            # Then, test some different combinations of op shape + base shape.
+            [(4,  32, 1, 1,  32, 1),
+             (4,  32, 1, 2,  16, 1),
+             (16, 16, 1, 4,  8,  1),
+             (16, 16, 1, 8,  4,  1),
+             (32, 4,  1, 16, 2,  1),
+             (32, 4,  1, 32, 1,  1)]),
+        (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 64, 32)],
+        N in [128]
+
+        # We'll only test square matrices.
+        M = K = N
+
+        push!(rv, @get_fpu_config)
+    end
+
+    # Tropical GEMM
+    for (A_type, B_type, CD_type, min_dimension) in [
+            (Float32, Float32, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
+        (M, N, K) in min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 1],
+            [1, 1, 2],
+            [2, 2, 2]]
+
+        push!(rv, @get_tropical_config)
+    end
+
+    # WMMA GEMM
+    for (AB_type, CD_type, min_dimension) in [
+        (Float16, Float16, 256),
+        (Float16, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
+        (WARPS_M, WARPS_N) in [(4, 2)],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (M, N, K) in vcat(min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 1],
+            [1, 1, 2],
+            [2, 2, 2]], [[2048, 2048, 2048]]),
+        zero_c in [false]
+
+        push!(rv, @get_wmma_config)
+    end
+
+    # WMMA GEMM + bias
+    for (AB_type, CD_type, min_dimension) in [
+        (Float16, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (M, N, K) in vcat(min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 2]], [[4096, 4096, 4096]])
+        push!(rv, @get_wmma_bias_config)
+    end
+
+    # WMMA Diagonal GEMM
+    for (AB_type, CD_type, min_dimension) in [
+        (Float16, Float32, 128)],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (M, N, K) in vcat(min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 2]], [[4096, 4096, 4096]])
+
+        push!(rv, @get_wmma_diagonal_config)
+    end
+
+    # WMMA Complex GEMM
+    for (AB_type, CD_type) in [(Float16, Float32)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (M, N, K) in [
+            (128, 128, 128),
+            (256, 256, 256),
+            (2048, 2048, 2048)]
+
+        push!(rv, @get_wmma_complex_config)
+    end
+
+    # WMMA Dual GEMM
+    for (AB_type, CD_type) in [(Float16, Float32)],
+        transpose_a = [false],
+        transpose_b = [false],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (M, N, K) in [
+            (128, 128, 128),
+            (256, 256, 256),
+            (2048, 2048, 2048)]
+
+        push!(rv, @get_wmma_dual_config)
     end
 
     rv
