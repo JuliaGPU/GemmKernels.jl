@@ -36,6 +36,9 @@ function matmul(conf::Config, a, b, c, d;
 
     hostkernel = @cuda launch=false kernel(args...)
     attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
+
+    threads ≤ CUDA.maxthreads(hostkernel) || throw(ConfigError("Requested too many threads for this kernel: This kernel can be launched using at most $(CUDA.maxthreads(hostkernel)) threads, while this configuration required $(threads)"))
+
     hostkernel(args...; threads, blocks, shmem)
 end
 
