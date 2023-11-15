@@ -79,7 +79,7 @@ abstract type LayoutBase{T} end
 abstract type Zero{T} <: LayoutBase{T} end
 
 @inline function load(::Type{<:Zero{T}}, workspace, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
+    N = size[1] * size[2]
     return ntuple(i -> VecElement{T}(zero(T)), Val(N))
 end
 
@@ -190,10 +190,10 @@ abstract type UnsafeAlignedColMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{UnsafeAlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 
-@inline fragtype(::Type{<:UnsafeAlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:UnsafeAlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], VecElement{T}}
 
 @inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
+    N = size[1] * size[2]
 
     linear_base = linearise(tile.base, Base.size(workspace))
     linear_offset = linearise(tile.offset, Base.size(workspace))
@@ -204,7 +204,7 @@ abstract type UnsafeAlignedColMajor{T} <: LayoutBase{T} end
 end
 
 @inline Base.@propagate_inbounds function store!(::Type{<:UnsafeAlignedColMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
+    N = size[1] * size[2]
 
     linear_base = linearise(tile.base, Base.size(workspace))
     linear_offset = linearise(tile.offset, Base.size(workspace))
@@ -222,7 +222,7 @@ end
 abstract type Diagonal{T} <: LayoutBase{T} end
 
 @inline Base.@propagate_inbounds function load(::Type{<:Diagonal{T}}, workspace, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
+    N = size[1] * size[2]
 
     # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
     # Only load on the diagonal, i.e. if row and column are equal.
@@ -242,10 +242,10 @@ abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
 
 @inline physical_size(::Type{<:Padded{UnsafeAlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
-@inline fragtype(::Type{<:UnsafeAlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{16 ÷ sizeof(T), VecElement{T}}
+@inline fragtype(::Type{<:UnsafeAlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], VecElement{T}}
 
 @inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
+    N = size[1] * size[2]
 
     linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
     linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
@@ -256,7 +256,7 @@ abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
 end
 
 @inline Base.@propagate_inbounds function store!(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
+    N = size[1] * size[2]
 
     linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
     linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
