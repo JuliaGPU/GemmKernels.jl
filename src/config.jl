@@ -35,6 +35,39 @@
     is_b_col_major
 end
 
+function Base.show(io::IO, config::Config)
+    println(io, "matmul_shape:     $(config.matmul_shape)")
+    println(io, "block_shape:      $(config.block_shape)")
+    println(io, "warps_per_block:  $(config.warps_per_block)")
+
+    println(io, "mem_a_warp:       $(config.mem_a_warp)")
+    println(io, "mem_a_thread:     $(config.mem_a_thread)")
+
+    println(io, "mem_b_warp:       $(config.mem_b_warp)")
+    println(io, "mem_b_thread:     $(config.mem_b_thread)")
+
+    println(io, "mem_cd_warp:      $(config.mem_cd_warp)")
+    println(io, "mem_cd_thread:    $(config.mem_cd_thread)")
+
+    println(io, "compute_warp:     $(config.compute_warp)")
+    println(io, "compute_op_shape: $(config.compute_op_shape)")
+
+    println(io, "global_a_layout:  $(config.global_a_layout)")
+    println(io, "global_b_layout:  $(config.global_b_layout)")
+    println(io, "global_c_layout:  $(config.global_c_layout)")
+    println(io, "global_d_layout:  $(config.global_d_layout)")
+
+    println(io, "shared_a_layout:  $(config.shared_a_layout)")
+    println(io, "shared_b_layout:  $(config.shared_b_layout)")
+    println(io, "shared_c_layout:  $(config.shared_c_layout)")
+    println(io, "shared_d_layout:  $(config.shared_d_layout)")
+
+    println(io, "operator:         $(config.operator)")
+
+    println(io, "is_a_col_major:   $(config.is_a_col_major)")
+    println(io, "is_b_col_major:   $(config.is_b_col_major)")
+end
+
 struct ConfigError <: Exception
     message::String
 end
