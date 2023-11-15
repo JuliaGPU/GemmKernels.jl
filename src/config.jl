@@ -215,6 +215,12 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     prod(mem_b_warp) * warps_per_block ≤ block_shape.K * block_shape.N || throw(ConfigError("mem_b_warp is too big for the selected block shape: need at least one iteration in the memory copy loop!"))
     prod(mem_cd_warp) * warps_per_block ≤ block_shape.M * block_shape.N || throw(ConfigError("mem_cd_warp is too big for the selected block shape: need at least one iteration in the memory copy loop!"))
 
+    # Check sizes of tiles
+    check_tile_smaller(lhs, rhs, msg) = ((lhs.M ≤ rhs.M) && (lhs.N ≤ rhs.N) && (lhs.K ≤ rhs.K)) || throw(ConfigError(msg))
+
+    check_tile_smaller(compute_warp, block_shape, "compute_warp must be smaller than block_shape!")
+    check_tile_smaller(block_shape, gemm_shape, "block_shape must be smaller than gemm_shape!")
+
     return Config(
         #= Params =#
         gemm_shape,
