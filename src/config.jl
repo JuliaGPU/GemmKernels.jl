@@ -30,7 +30,7 @@
     #= Operator =#
     operator                    # which operator to use in the inner loop
 
-    #= Is A & B stored in Column major order? This determines the iteration order of the parallellisation =#
+    #= Is A & B stored in Column major order? This determines the iteration order of the parallelisation =#
     is_a_col_major
     is_b_col_major
 end
