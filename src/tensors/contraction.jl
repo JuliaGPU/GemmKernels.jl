@@ -23,6 +23,7 @@ mutable struct ContractionPlan
         d, modeD::ModeType;
         algo::ALGO=ALGO_GETT,
         computeType=eltype(a),
+        dataType=eltype(c),
         operator=Operator.WMMAOp
     )
         desc = ContractionDescriptor(
@@ -30,7 +31,8 @@ mutable struct ContractionPlan
             b, modeB,
             c, modeC,
             d, modeD,
-            computeType=computeType
+            computeType,
+            dataType
         )
         return ContractionPlan(desc; algo=algo, operator=operator)
     end
@@ -55,8 +57,8 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d)
             plan.algorithmPlan.gemmConf, a, b, c, d;
             transform_shared_to_regs_a = Transform.Elementwise(x -> unaryOpA(α * x)),
             transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
-            transform_shared_to_regs_c = Transform.Elementwise(x -> β * unaryOpC(x)),
-            transform_regs_to_shared_d = Transform.Elementwise(x -> unaryOpD(x)),
+            transform_global_to_shared_c = Transform.Elementwise(x -> β * unaryOpC(x)),
+            transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
             kernel = Kernel.matmul_singlestage,
         )
     else 
