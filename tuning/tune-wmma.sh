@@ -5,15 +5,13 @@ cd "$( dirname "${BASH_SOURCE[0]}" )"
 
 cd ..
 
-until julia --project -e '
-    println("--- :julia: Instantiating project")
-    using Pkg
-    Pkg.instantiate()
-    Pkg.activate("tuning")
-    Pkg.instantiate()
-    push!(LOAD_PATH, @__DIR__)
+echo "+++ :julia: Instantiating project"
+julia --project -e 'using Pkg; Pkg.instantiate()'
+julia --project=tuning -e 'using Pkg; Pkg.instantiate()'
 
-    println("+++ :julia: Tuning")
+echo "+++ :julia: Tuning"
+until julia --project=tuning -e '
+    push!(LOAD_PATH, @__DIR__)
     include("tuning/tune-wmma.jl")'; do
 
     echo "Tuning script crashed. Resuming after 1 second..." >&2
