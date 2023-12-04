@@ -173,17 +173,20 @@ function measure_config(row)
     try
         run_gemm(cf, a, b, c, d)
     catch err
+        bt = catch_backtrace()
+        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+
         if isa(err, GemmKernels.ConfigError)
-            @info "Skipping configuration $(NamedTuple(row))" * sprint(Base.showerror, err)
+            @info "Skipping configuration $(NamedTuple(row))" * log
             return [Inf], "unsupported_config_post_run"
         end
 
         if isa(err, CuError)
-            @error "Configuration failed: $(NamedTuple(row))" * sprint(Base.showerror, err)
+            @error "Configuration failed: $(NamedTuple(row))" * log
             rethrow()
         end
 
-        @info "Skipping configuration: $(NamedTuple(row))" * sprint(Base.showerror, err)
+        @info "Skipping configuration: $(NamedTuple(row))" * log
         return [Inf], "error"
     end
 
@@ -412,10 +415,24 @@ end
 
 function main()
     @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
+    config_path = joinpath(@__DIR__, "configs.bin")
 
     configs = nothing
 
-    if !isfile("tuning/configs.bin")
+    if isfile(config_path)
+        @info "Loading configurations from disk..."
+        try
+            configs = open(config_path, "r") do io
+                deserialize(io)
+            end
+            @info "Loaded $(size(configs, 1)) configurations."
+        catch err
+            @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
+            mv(config_path, "$(config_path).broken")
+        end
+    end
+
+    if configs === nothing
         # (1) Generate configurations.
         @info "Generating configurations..."
         configs = generate_configs()
@@ -443,79 +460,80 @@ function main()
         end
     end
 
-    @info "Loading configurations from disk..."
-    configs = open("tuning/configs.bin", "r") do io
-        deserialize(io)
-    end
-    @info "Loaded $(size(configs, 1)) configurations."
-
     # (3) Measure performance of configurations.
     num_unknown = counter(configs[!, "category"])["unknown"]
     p = Progress(num_unknown; desc="Parameter sweep", dt=1.0, showspeed=true)
 
     @info "Need to perform parameter sweep over $(num_unknown) configurations."
 
-    # Generate inputs for the first configuration. This is not strictly
-    # speaking necessary, but doing this outside of the loop means that the
-    # first iteration will not be excessively slow, which improves the "ETA"
-    # estimate.
-    first_unknown_config = findfirst(configs[!, "category"] .== "unknown")
-    !isnothing(first_unknown_config) && generate_inputs_if_needed(configs[first_unknown_config, :])
-
     channel = RemoteChannel(() -> Channel(), 1)
     @sync begin
+        # measure each configuration in parallel
         @async begin
-            while true
-                values = take!(channel)
-                values === nothing && break
-                next!(p; showvalues=values)
-            end
-        end
-
-        @async begin
-            @info "Starting parameter sweep..."
-            pmap(eachrow(configs)) do config_row
-                @info "Got configuration $(NamedTuple(config_row))..."
-                start_time = Dates.now()
+            @sync @distributed for i in 1:size(configs,1)
+                config_row = configs[i, :]
+                @info "Got configuration $i: $(NamedTuple(config_row))..."
 
                 if config_row.category != "unknown"
-                    return config_row
+                    continue
                 end
 
                 config_row.category = "crashed"
 
-                # Save results in case the process crashes.
-                open("tuning/configs.bin", "w") do io
-                    serialize(io, configs)
-                end
-
                 @info "Measuring configuration $(NamedTuple(config_row))..."
 
+                start_time = Dates.now()
                 times, category = measure_config(config_row)
+                end_time = Dates.now()
 
                 @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
 
                 config_row.category = category
                 config_row.times = times
 
-                counter_dict_abs = Dict(counter(configs[!, "category"]))
-                counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
-
-                put!(channel, [
-                    (:N, config_row.N),
-                    (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
-                    (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
-                    (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
-                    (:kernel, config_row.kernel_str),
-                    (:counters, counter_dict_abs),
-                    (:counters_relative, counter_dict_rel),
-                    (:last_result, "$(category) -- $(prettytime(times .* 1e9))"),
-                    (:last_iteration_time, Dates.now() - start_time)
-                ])
-
-                return config_row
+                put!(channel, (i, start_time, end_time, config_row))
             end
+
+            @info "Done with parameter sweep."
             put!(channel, nothing)
+        end
+
+        # process the results
+        @async begin
+            while true
+                data = take!(channel)
+                data === nothing && break
+
+                try
+                    # Update configuration
+                    i, start_time, end_time, config_row = data
+                    configs[i, :] = config_row
+
+                    # Save results in case the process crashes.
+                    open("tuning/configs.bin", "w") do io
+                        serialize(io, configs)
+                    end
+
+                    # Update progress bar
+                    counter_dict_abs = Dict(counter(configs[!, "category"]))
+                    counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
+                    next!(p; showvalues=[
+                        (:N, config_row.N),
+                        (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
+                        (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
+                        (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
+                        (:kernel, config_row.kernel_str),
+                        (:counters, counter_dict_abs),
+                        (:counters_relative, counter_dict_rel),
+                        (:last_result, "$(config_row.category) -- $(prettytime(config_row.times .* 1e9))"),
+                        (:last_iteration_time, end_time - start_time)
+                    ])
+                catch err
+                    bt = catch_backtrace()
+                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                    @error "Error while updating progress bar: $log"
+                end
+            end
         end
     end
 
