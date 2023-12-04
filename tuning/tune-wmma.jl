@@ -2,15 +2,19 @@ using CUDA, GemmKernels
 using DataFrames
 using DataStructures
 using Dates
+using Distributed
+using FileWatching.Pidfile
 using Logging
 using LoggingExtras
-using Plots
 using ProgressMeter
 using Serialization
 using Statistics
 using StatsBase
 
-pythonplot()
+if myid() == 1
+    using Plots
+    pythonplot()
+end
 
 #######
 
@@ -63,7 +67,14 @@ include("../configs/configs.jl")
 timestamp_logger(logger) = TransformerLogger(logger) do log
     merge(log, (; message = "$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS")) $(log.message)"))
 end
-FileLogger(joinpath(@__DIR__, "tuning.log"); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
+function log_filename()
+    path = joinpath(@__DIR__, "tuning.log")
+    if myid() != 1
+        path = "$(path).$(myid())"
+    end
+    path
+end
+FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
 function kernel_string_to_function(str)
     Dict(
@@ -195,16 +206,18 @@ function measure_config(row)
     device_synchronize()
     GC.gc(true)
 
-    start_time = Dates.now()
+    mkpidlock(joinpath(@__DIR__, "tuning.pid")) do
+        start_time = Dates.now()
 
-    while true
-        synchronize(stream())
-        time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
-        push!(times, time)
+        while true
+            synchronize(stream())
+            time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
+            push!(times, time)
 
-        if length(times) >= BENCH_MIN_NUM_SAMPLES
-            (Dates.now() - start_time > Second(BENCH_MAX_NUM_SECONDS)) && break
-            (confidence_interval_95(times) / median(times) < BENCH_NORM_CI_THRESHOLD) && break
+            if length(times) >= BENCH_MIN_NUM_SAMPLES
+                (Dates.now() - start_time > Second(BENCH_MAX_NUM_SECONDS)) && break
+                (confidence_interval_95(times) / median(times) < BENCH_NORM_CI_THRESHOLD) && break
+            end
         end
     end
 
@@ -398,7 +411,7 @@ function plot_results(best_configs)
 end
 
 function main()
-    @info "Starting WMMA tuning script for device $(name(device()))..."
+    @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
 
     configs = nothing
 
@@ -449,43 +462,61 @@ function main()
     first_unknown_config = findfirst(configs[!, "category"] .== "unknown")
     !isnothing(first_unknown_config) && generate_inputs_if_needed(configs[first_unknown_config, :])
 
-    for config_row in eachrow(configs)
-        start_time = Dates.now()
-
-        if config_row.category != "unknown"
-            continue
+    channel = RemoteChannel(() -> Channel(), 1)
+    @sync begin
+        @async begin
+            while true
+                values = take!(channel)
+                values === nothing && break
+                next!(p; showvalues=values)
+            end
         end
 
-        config_row.category = "crashed"
+        @async begin
+            @info "Starting parameter sweep..."
+            pmap(eachrow(configs)) do config_row
+                @info "Got configuration $(NamedTuple(config_row))..."
+                start_time = Dates.now()
 
-        # Save results in case the process crashes.
-        open("tuning/configs.bin", "w") do io
-            serialize(io, configs)
+                if config_row.category != "unknown"
+                    return config_row
+                end
+
+                config_row.category = "crashed"
+
+                # Save results in case the process crashes.
+                open("tuning/configs.bin", "w") do io
+                    serialize(io, configs)
+                end
+
+                @info "Measuring configuration $(NamedTuple(config_row))..."
+
+                times, category = measure_config(config_row)
+
+                @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
+
+                config_row.category = category
+                config_row.times = times
+
+                counter_dict_abs = Dict(counter(configs[!, "category"]))
+                counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
+
+                put!(channel, [
+                    (:N, config_row.N),
+                    (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
+                    (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
+                    (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
+                    (:kernel, config_row.kernel_str),
+                    (:counters, counter_dict_abs),
+                    (:counters_relative, counter_dict_rel),
+                    (:last_result, "$(category) -- $(prettytime(times .* 1e9))"),
+                    (:last_iteration_time, Dates.now() - start_time)
+                ])
+
+                return config_row
+            end
+            put!(channel, nothing)
         end
-
-        @info "Measuring configuration $(NamedTuple(config_row))..."
-
-        times, category = measure_config(config_row)
-
-        @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
-
-        config_row.category = category
-        config_row.times = times
-
-        counter_dict_abs = Dict(counter(configs[!, "category"]))
-        counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
-
-        next!(p; showvalues=[
-            (:N, config_row.N),
-            (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
-            (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
-            (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
-            (:kernel, config_row.kernel_str),
-            (:counters, counter_dict_abs),
-            (:counters_relative, counter_dict_rel),
-            (:last_result, "$(category) -- $(prettytime(times .* 1e9))"),
-            (:last_iteration_time, Dates.now() - start_time)
-        ])
     end
 
     # Save data for final iteration.
@@ -518,5 +549,6 @@ function main()
     plot_results(best_configs)
 end
 
-
-isinteractive() || main()
+if !isinteractive() && myid() == 1
+    main()
+end
