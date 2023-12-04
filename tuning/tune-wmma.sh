@@ -3,9 +3,6 @@ set -Eeuo pipefail
 
 cd "$( dirname "${BASH_SOURCE[0]}" )"
 
-rm -f configs.bson
-rm -f tuning.log
-
 cd ..
 
 until julia --project -e '

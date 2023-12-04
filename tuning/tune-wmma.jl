@@ -376,7 +376,7 @@ function plot_results(best_configs)
     )
 
     p = plot()
-    title!("$AB_type x $AB_type = $CD_type ($(CUDA.name(CUDA.device())))")
+    title!("$AB_type x $AB_type = $CD_type ($(name(device())))")
     xlabel!("Matrix size [-]")
     ylabel!("Performance relative to cuBLAS [%]")
 
