@@ -177,16 +177,16 @@ function measure_config(row)
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
         if isa(err, GemmKernels.ConfigError)
-            @info "Skipping configuration $(NamedTuple(row))" * log
+            @info "Skipping configuration $(NamedTuple(row))\n" * log
             return [Inf], "unsupported_config_post_run"
         end
 
         if isa(err, CuError)
-            @error "Configuration failed: $(NamedTuple(row))" * log
+            @error "Configuration failed: $(NamedTuple(row))\n" * log
             rethrow()
         end
 
-        @info "Skipping configuration: $(NamedTuple(row))" * log
+        @info "Skipping configuration: $(NamedTuple(row))\n" * log
         return [Inf], "error"
     end
 
@@ -486,12 +486,7 @@ function main()
                 times, category = measure_config(config_row)
                 end_time = Dates.now()
 
-                @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
-
-                config_row.category = category
-                config_row.times = times
-
-                put!(channel, (i, start_time, end_time, config_row))
+                put!(channel, (i, start_time, end_time, category, times))
             end
 
             @info "Done with parameter sweep."
@@ -506,10 +501,13 @@ function main()
 
                 try
                     # Update configuration
-                    i, start_time, end_time, config_row = data
-                    configs[i, :] = config_row
+                    i, start_time, end_time, category, times = data
+                    config_row = configs[i, :]
+                    @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
 
                     # Save results in case the process crashes.
+                    config_row.times = times
+                    config_row.category = category
                     open("tuning/configs.bin", "w") do io
                         serialize(io, configs)
                     end

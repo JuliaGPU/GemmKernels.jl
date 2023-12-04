@@ -11,6 +11,7 @@ julia --project=tuning -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
 echo "+++ :julia: Tuning"
 until julia --project=tuning -e '
+    ENV["JULIA_CUDA_HARD_MEMORY_LIMIT"] = "4GiB"
     using Distributed
     @everywhere push!(LOAD_PATH, @__DIR__)
     @everywhere include("tuning/tune-wmma.jl")' "$@"; do
