@@ -394,11 +394,11 @@ function plot_results(best_configs)
         plot!(p, relevant_configs.N, ratios, ribbon=(ratios .- ratios_lo, ratios_hi .- ratios), label=label, markershape=markershapes[label], xscale=:log2)
     end
 
-    savefig(p, "tuning/plot.pdf")
+    savefig(p, "tuning/$(name(device())).pdf")
 end
 
 function main()
-    @info "Starting WMMA tuning script..."
+    @info "Starting WMMA tuning script for device $(name(device()))..."
 
     configs = nothing
 
