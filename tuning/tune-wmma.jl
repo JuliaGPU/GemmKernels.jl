@@ -63,7 +63,7 @@ include("../configs/configs.jl")
 timestamp_logger(logger) = TransformerLogger(logger) do log
     merge(log, (; message = "$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS")) $(log.message)"))
 end
-FileLogger("tuning/tuning.log"; append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
+FileLogger(joinpath(@__DIR__, "tuning.log"); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
 function kernel_string_to_function(str)
     Dict(
