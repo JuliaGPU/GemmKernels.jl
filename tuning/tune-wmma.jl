@@ -148,6 +148,11 @@ function generate_inputs_if_needed(row)
     cf = get_config(row)
 
     if (input_transpose_a, input_transpose_b, input_N) != (row.transpose_a, row.transpose_b, row.N)
+        for x in [c_ref, a, b, c, d]
+            if x !== nothing
+                CUDA.unsafe_free!(x)
+            end
+        end
         c_ref, a, b, c, d = generate_inputs(cf)
         input_transpose_a, input_transpose_b, input_N = row.transpose_a, row.transpose_b, row.N
     end
@@ -192,13 +197,6 @@ function measure_config(row)
 
     if !verify(cf, c_ref, d)
         @warn "Configuration produced invalid result: $(NamedTuple(row))"
-
-        expected = c_ref
-        actual = d
-
-        mad, index = findmax(abs.(expected - actual))
-
-        @warn "Maximum absolute deviation is $(mad) at index $(index)."
 
         return [Inf], "invalid_result"
     end
@@ -410,15 +408,15 @@ function plot_results(best_configs)
         plot!(p, relevant_configs.N, ratios, ribbon=(ratios .- ratios_lo, ratios_hi .- ratios), label=label, markershape=markershapes[label], xscale=:log2)
     end
 
-    savefig(p, "tuning/$(name(device())).pdf")
+    savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end
 
 function main()
     @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
+
+    # (0) Load configurations from disk, or generate them.
     config_path = joinpath(@__DIR__, "configs.bin")
-
     configs = nothing
-
     if isfile(config_path)
         @info "Loading configurations from disk..."
         try
@@ -431,7 +429,6 @@ function main()
             mv(config_path, "$(config_path).broken")
         end
     end
-
     if configs === nothing
         # (1) Generate configurations.
         @info "Generating configurations..."
@@ -455,7 +452,7 @@ function main()
 
         @info "Filtered $(counter(configs[!, "category"])["unsupported_config_pre_run"]) configurations."
 
-        open("tuning/configs.bin", "w") do io
+        open(config_path, "w") do io
             serialize(io, configs)
         end
     end
@@ -508,7 +505,7 @@ function main()
                     # Save results in case the process crashes.
                     config_row.times = times
                     config_row.category = category
-                    open("tuning/configs.bin", "w") do io
+                    open(config_path, "w") do io
                         serialize(io, configs)
                     end
 
@@ -536,29 +533,38 @@ function main()
     end
 
     # Save data for final iteration.
-    open("tuning/configs.bin", "w") do io
+    open(config_path, "w") do io
         serialize(io, configs)
     end
 
     # And load again, for good measure.
-    configs = open("tuning/configs.bin", "r") do io
+    configs = open(config_path, "r") do io
         deserialize(io)
     end
 
     # (4) Select best configurations, and benchmark.
-    if !isfile("tuning/best-configs.bin")
+    best_configs_path = joinpath(@__DIR__, "best-configs.bin")
+    best_configs = nothing
+    if isfile(best_configs_path)
+        try
+            @info "Loading best configurations from disk..."
+            best_configs = open(best_configs_path, "r") do io
+                deserialize(io)
+            end
+        catch err
+            @error "Error while loading best configurations from disk: $(sprint(Base.showerror, err)))"
+            mv(best_configs_path, "$(best_configs_path).broken")
+        end
+    end
+    if best_configs === nothing
         @info "Benchmarking configurations for plot..."
         best_configs = benchmark_best_configs(configs)
 
-        open("tuning/best-configs.bin", "w") do io
+        open(best_configs_path, "w") do io
             serialize(io, best_configs)
         end
     end
 
-    @info "Loading best configurations from disk..."
-    best_configs = open("tuning/best-configs.bin", "r") do io
-        deserialize(io)
-    end
 
     # (5) Plotting results
     @info "Plotting results..."
