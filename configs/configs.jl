@@ -337,7 +337,7 @@ macro get_wmma_complex_config()
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMAComplexOp{OP_M, OP_N, OP_K},
+                                        operator = Operator.WMMAComplexOp{OP_M, OP_N, OP_K, AB_type, CD_type},
 
                                         global_a_layout = transpose_a ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
                                         global_b_layout = transpose_b ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
@@ -391,7 +391,7 @@ macro get_wmma_dual_config()
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMADualOp{OP_M, OP_N, OP_K},
+                                        operator = Operator.WMMADualOp{OP_M, OP_N, OP_K, AB_type, CD_type},
 
                                         global_a_layout = Layout.InterleavedColMajor{Float16},
                                         global_b_layout = Layout.InterleavedColMajor{Float16},
@@ -514,7 +514,11 @@ function get_configs()
         transpose_b = [false, true],
         (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
         (WARPS_M, WARPS_N) in [(4, 2)],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 1],
@@ -530,7 +534,11 @@ function get_configs()
         (Float16, Float32, 128)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
@@ -541,7 +549,11 @@ function get_configs()
     for (AB_type, CD_type, min_dimension) in [
         (Float16, Float32, 128)],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
@@ -553,7 +565,11 @@ function get_configs()
     for (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in [
             (128, 128, 128),
             (256, 256, 256),
@@ -566,7 +582,11 @@ function get_configs()
     for (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a = [false],
         transpose_b = [false],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in [
             (128, 128, 128),
             (256, 256, 256),

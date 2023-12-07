@@ -119,7 +119,11 @@ end
 function check_wmma_shape(operator::Type)
     op_shape = Operator.shape(operator)
 
-    if op_shape ∉ [(M=16, N=16, K=16)]
+    if op_shape ∉ [
+        (M=16, N=16, K=16),
+        (M=8, N=32, K=16),
+        (M=32, N=8, K=16),
+    ]
         throw(ConfigError("Unsupported WMMA Operator shape $(op_shape)!"))
     end
 end
