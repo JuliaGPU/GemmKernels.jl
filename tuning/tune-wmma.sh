@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+GPU_ID=0
 GPU_CLOCK=915
 MEM_CLOCK=5001
 
@@ -13,6 +14,7 @@ Tune WMMA Parameters.
 
 Options:
 -h, --help                 Show this help.
+-i id                      Specify which GPU to target.
 -gc, --gpu-clock speed     Change the frequency the GPU core clock is locked to
                            before benchmarking, in MHz (default 915 MHz).
 -mc, --memory-clock speed  Change the frequency the GPU memory clock is locked to
@@ -25,6 +27,11 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
             usage; exit 0
+            ;;
+        -i)
+            shift
+            GPU_ID=$1
+            shift
             ;;
         -gc|--gpu-clock)
             shift
@@ -55,9 +62,11 @@ if [[ $# -ne 0 ]]; then
     exit 1
 fi
 
-echo "Locking GPU clock speeds to $GPU_CLOCK MHz (GPU) / $MEM_CLOCK MHz (Mem)..."
+export CUDA_VISIBLE_DEVICES=$GPU_ID
 
-if ! nvidia-smi --query-supported-clocks=graphics,memory --format=csv | grep -F "$GPU_CLOCK MHz, $MEM_CLOCK MHz"; then
+echo "Locking GPU $GPU_ID clock speeds to $GPU_CLOCK MHz (GPU) / $MEM_CLOCK MHz (Mem)..."
+
+if ! nvidia-smi -i $GPU_ID --query-supported-clocks=graphics,memory --format=csv | grep -F "$GPU_CLOCK MHz, $MEM_CLOCK MHz"; then
     echo "Unsupported combination of clock speeds!"
     exit 1
 fi
@@ -72,9 +81,9 @@ while true; do
     kill -0 "$$" || exit
 done &> /dev/null &
 
-sudo nvidia-smi -pm 1
-sudo nvidia-smi --lock-gpu-clocks=$GPU_CLOCK
-sudo nvidia-smi --lock-memory-clocks=$MEM_CLOCK
+sudo nvidia-smi -i $GPU_ID -pm 1
+sudo nvidia-smi -i $GPU_ID --lock-gpu-clocks=$GPU_CLOCK
+sudo nvidia-smi -i $GPU_ID --lock-memory-clocks=$MEM_CLOCK
 
 cd "$( dirname "${BASH_SOURCE[0]}" )"
 cd ..
@@ -119,5 +128,5 @@ until julia --project=tuning -e '
 done
 
 echo "Unlocking GPU clock speeds..."
-sudo nvidia-smi --reset-gpu-clocks
-sudo nvidia-smi --reset-memory-clocks
+sudo nvidia-smi -i $GPU_ID --reset-gpu-clocks
+sudo nvidia-smi -i $GPU_ID --reset-memory-clocks
