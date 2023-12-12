@@ -287,6 +287,19 @@ function got_enough_samples(row)
     uncertainty < PLOT_RATIO_MAX_UNCERTAINTY
 end
 
+function get_nvml_data(dev)
+    Dict(
+         :clock_info => NVML.clock_info(dev),
+         :max_clock_info => NVML.max_clock_info(dev),
+         :clock_event_reasons => NVML.clock_event_reasons(dev),
+         :power_usage => NVML.power_usage(dev),
+         :energy_consumption => NVML.energy_consumption(dev),
+         :temperature => NVML.temperature(dev),
+         :memory_info => NVML.memory_info(dev),
+         :utilization_rates => NVML.utilization_rates(dev),
+    )
+end
+
 function benchmark_best_configs(configs)
     best_configs = DataFrame(
         transpose_a=Bool[],
@@ -305,8 +318,12 @@ function benchmark_best_configs(configs)
         uncertainty=Float64[],
         time_spent=Float64[],
         gemmkernels_times=Vector{Any}[],
-        baseline_times=Vector{Any}[]
+        baseline_times=Vector{Any}[],
+        gemmkernels_nvml=Vector{Any}[],
+        baseline_nvml=Vector{Any}[]
     )
+
+    dev = NVML.Device(parent_uuid(device()))
 
     for transpose_a = [false, true],
         transpose_b = [false, true],
@@ -334,6 +351,8 @@ function benchmark_best_configs(configs)
             :time_spent => 0.0,
             :gemmkernels_times => [],
             :baseline_times => [],
+            :gemmkernels_nvml => [],
+            :baseline_nvml => [],
         ))
     end
 
@@ -364,9 +383,11 @@ function benchmark_best_configs(configs)
 
                 start_time = Dates.now()
 
+                push!(config_row["gemmkernels_nvml"], get_nvml_data(dev))
                 prof = CUDA.@profile run_gemm(cf, a, b, c, d)
                 push!(config_row["gemmkernels_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
+                push!(config_row["baseline_nvml"], get_nvml_data(dev))
                 prof = CUDA.@profile run_baseline(cf, a, b, c, d)
                 push!(config_row["baseline_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
