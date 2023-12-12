@@ -47,8 +47,6 @@ const CD_type = Float32
 
 const zero_c = true
 
-const OP_M, OP_N, OP_K = 16, 16, 16
-
 #######
 
 # Reuse inputs across iterations.
@@ -95,6 +93,9 @@ function generate_configs()
         BLOCK_K=Int[],
         WARPS_M=Int[],
         WARPS_N=Int[],
+        OP_M=Int[],
+        OP_N=Int[],
+        OP_K=Int[],
         kernel_str=String[],
         category=String[],
         times=Vector{Any}[]
@@ -108,6 +109,11 @@ function generate_configs()
         BLOCK_K in 2 .^ (5:7),
         WARPS_M in 2 .^ (0:3),
         WARPS_N in 2 .^ (0:3),
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         kernel_str in ["singlestage", "pipelined"]
 
         push!(all_configs, Dict(
@@ -119,6 +125,9 @@ function generate_configs()
             :BLOCK_K => BLOCK_K,
             :WARPS_M => WARPS_M,
             :WARPS_N => WARPS_N,
+            :OP_M => OP_M,
+            :OP_N => OP_N,
+            :OP_K => OP_K,
             :kernel_str => kernel_str,
             :category => "unknown",
             :times => [],
@@ -137,6 +146,9 @@ function get_config(row)
     BLOCK_K = row["BLOCK_K"]
     WARPS_M = row["WARPS_M"]
     WARPS_N = row["WARPS_N"]
+    OP_M = row["OP_M"]
+    OP_N = row["OP_N"]
+    OP_K = row["OP_K"]
     kernel = kernel_string_to_function(row["kernel_str"])
 
     @get_wmma_config
@@ -285,6 +297,9 @@ function benchmark_best_configs(configs)
         BLOCK_K=Int[],
         WARPS_M=Int[],
         WARPS_N=Int[],
+        OP_M=Int[],
+        OP_N=Int[],
+        OP_K=Int[],
         kernel_str=String[],
         category=String[],
         uncertainty=Float64[],
@@ -310,6 +325,9 @@ function benchmark_best_configs(configs)
             :BLOCK_K => best_config["BLOCK_K"],
             :WARPS_M => best_config["WARPS_M"],
             :WARPS_N => best_config["WARPS_N"],
+            :OP_M => best_config["OP_M"],
+            :OP_N => best_config["OP_N"],
+            :OP_K => best_config["OP_K"],
             :kernel_str => best_config["kernel_str"],
             :category => "todo",
             :uncertainty => Inf,
@@ -517,6 +535,7 @@ function main()
                         (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
                         (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
                         (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
+                        (:op_shape, (config_row.OP_M, config_row.OP_N, config_row.OP_K)),
                         (:kernel, config_row.kernel_str),
                         (:counters, counter_dict_abs),
                         (:counters_relative, counter_dict_rel),
