@@ -384,11 +384,11 @@ function benchmark_best_configs(configs)
                 start_time = Dates.now()
 
                 push!(config_row["gemmkernels_nvml"], get_nvml_data(dev))
-                prof = CUDA.@profile run_gemm(cf, a, b, c, d)
+                prof = CUDA.@profile concurrent=false run_gemm(cf, a, b, c, d)
                 push!(config_row["gemmkernels_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
                 push!(config_row["baseline_nvml"], get_nvml_data(dev))
-                prof = CUDA.@profile run_baseline(cf, a, b, c, d)
+                prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
                 push!(config_row["baseline_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
                 config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
