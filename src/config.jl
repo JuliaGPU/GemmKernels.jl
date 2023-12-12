@@ -30,7 +30,7 @@
     #= Operator =#
     operator                    # which operator to use in the inner loop
 
-    #= Is A & B stored in Column major order? This determines the iteration order of the parallellisation =#
+    #= Is A & B stored in Column major order? This determines the iteration order of the parallelisation =#
     is_a_col_major
     is_b_col_major
 end
@@ -119,7 +119,11 @@ end
 function check_wmma_shape(operator::Type)
     op_shape = Operator.shape(operator)
 
-    if op_shape ∉ [(M=16, N=16, K=16)]
+    if op_shape ∉ [
+        (M=16, N=16, K=16),
+        (M=8, N=32, K=16),
+        (M=32, N=8, K=16),
+    ]
         throw(ConfigError("Unsupported WMMA Operator shape $(op_shape)!"))
     end
 end
@@ -127,6 +131,11 @@ end
 check_operator_config(operator::Type{<:Operator.WMMAOp}) = check_wmma_shape(operator)
 check_operator_config(operator::Type{<:Operator.WMMAComplexOp}) = check_wmma_shape(operator)
 check_operator_config(operator::Type{<:Operator.WMMADualOp}) = check_wmma_shape(operator)
+
+require_tile_sized_global(layout) = true
+require_tile_sized_global(::Type{<:Layout.Zero{T}}) where {T} = false
+require_tile_sized_global(::Type{<:Layout.ColMajor{T}}) where {T} = false
+require_tile_sized_global(::Type{<:Layout.RowMajor{T}}) where {T} = false
 
 function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kwargs...)
     params = Dict(kwargs)
@@ -216,10 +225,13 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     prod(mem_cd_warp) * warps_per_block ≤ block_shape.M * block_shape.N || throw(ConfigError("mem_cd_warp is too big for the selected block shape: need at least one iteration in the memory copy loop!"))
 
     # Check sizes of tiles
-    check_tile_smaller(lhs, rhs, msg) = ((lhs.M ≤ rhs.M) && (lhs.N ≤ rhs.N) && (lhs.K ≤ rhs.K)) || throw(ConfigError(msg))
+    check_tile_multiple(num, den, dims, msg) = all([num[dim] % den[dim] == 0 for dim in dims]) || throw(ConfigError(msg))
 
-    check_tile_smaller(compute_warp, block_shape, "compute_warp must be smaller than block_shape!")
-    check_tile_smaller(block_shape, gemm_shape, "block_shape must be smaller than gemm_shape!")
+    check_tile_multiple(block_shape, compute_warp, [:M, :N, :K], "block_shape must be a multiple of compute_warp!")
+    require_tile_sized_global(global_a_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :K], "gemm_shape.MK must be a multiple of block_shape.MK!")
+    require_tile_sized_global(global_b_layout) && check_tile_multiple(gemm_shape, block_shape, [:K, :N], "gemm_shape.KN must be a multiple of block_shape.KN!")
+    require_tile_sized_global(global_c_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
+    require_tile_sized_global(global_d_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
 
     return Config(
         #= Params =#

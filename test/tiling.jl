@@ -59,13 +59,13 @@ using GemmKernels.Tiling
             end
         end
 
-        @testcase "Parallellise" begin
+        @testcase "Parallelise" begin
             tile_size = (M = 8, N = 4)
             num_tiles = (M = 2, N = 8)
             tile = Tile(M = num_tiles.M * tile_size.M, N = num_tiles.N * tile_size.N)
 
             for i = 1 : (num_tiles.M * num_tiles.N) ÷ 2
-                t1, t2 = parallellise(tile, Tile(tile_size), i, (num_tiles.M * num_tiles.N) ÷ 2)
+                t1, t2 = parallelise(tile, Tile(tile_size), i, (num_tiles.M * num_tiles.N) ÷ 2)
 
                 @test t1.offset == (M = 0, N = 0)
                 @test t2.offset == (M = 0, N = 4 * tile_size.N)

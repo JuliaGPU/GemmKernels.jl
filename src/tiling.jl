@@ -188,7 +188,7 @@ export TileIterator
 
 A [`TileIterator`](@ref) represents an iterator over a set of [`Tile`](@ref)s.
 
-See also: [`subdivide`](@ref), [`parallellise`](@ref).
+See also: [`subdivide`](@ref), [`parallelise`](@ref).
 """
 struct TileIterator{tile_size, parent_size, names, T, S, idxs, col_major}
     parent::Tile{parent_size, names, T}
@@ -197,31 +197,31 @@ struct TileIterator{tile_size, parent_size, names, T, S, idxs, col_major}
 end
 
 # ----------------
-# Parallellisation
+# Parallelisation
 # ----------------
 
-export parallellise, subdivide
+export parallelise, subdivide
 
 """
-    parallellise(tile, tiling_size, idx, size)
+    parallelise(tile, tiling_size, idx, size)
 
 Split the given `tile` in subtiles of size `tiling_size` across a group of
 cooperating entities (e.g. warps, threads, ...).
 
 Unlike [`subdivide`](@ref), the `tile` need not be completely covered by
 `count` tiles of size `tiling_size`. If that's not the case, the subtiles
-are evenly parallellised across all cooperating entities.
+are evenly parallelised across all cooperating entities.
 
 Returns a [`TileIterator`](@ref) that iterates over the [`Tile`](@ref)s of
 the calling entity.
 
 # Arguments
-- `tile`: The [`Tile`](@ref) to parallellise.
+- `tile`: The [`Tile`](@ref) to parallelise.
 - `tiling_size`: A `NamedTuple` indicating the size of a subtile along each dimension.
 - `idx`: The identity of the calling entity.
 - `count`: The number of cooperating entities.
 """
-@inline function parallellise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, idxs, col_major::Bool=true) where {names, T, size, tile_sz}
+@inline function parallelise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, idxs, col_major::Bool=true) where {names, T, size, tile_sz}
     # Transpose
     tile = col_major ? tile : transpose(tile)
     tiling_size = col_major ? tiling_size : transpose(tiling_size)
@@ -253,7 +253,7 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
 - `count`: The number of cooperating entities.
 """
 @inline function subdivide(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count) where {names, T, size, tile_sz}
-    iter = iterate(parallellise(tile, tiling_size, idx, count))::Tuple{Tile,Any}
+    iter = iterate(parallelise(tile, tiling_size, idx, count))::Tuple{Tile,Any}
     @boundscheck begin
         iter === nothing && throw(BoundsError())
     end
