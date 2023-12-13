@@ -93,6 +93,7 @@ julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 julia --project=tuning -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
 until julia --project=tuning -e '
+    pushfirst!(LOAD_PATH, @__DIR__)
     using CUDA, Distributed
 
     # determine how many workers to use
@@ -120,7 +121,7 @@ until julia --project=tuning -e '
     addprocs(workers; exeflags, env)
 
     using Distributed
-    @everywhere push!(LOAD_PATH, @__DIR__)
+    @everywhere pushfirst!(LOAD_PATH, @__DIR__)
     @everywhere include("tuning/tune-wmma.jl")' "$@"; do
 
     echo "Tuning script crashed. Resuming after 1 second..." >&2
