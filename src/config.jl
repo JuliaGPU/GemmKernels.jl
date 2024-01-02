@@ -35,6 +35,39 @@
     is_b_col_major
 end
 
+function Base.show(io::IO, config::Config)
+    println(io, "matmul_shape:     $(config.matmul_shape)")
+    println(io, "block_shape:      $(config.block_shape)")
+    println(io, "warps_per_block:  $(config.warps_per_block)")
+
+    println(io, "mem_a_warp:       $(config.mem_a_warp)")
+    println(io, "mem_a_thread:     $(config.mem_a_thread)")
+
+    println(io, "mem_b_warp:       $(config.mem_b_warp)")
+    println(io, "mem_b_thread:     $(config.mem_b_thread)")
+
+    println(io, "mem_cd_warp:      $(config.mem_cd_warp)")
+    println(io, "mem_cd_thread:    $(config.mem_cd_thread)")
+
+    println(io, "compute_warp:     $(config.compute_warp)")
+    println(io, "compute_op_shape: $(config.compute_op_shape)")
+
+    println(io, "global_a_layout:  $(config.global_a_layout)")
+    println(io, "global_b_layout:  $(config.global_b_layout)")
+    println(io, "global_c_layout:  $(config.global_c_layout)")
+    println(io, "global_d_layout:  $(config.global_d_layout)")
+
+    println(io, "shared_a_layout:  $(config.shared_a_layout)")
+    println(io, "shared_b_layout:  $(config.shared_b_layout)")
+    println(io, "shared_c_layout:  $(config.shared_c_layout)")
+    println(io, "shared_d_layout:  $(config.shared_d_layout)")
+
+    println(io, "operator:         $(config.operator)")
+
+    println(io, "is_a_col_major:   $(config.is_a_col_major)")
+    println(io, "is_b_col_major:   $(config.is_b_col_major)")
+end
+
 struct ConfigError <: Exception
     message::String
 end
@@ -228,6 +261,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     check_tile_multiple(num, den, dims, msg) = all([num[dim] % den[dim] == 0 for dim in dims]) || throw(ConfigError(msg))
 
     check_tile_multiple(block_shape, compute_warp, [:M, :N, :K], "block_shape must be a multiple of compute_warp!")
+    check_tile_multiple(compute_warp, op_shape, [:M, :N, :K], "compute_warp must be a multiple of op_shape!")
     require_tile_sized_global(global_a_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :K], "gemm_shape.MK must be a multiple of block_shape.MK!")
     require_tile_sized_global(global_b_layout) && check_tile_multiple(gemm_shape, block_shape, [:K, :N], "gemm_shape.KN must be a multiple of block_shape.KN!")
     require_tile_sized_global(global_c_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")

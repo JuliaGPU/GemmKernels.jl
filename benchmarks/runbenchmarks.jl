@@ -112,54 +112,63 @@ for cf in get_configs()
     @info "Running benchmark $( cf.name )..."
     c_h, a, b, c, d = generate_inputs(cf)
 
-    # warmup
-    run_gemm(cf, a, b, c, d)
+    try
+        # warmup
+        run_gemm(cf, a, b, c, d)
 
-    # benchmark
-    profile_results = CUDA.@profile begin
-        for sample in 1:NUM_SAMPLES
-            run_gemm(cf, a, b, c, d)
-        end
-    end
-
-    # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
-    # operations consisting of multiple kernel launches...
-    profile_results = profile_results.device
-
-    # get info
-    details[cf.name] = Dict(
-        "registers" => profile_results[1, "registers"],
-        "dynamic_shared_mem" => profile_results[1, "shared_mem"].dynamic,
-        "static_shared_mem" => profile_results[1, "shared_mem"].static,
-        "local_mem" => profile_results[1, "local_mem"].thread
-    )
-
-    times = 1e9 .* (profile_results[!, "stop"] - profile_results[!, "start"])
-    @assert length(times) == NUM_SAMPLES
-
-    @info "\tGemmKernels: $(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
-
-    if !isnothing(cf.baseline)
-        # benchmark baseline
-        baseline_profile_results = CUDA.@profile begin
+        # benchmark
+        profile_results = CUDA.@profile begin
             for sample in 1:NUM_SAMPLES
-                run_baseline(cf, a, b, c, d)
+                run_gemm(cf, a, b, c, d)
             end
         end
 
-        baseline_profile_results = baseline_profile_results.device
-        @assert size(baseline_profile_results, 1) % NUM_SAMPLES == 0
+        # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
+        # operations consisting of multiple kernel launches...
+        profile_results = profile_results.device
 
-        baseline_times = 1e9 .* sum.(Iterators.partition(baseline_profile_results[!, "stop"] - baseline_profile_results[!, "start"], size(baseline_profile_results, 1) ÷ NUM_SAMPLES))
-        @assert length(baseline_times) == NUM_SAMPLES
+        # get info
+        details[cf.name] = Dict(
+            "registers" => profile_results[1, "registers"],
+            "dynamic_shared_mem" => profile_results[1, "shared_mem"].dynamic,
+            "static_shared_mem" => profile_results[1, "shared_mem"].static,
+            "local_mem" => profile_results[1, "local_mem"].thread
+        )
 
-        baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
-        @info "\tBaseline:    $(prettytime(baseline_times)) $(prettyflops(baseline_times, cf.config.matmul_shape)) (GemmKernels: $(baseline_ratio)%)"
+        times = 1e9 .* (profile_results[!, "stop"] - profile_results[!, "start"])
+        @assert length(times) == NUM_SAMPLES
 
-        baseline_results[cf.name] = Dict("times" => baseline_times)
+        @info "\tGemmKernels: $(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
+
+        if !isnothing(cf.baseline)
+            # benchmark baseline
+            baseline_profile_results = CUDA.@profile begin
+                for sample in 1:NUM_SAMPLES
+                    run_baseline(cf, a, b, c, d)
+                end
+            end
+
+            baseline_profile_results = baseline_profile_results.device
+            @assert size(baseline_profile_results, 1) % NUM_SAMPLES == 0
+
+            baseline_times = 1e9 .* sum.(Iterators.partition(baseline_profile_results[!, "stop"] - baseline_profile_results[!, "start"], size(baseline_profile_results, 1) ÷ NUM_SAMPLES))
+            @assert length(baseline_times) == NUM_SAMPLES
+
+            baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
+            @info "\tBaseline:    $(prettytime(baseline_times)) $(prettyflops(baseline_times, cf.config.matmul_shape)) (GemmKernels: $(baseline_ratio)%)"
+
+            baseline_results[cf.name] = Dict("times" => baseline_times)
+        end
+
+        results[cf.name] = Dict("times" => times)
+    catch err
+        if isa(err, GemmKernels.ConfigError)
+            # Skip this benchmark.
+            @warn "Skipping benchmark $(cf.name): Invalid configuration: $(err)."
+        else
+            rethrow()
+        end
     end
-
-    results[cf.name] = Dict("times" => times)
 end
 
 function save_results(results_file, details_file, results, details)

@@ -461,7 +461,11 @@ function get_configs()
         # XXX: Should we do non-square matrices as well?
         M = K = N
 
-        push!(rv, @get_fpu_config)
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # FPU Op shapes
@@ -490,7 +494,11 @@ function get_configs()
         # We'll only test square matrices.
         M = K = N
 
-        push!(rv, @get_fpu_config)
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # Tropical GEMM
@@ -505,7 +513,11 @@ function get_configs()
             [1, 1, 2],
             [2, 2, 2]]
 
-        push!(rv, @get_tropical_config)
+        try
+            push!(rv, @get_tropical_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA GEMM
@@ -532,6 +544,24 @@ function get_configs()
         push!(rv, @get_wmma_config)
     end
 
+    # WMMA GEMM parameters
+    for (M, N, K) in [(256, 256, 256)],
+        (AB_type, CD_type) in [(Float16, Float32)],
+        transpose_a in [false, true],
+        transpose_b in [false, true],
+        (BLOCK_M, BLOCK_N, BLOCK_K) in filter(x -> prod(x[1:2]) <= 128*128, collect(Iterators.product([64, 128, 256], [64, 128, 256], [16, 32, 64]))[:]),
+        (WARPS_M, WARPS_N) in filter(x -> prod(x) >= 4, collect(Iterators.product([1, 2, 4], [1, 2, 4]))[:]),
+        zero_c in [false, true],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined]
+
+        try
+            push!(rv, @get_wmma_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
+
     # WMMA GEMM + bias
     for (AB_type, CD_type, min_dimension) in [
         (Float16, Float32, 128)],
@@ -545,7 +575,12 @@ function get_configs()
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
-        push!(rv, @get_wmma_bias_config)
+
+        try
+            push!(rv, @get_wmma_bias_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Diagonal GEMM
@@ -561,7 +596,11 @@ function get_configs()
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
 
-        push!(rv, @get_wmma_diagonal_config)
+        try
+            push!(rv, @get_wmma_diagonal_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Complex GEMM
@@ -578,7 +617,11 @@ function get_configs()
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        push!(rv, @get_wmma_complex_config)
+        try
+            push!(rv, @get_wmma_complex_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Dual GEMM
@@ -595,7 +638,11 @@ function get_configs()
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        push!(rv, @get_wmma_dual_config)
+        try
+            push!(rv, @get_wmma_dual_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     rv
