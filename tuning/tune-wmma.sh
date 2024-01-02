@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 GPU_ID=0
-GPU_CLOCK=915
-MEM_CLOCK=5001
+GPU_CLOCK=-1
+MEM_CLOCK=-1
 
 usage()
 {
@@ -16,9 +16,9 @@ Options:
 -h, --help                 Show this help.
 -i id                      Specify which GPU to target.
 -gc, --gpu-clock speed     Change the frequency the GPU core clock is locked to
-                           before benchmarking, in MHz (default 915 MHz).
+                           before benchmarking, in MHz (default the max frequency).
 -mc, --memory-clock speed  Change the frequency the GPU memory clock is locked to
-                           before benchmarking, in MHz (default 5001 MHz).
+                           before benchmarking, in MHz (default the max frequency).
 EOF
 }
 
@@ -63,6 +63,14 @@ if [[ $# -ne 0 ]]; then
 fi
 
 export CUDA_VISIBLE_DEVICES=$GPU_ID
+
+if [[ "$GPU_CLOCK" == "-1" ]]; then
+    GPU_CLOCK="$(nvidia-smi -i $GPU_ID --query-supported-clocks=graphics --format=csv | sort -rn | head -1 | cut -f1 -d' ')"
+fi
+
+if [[ "$MEM_CLOCK" == "-1" ]]; then
+    MEM_CLOCK="$(nvidia-smi -i $GPU_ID --query-supported-clocks=memory --format=csv | sort -rn | head -1 | cut -f1 -d' ')"
+fi
 
 echo "Locking GPU $GPU_ID clock speeds to $GPU_CLOCK MHz (GPU) / $MEM_CLOCK MHz (Mem)..."
 
