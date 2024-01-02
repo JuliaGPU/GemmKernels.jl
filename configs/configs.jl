@@ -337,7 +337,7 @@ macro get_wmma_complex_config()
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMAComplexOp{OP_M, OP_N, OP_K},
+                                        operator = Operator.WMMAComplexOp{OP_M, OP_N, OP_K, AB_type, CD_type},
 
                                         global_a_layout = transpose_a ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
                                         global_b_layout = transpose_b ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
@@ -391,7 +391,7 @@ macro get_wmma_dual_config()
 
         conf = GemmKernels.get_config(
                                         gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMADualOp{OP_M, OP_N, OP_K},
+                                        operator = Operator.WMMADualOp{OP_M, OP_N, OP_K, AB_type, CD_type},
 
                                         global_a_layout = Layout.InterleavedColMajor{Float16},
                                         global_b_layout = Layout.InterleavedColMajor{Float16},
@@ -459,7 +459,11 @@ function get_configs()
         # XXX: Should we do non-square matrices as well?
         M = K = N
 
-        push!(rv, @get_fpu_config)
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # FPU Op shapes
@@ -488,7 +492,11 @@ function get_configs()
         # We'll only test square matrices.
         M = K = N
 
-        push!(rv, @get_fpu_config)
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # Tropical GEMM
@@ -503,7 +511,11 @@ function get_configs()
             [1, 1, 2],
             [2, 2, 2]]
 
-        push!(rv, @get_tropical_config)
+        try
+            push!(rv, @get_tropical_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA GEMM
@@ -514,7 +526,11 @@ function get_configs()
         transpose_b = [false, true],
         (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
         (WARPS_M, WARPS_N) in [(4, 2)],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 1],
@@ -537,7 +553,11 @@ function get_configs()
         (OP_M, OP_N, OP_K) in [(16, 16, 16)],
         kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined]
 
-        push!(rv, @get_wmma_config)
+        try
+            push!(rv, @get_wmma_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA GEMM + bias
@@ -545,49 +565,82 @@ function get_configs()
         (Float16, Float32, 128)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
-        push!(rv, @get_wmma_bias_config)
+
+        try
+            push!(rv, @get_wmma_bias_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Diagonal GEMM
     for (AB_type, CD_type, min_dimension) in [
         (Float16, Float32, 128)],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
 
-        push!(rv, @get_wmma_diagonal_config)
+        try
+            push!(rv, @get_wmma_diagonal_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Complex GEMM
     for (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in [
             (128, 128, 128),
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        push!(rv, @get_wmma_complex_config)
+        try
+            push!(rv, @get_wmma_complex_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Dual GEMM
     for (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a = [false],
         transpose_b = [false],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
         (M, N, K) in [
             (128, 128, 128),
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        push!(rv, @get_wmma_dual_config)
+        try
+            push!(rv, @get_wmma_dual_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     rv

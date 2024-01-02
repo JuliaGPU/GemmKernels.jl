@@ -152,7 +152,11 @@ end
 function check_wmma_shape(operator::Type)
     op_shape = Operator.shape(operator)
 
-    if op_shape ∉ [(M=16, N=16, K=16)]
+    if op_shape ∉ [
+        (M=16, N=16, K=16),
+        (M=8, N=32, K=16),
+        (M=32, N=8, K=16),
+    ]
         throw(ConfigError("Unsupported WMMA Operator shape $(op_shape)!"))
     end
 end
@@ -257,6 +261,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     check_tile_multiple(num, den, dims, msg) = all([num[dim] % den[dim] == 0 for dim in dims]) || throw(ConfigError(msg))
 
     check_tile_multiple(block_shape, compute_warp, [:M, :N, :K], "block_shape must be a multiple of compute_warp!")
+    check_tile_multiple(compute_warp, op_shape, [:M, :N, :K], "compute_warp must be a multiple of op_shape!")
     require_tile_sized_global(global_a_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :K], "gemm_shape.MK must be a multiple of block_shape.MK!")
     require_tile_sized_global(global_b_layout) && check_tile_multiple(gemm_shape, block_shape, [:K, :N], "gemm_shape.KN must be a multiple of block_shape.KN!")
     require_tile_sized_global(global_c_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
