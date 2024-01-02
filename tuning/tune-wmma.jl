@@ -292,6 +292,15 @@ function get_nvml_data(dev)
     )
 end
 
+function wait_if_throttling(dev)
+    cer = NVML.clock_event_reasons(dev)
+
+    while cer.hw_power_brake || cer.sw_power_cap || cer.hw_slow || cer.sw_thermal || cer.hw_thermal
+        @info "Throttling detected. Sleeping for one second..."
+        sleep(1)
+    end
+end
+
 function benchmark_best_configs(configs)
     best_configs = DataFrame(
         transpose_a=Bool[],
@@ -370,6 +379,8 @@ function benchmark_best_configs(configs)
                 cf = get_config(config_row)
 
                 @info "Profiling configuration $(NamedTuple(config_row))..."
+
+                wait_if_throttling()
 
                 start_time = Dates.now()
 
