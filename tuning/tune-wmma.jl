@@ -31,13 +31,9 @@ const BENCH_MIN_NUM_SAMPLES = 10
 
 #####
 
-# Stop gathering samples for plot if the "error bars" are smaller than this...
-const PLOT_RATIO_MAX_UNCERTAINTY = 0.05
-
-# ... or we have exceeded the time limit...
-# In my experience, only N <= 2^9 requires more than a handful of samples.
-# That's only 3*4 configurations, so a limit of say 600 seconds will take ~2 hours.
-const PLOT_MAX_NUM_SECONDS = 600
+# Stop gathering samples for plot if we have spent this much time...
+# 60 seconds/configuration * 32 configurations = 32 minutes for plot.
+const PLOT_NUM_SECONDS = 60
 
 # ... but have at least 10 samples.
 const PLOT_MIN_NUM_SAMPLES = 10
@@ -280,11 +276,7 @@ function got_enough_samples(row)
     (length(gk) < PLOT_MIN_NUM_SAMPLES) && return false
     (length(bl) < PLOT_MIN_NUM_SAMPLES) && return false
 
-    (row["time_spent"] >= PLOT_MAX_NUM_SECONDS) && return true
-
-    uncertainty, _, _ = get_uncertainty(gk, bl)
-
-    uncertainty < PLOT_RATIO_MAX_UNCERTAINTY
+    row["time_spent"] >= PLOT_NUM_SECONDS
 end
 
 function get_nvml_data(dev)
@@ -315,7 +307,6 @@ function benchmark_best_configs(configs)
         OP_K=Int[],
         kernel_str=String[],
         category=String[],
-        uncertainty=Float64[],
         time_spent=Float64[],
         gemmkernels_times=Vector{Any}[],
         baseline_times=Vector{Any}[],
@@ -347,7 +338,6 @@ function benchmark_best_configs(configs)
             :OP_K => best_config["OP_K"],
             :kernel_str => best_config["kernel_str"],
             :category => "todo",
-            :uncertainty => Inf,
             :time_spent => 0.0,
             :gemmkernels_times => [],
             :baseline_times => [],
@@ -363,7 +353,7 @@ function benchmark_best_configs(configs)
 
         input_dict = Dict()
 
-        p = ProgressUnknown(desc="Benchmarking (highest uncertainty)", dt=1.0)
+        p = ProgressUnknown(desc="Benchmarking", dt=1.0)
 
         # Spread the samples of one configuration over time, to reduce the effect
         # of time-related noise. Note that this means that the progress bar may
@@ -392,24 +382,18 @@ function benchmark_best_configs(configs)
                 push!(config_row["baseline_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
                 config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
-                old_uncertainty = config_row["uncertainty"]
-                config_row["uncertainty"], _, _ = get_uncertainty(config_row["gemmkernels_times"], config_row["baseline_times"])
 
                 if got_enough_samples(config_row)
                     config_row["category"] = "done"
                 end
 
                 # Update progress bar.
-                highest_uncertainty = best_configs[(@. (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)), :]
-                highest_uncertainty = maximum(highest_uncertainty[!, "uncertainty"])
                 next!(p; showvalues = [
                     (:transpose_a, transpose_a),
                     (:transpose_b, transpose_b),
                     (:N, config_row["N"]),
                     (:num_samples, length(config_row["gemmkernels_times"])),
-                    (:uncertainty, "$(config_row["uncertainty"]) (Δ = $(config_row["uncertainty"] - old_uncertainty))"),
                     (:time_spent_in_config, config_row["time_spent"]),
-                    (:highest_uncertainty, highest_uncertainty),
                     (:remaining_N, best_configs[(@. (best_configs[!, "category"] == "todo") & (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)), :].N),
                     (:remaining_configurations, sum(best_configs[!, "category"] .== "todo"))
                 ])
