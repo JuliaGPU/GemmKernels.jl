@@ -34,30 +34,6 @@ function matmul(conf::Config, a, b, c, d;
         conf.block_shape.K ≥ 2 * conf.compute_op_shape.K || throw(ConfigError("Need at least two stages to use a pipelined kernel, i.e. BLOCK_K ≥ 2 * OPERATOR_K"))
     end
 
-    # Check LocalArray size limit of 32 elements.
-    if kernel == Kernel.matmul_singlestage
-        num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
-        num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
-
-        num_fragments_m * num_fragments_n < 32 || throw(ConfigError("Config exceeds LocalArray size limit of 32 elements!"))
-    end
-
-    if kernel == Kernel.matmul_pipelined
-        num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
-        num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
-
-        a_frag_i = (conf.block_shape.M * conf.block_shape.K) ÷ (conf.mem_a_warp.M * conf.mem_a_warp.K * conf.warps_per_block)
-        a_frag_j = (conf.mem_a_warp.M * conf.mem_a_warp.K) ÷ (conf.mem_a_thread.M * conf.mem_a_thread.K * 32)
-        b_frag_i = (conf.block_shape.K * conf.block_shape.N) ÷ (conf.mem_b_warp.K * conf.mem_b_warp.N * conf.warps_per_block)
-        b_frag_j = (conf.mem_b_warp.K * conf.mem_b_warp.N) ÷ (conf.mem_b_thread.K * conf.mem_b_thread.N * 32)
-
-        num_fragments_m * num_fragments_n < 32 || throw(ConfigError("Config exceeds LocalArray size limit of 32 elements!"))
-        a_frag_i * a_frag_j < 32 || throw(ConfigError("Config exceeds LocalArray size limit of 32 elements!"))
-        b_frag_i * b_frag_j < 32 || throw(ConfigError("Config exceeds LocalArray size limit of 32 elements!"))
-        2 * num_fragments_m < 32 || throw(ConfigError("Config exceeds LocalArray size limit of 32 elements!"))
-        2 * num_fragments_n < 32 || throw(ConfigError("Config exceeds LocalArray size limit of 32 elements!"))
-    end
-
     hostkernel = @cuda launch=false kernel(args...)
     attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
 
