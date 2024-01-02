@@ -241,7 +241,7 @@ macro get_wmma_config()
                       mul!,
                       Epilogue.Default(),
                       verify_default,
-                      Kernel.matmul_pipelined,
+                      kernel,
                       wmma_baseline)
     end end)
 end
@@ -520,7 +520,22 @@ function get_configs()
             [2, 2, 1],
             [1, 1, 2],
             [2, 2, 2]], [[2048, 2048, 2048]]),
-        zero_c in [false]
+        zero_c in [false],
+        kernel in [Kernel.matmul_pipelined]
+
+        push!(rv, @get_wmma_config)
+    end
+
+    # WMMA GEMM parameters
+    for (M, N, K) in [(256, 256, 256)],
+        (AB_type, CD_type) in [(Float16, Float32)],
+        transpose_a in [false, true],
+        transpose_b in [false, true],
+        (BLOCK_M, BLOCK_N, BLOCK_K) in filter(x -> prod(x[1:2]) <= 128*128, collect(Iterators.product([64, 128, 256], [64, 128, 256], [16, 32, 64]))[:]),
+        (WARPS_M, WARPS_N) in filter(x -> prod(x) >= 4, collect(Iterators.product([1, 2, 4], [1, 2, 4]))[:]),
+        zero_c in [false, true],
+        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+        kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined]
 
         push!(rv, @get_wmma_config)
     end
