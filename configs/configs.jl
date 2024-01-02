@@ -459,7 +459,11 @@ function get_configs()
         # XXX: Should we do non-square matrices as well?
         M = K = N
 
-        push!(rv, @get_fpu_config)
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # FPU Op shapes
@@ -488,7 +492,11 @@ function get_configs()
         # We'll only test square matrices.
         M = K = N
 
-        push!(rv, @get_fpu_config)
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # Tropical GEMM
@@ -503,7 +511,11 @@ function get_configs()
             [1, 1, 2],
             [2, 2, 2]]
 
-        push!(rv, @get_tropical_config)
+        try
+            push!(rv, @get_tropical_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA GEMM
@@ -526,7 +538,11 @@ function get_configs()
             [2, 2, 2]], [[2048, 2048, 2048]]),
         zero_c in [false]
 
-        push!(rv, @get_wmma_config)
+        try
+            push!(rv, @get_wmma_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA GEMM + bias
@@ -542,7 +558,12 @@ function get_configs()
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
-        push!(rv, @get_wmma_bias_config)
+
+        try
+            push!(rv, @get_wmma_bias_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Diagonal GEMM
@@ -558,7 +579,11 @@ function get_configs()
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
 
-        push!(rv, @get_wmma_diagonal_config)
+        try
+            push!(rv, @get_wmma_diagonal_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Complex GEMM
@@ -575,7 +600,11 @@ function get_configs()
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        push!(rv, @get_wmma_complex_config)
+        try
+            push!(rv, @get_wmma_complex_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     # WMMA Dual GEMM
@@ -592,7 +621,11 @@ function get_configs()
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        push!(rv, @get_wmma_dual_config)
+        try
+            push!(rv, @get_wmma_dual_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
     end
 
     rv
