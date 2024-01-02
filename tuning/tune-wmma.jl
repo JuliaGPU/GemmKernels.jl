@@ -35,8 +35,11 @@ const BENCH_MIN_NUM_SAMPLES = 10
 # 60 seconds/configuration * 32 configurations = 32 minutes for plot.
 const PLOT_NUM_SECONDS = 60
 
-# ... but have at least 10 samples.
-const PLOT_MIN_NUM_SAMPLES = 10
+# ... but have at least 100 samples.
+const PLOT_MIN_NUM_SAMPLES = 100
+
+# Group samples in batches of 10 samples each.
+const PLOT_BATCH_SIZE = 10
 
 const AB_type = Float16
 const CD_type = Float32
@@ -380,19 +383,25 @@ function benchmark_best_configs(configs)
 
                 @info "Profiling configuration $(NamedTuple(config_row))..."
 
-                wait_if_throttling()
+                for run_baseline in [false, true]
+                    for i in 1:PLOT_BATCH_SIZE
+                        wait_if_throttling()
 
-                start_time = Dates.now()
+                        start_time = Dates.now()
 
-                push!(config_row["gemmkernels_nvml"], get_nvml_data(dev))
-                prof = CUDA.@profile concurrent=false run_gemm(cf, a, b, c, d)
-                push!(config_row["gemmkernels_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
+                        push!(config_row[if run_baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data(dev))
 
-                push!(config_row["baseline_nvml"], get_nvml_data(dev))
-                prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
-                push!(config_row["baseline_times"], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
+                        if run_baseline
+                            prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
+                        else
+                            prof = CUDA.@profile concurrent=false run_gemm(cf, a, b, c, d)
+                        end
 
-                config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
+                        push!(config_row[if run_baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
+
+                        config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
+                    end
+                end
 
                 if got_enough_samples(config_row)
                     config_row["category"] = "done"
