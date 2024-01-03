@@ -3,6 +3,7 @@
 using GemmKernels
 using LinearAlgebra
 using ForwardDiff
+using Octavian
 
 struct Configuration
     name           # Human-readable name of the configuration.
@@ -64,7 +65,8 @@ function generate_inputs(cf::Configuration)
     new_b_h = cf.transpose_b ? transpose(b_h) : b_h
 
     (cf.calc_reference)(c_h, new_a_h, new_b_h, cf.alpha, cf.beta)
-    c_h, a, b, c, d
+    c_ref = CuArray(c_h)
+    c_ref, a, b, c, d
 end
 
 # Run the GEMM.
@@ -88,21 +90,21 @@ function run_baseline(cf::Configuration, a, b, c, d)
 end
 
 # Verify results.
-function verify(cf::Configuration, c_h, d)
-    cf.verify(c_h, d)
+function verify(cf::Configuration, c_ref, d)
+    cf.verify(c_ref, d)
 end
 
-function verify_default(c_h, d)
-    isapprox(c_h, Array(d))
+function verify_default(c_ref, d)
+    isapprox(c_ref, d)
 end
 
-function verify_bias(c_h, d, bias)
-    c_h .+ Array(bias) ≈ Array(d)
+function verify_bias(c_ref, d, bias)
+    c_ref .+ bias ≈ d
 end
 
-function verify_dual(c_h, d)
-    c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_h)
-    d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, Array(d))
+function verify_dual(c_ref, d)
+    c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_ref)
+    d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, d)
     isapprox(c_dual, d_dual)
 end
 
@@ -238,7 +240,7 @@ macro get_wmma_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      mul!,
+                      Octavian.matmul!,
                       Epilogue.Default(),
                       verify_default,
                       kernel,
