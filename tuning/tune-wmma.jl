@@ -506,31 +506,39 @@ function main()
 
     @info "Need to perform parameter sweep over $(num_unknown) configurations."
 
+    did_error = false
     channel = RemoteChannel(() -> Channel(), 1)
     @sync begin
         # measure each configuration in parallel
         @async begin
-            @sync @distributed for i in 1:size(configs,1)
-                config_row = configs[i, :]
-                @info "Got configuration $i: $(NamedTuple(config_row))..."
+            try
+                @sync @distributed for i in 1:size(configs,1)
+                    config_row = configs[i, :]
+                    @info "Got configuration $i: $(NamedTuple(config_row))..."
 
-                if config_row.category != "unknown"
-                    continue
+                    if config_row.category != "unknown"
+                        continue
+                    end
+
+                    config_row.category = "crashed"
+
+                    @info "Measuring configuration $(NamedTuple(config_row))..."
+
+                    start_time = Dates.now()
+                    times, category = measure_config(config_row)
+                    end_time = Dates.now()
+
+                    put!(channel, (i, start_time, end_time, category, times))
                 end
-
-                config_row.category = "crashed"
-
-                @info "Measuring configuration $(NamedTuple(config_row))..."
-
-                start_time = Dates.now()
-                times, category = measure_config(config_row)
-                end_time = Dates.now()
-
-                put!(channel, (i, start_time, end_time, category, times))
+                @info "Done with parameter sweep."
+            catch err
+                bt = catch_backtrace()
+                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                @error "Error while measuring configurations: $log"
+                did_error = true
+            finally
+                put!(channel, nothing)
             end
-
-            @info "Done with parameter sweep."
-            put!(channel, nothing)
         end
 
         # process the results
@@ -574,6 +582,9 @@ function main()
                 end
             end
         end
+    end
+    if did_error
+        exit(1)
     end
 
     # Save data for final iteration.
