@@ -38,7 +38,7 @@ end
 
     return quote
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-        @boundscheck checkalignment(vec_ptr)
+        @boundscheck checkalignment(vec_ptr, $alignment)
         return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
     end
 end
@@ -55,7 +55,7 @@ end
         append!(ex.args, (quote
             y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-            @boundscheck checkalignment(vec_ptr)
+            @boundscheck checkalignment(vec_ptr, $alignment)
             unsafe_store!(vec_ptr, y, $offset ÷ N + (i - 1) ÷ N + 1, Val($alignment))
         end).args)
     end
