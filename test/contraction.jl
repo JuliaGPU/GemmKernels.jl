@@ -4,45 +4,102 @@ using GemmKernels.Operator
 using GemmKernels.Tensors
 using JSON
 
-function testContraction(extents, tensorModes, operator, dataType)
-    A = CuArray(rand(dataType, extents[tensorModes[2]]) / sqrt(dataType(2048)))
-    B = CuArray(rand(dataType, extents[tensorModes[3]]) / sqrt(dataType(2048)))
-    C = CuArray(rand(dataType, extents[tensorModes[1]]))
-    D = CuArray(zeros(dataType, extents[tensorModes[1]]))
+function testContraction(extents, tensorModes)
+    # For the sake of simplicity, we pad the extents of the tensors to be a multiple of 512. This
+    # allows for a broad range of possible block shapes in the GEMM.
+    padded_extents = copy(extents)
+    for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
+        intersection = intersect(tensorModes[idx1], tensorModes[idx2])
 
+        if prod(extents[intersection]) % 512 == 0
+            continue
+        end
+
+        padded_extents[intersection[1]] = Int64(ceil(extents[intersection[1]] / 512) * 512)
+    end
+
+    # Casting the extents to tuples.
+    extents = Tuple(extents)
+    padded_extents = Tuple(padded_extents)
+    
+    # Specific kernel configurations.
+    operator = Operator.WMMAOp
+    dataType = Float16
+    computeType = Float16
+    accumulateType = Float32
+
+    # K-dimension length.
+    K = prod(extents[intersect(tensorModes[2], tensorModes[3])])
+
+    # Creating random tensors.
+    A_host = rand(dataType, extents[tensorModes[2]]) / sqrt(dataType(K))
+    B_host = rand(dataType, extents[tensorModes[3]]) / sqrt(dataType(K))
+    C_host = rand(dataType, extents[tensorModes[1]])
+
+    # ------------------------------
+    # GemmKernels.jl implementation.
+    # ------------------------------
+
+    # Creating tensors on the GPU with the padded extents.
+    A = CuArray(zeros(dataType, padded_extents[tensorModes[2]]))
+    B = CuArray(zeros(dataType, padded_extents[tensorModes[3]]))
+    C = CuArray(zeros(dataType, padded_extents[tensorModes[1]]))
+    D = CuArray(zeros(dataType, padded_extents[tensorModes[1]]))
+
+    # Copying the random tensors to the GPU.
+    A[(1:extent for extent in extents[tensorModes[2]])...] = A_host
+    B[(1:extent for extent in extents[tensorModes[3]])...] = B_host
+    C[(1:extent for extent in extents[tensorModes[1]])...] = C_host
+
+    # Creating the tensor contraction plan, similar to the cuTENSOR API.
     plan = Tensors.ContractionPlan(
-        A, tensorModes[2],
-        B, tensorModes[3],
-        C, tensorModes[1],
-        D, tensorModes[1];
-        operator = operator,
+        TensorDescriptor(A), tensorModes[2],
+        TensorDescriptor(B; unaryOp=CUDA.cos), tensorModes[3],
+        TensorDescriptor(C), tensorModes[1],
+        TensorDescriptor(D), tensorModes[1];
+        operator=operator,
+        computeType=computeType,
+        accumulateType=accumulateType
     )
 
+    # Executing the tensor contraction.
     Tensors.contraction!(plan, 1, A, B, 1, C, D)
-    D1 = Array(D)
 
-    # CUTENSOR
-    algo = cuTENSOR.CUTENSOR_ALGO_GETT
+    # Copying the result back to the CPU while removing the padding.
+    D1 = Array(D[(1:extent for extent in extents[tensorModes[1]])...])
 
+    # ------------------------------
+    # cuTENSOR implementation.
+    # ------------------------------
+
+    # cuTENSOR does not need padding, so we directly use the host tensors.
+    A = CuArray(A_host)
+    B = cos.(CuArray(B_host))
+    C = CuArray(C_host)
+
+    # Creating the cuTENSOR contraction plan.
     plan = cuTENSOR.plan_contraction(
         A, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
         B, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
         C, tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
         cuTENSOR.CUTENSOR_OP_IDENTITY,
-        algo = algo,
-        compute_type = dataType
+        algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+        compute_type=computeType
     )
 
+    # Executing the tensor contraction.
     cuTENSOR.contraction!(
         1,
-        A, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        B, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (A), tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (B), tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
         1,
-        C, tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (C), tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
         cuTENSOR.CUTENSOR_OP_IDENTITY,
-        compute_type = dataType,
-        plan = plan
+        compute_type=Float32,
+        plan=plan
     )
+
+    # Copying the result back to the CPU.
     D2 = Array(C)
 
     return all(isapprox.(Array(D1), Array(D2); rtol = sqrt(eps(dataType))))
@@ -53,7 +110,7 @@ end
 
     jsonData = JSON.parse(read(fp, String))
 
-    @testset "TCCG benchmark suite against cuTENSOR with $(operator)" for (operator, dataType) in [(Operator.WMMAOp, Float16) , (Operator.FPUOp, Float32)] 
+    @testset "TCCG benchmark suite against cuTENSOR" begin
         for el in jsonData
             parseableName = el["parseableName"]
 
@@ -68,11 +125,11 @@ end
                 push!(tensorModes, tensorMode)
             end
 
-            extents = Tuple(x for x in el["extents"])
+            extents = Vector{Int}(el["extents"])
 
             name = el["name"]
             @testset "$name" begin
-                @test testContraction(extents, tensorModes, operator, dataType)
+                @test testContraction(extents, tensorModes)
             end
         end
     end

@@ -53,7 +53,7 @@ mutable struct ContractionDescriptor
     modeD::ModeType
 
     computeType::DataType
-    dataType::DataType
+    accumulateType::DataType
 
     function ContractionDescriptor(
         descA::TensorDescriptor, modeA::ModeType,
@@ -61,14 +61,14 @@ mutable struct ContractionDescriptor
         descC::TensorDescriptor, modeC::ModeType,
         descD::TensorDescriptor, modeD::ModeType,
         computeType,
-        dataType
+        accumulateType
     )
         return new(
             descA, modeA,
             descB, modeB,
             descC, modeC,
             descD, modeD,
-            computeType, dataType
+            computeType, accumulateType
         )
     end
 
@@ -78,14 +78,14 @@ mutable struct ContractionDescriptor
         c::CuArray, modeC::ModeType,
         d::CuArray, modeD::ModeType;
         computeType=eltype(a),
-        dataType=eltype(c)
+        accumulateType=eltype(c)
     )
         return new(
             TensorDescriptor(a), modeA,
             TensorDescriptor(b), modeB,
             TensorDescriptor(c), modeC,
             TensorDescriptor(d), modeD,
-            computeType, dataType
+            computeType, accumulateType
         )
     end
 end

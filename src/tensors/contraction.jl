@@ -23,7 +23,7 @@ mutable struct ContractionPlan
         d, modeD::ModeType;
         algo::ALGO=ALGO_GETT,
         computeType=eltype(a),
-        dataType=eltype(c),
+        accumulateType=eltype(c),
         operator=Operator.WMMAOp
     )
         desc = ContractionDescriptor(
@@ -32,7 +32,7 @@ mutable struct ContractionPlan
             c, modeC,
             d, modeD,
             computeType,
-            dataType
+            accumulateType
         )
         return ContractionPlan(desc; algo=algo, operator=operator)
     end

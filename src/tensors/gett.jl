@@ -191,9 +191,9 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator)
     end
 
     if (operator == Operator.WMMAOp)
-        operator = Operator.WMMAOp{16, 16, 16, desc.dataType, desc.computeType}
+        operator = Operator.WMMAOp{16, 16, 16, desc.computeType, desc.accumulateType}
     elseif (operator <: Operator.GeneralFPUOp)
-        operator = operator{8, 8, 1, 4, 8, 1, desc.dataType, desc.computeType}
+        operator = operator{8, 8, 1, 4, 8, 1, desc.computeType, desc.accumulateType}
     end
 
     gemmConf = GemmKernels.get_config(
@@ -207,8 +207,8 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator)
 
         shared_a_layout = SharedLayoutA,
         shared_b_layout = SharedLayoutB,
-        shared_c_layout = Layout.UnsafeAlignedColMajor{desc.descC.dataType},
-        shared_d_layout = Layout.UnsafeAlignedColMajor{desc.descD.dataType},
+        shared_c_layout = Layout.UnsafeAlignedColMajor{desc.accumulateType},
+        shared_d_layout = Layout.UnsafeAlignedColMajor{desc.accumulateType},
 
         is_a_col_major = isColMajorA,
         is_b_col_major = isColMajorB,
