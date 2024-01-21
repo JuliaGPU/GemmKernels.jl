@@ -88,7 +88,7 @@ function testContraction(extents, tensorModes)
     )
 
     # Executing the tensor contraction.
-    cuTENSOR.contraction!(
+    cuTENSOR.contract!(
         1,
         (A), tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
         (B), tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
