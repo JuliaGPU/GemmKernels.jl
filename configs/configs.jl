@@ -95,17 +95,17 @@ function verify(cf::Configuration, c_ref, d)
 end
 
 function verify_default(c_ref, d)
-    isapprox(c_ref, d)
+    all(isapprox.(c_ref, d))
 end
 
 function verify_bias(c_ref, d, bias)
-    c_ref .+ bias ≈ d
+    all(isapprox.(c_ref .+ bias, d))
 end
 
 function verify_dual(c_ref, d)
     c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_ref)
     d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, d)
-    isapprox(c_dual, d_dual)
+    all(isapprox.(c_dual, d_dual))
 end
 
 function fpu_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
