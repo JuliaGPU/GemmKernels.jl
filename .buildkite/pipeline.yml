@@ -61,7 +61,7 @@ steps:
         matrix:
           setup:
             julia:
-              - "1.9"
+              - "1.10"
         timeout_in_minutes: 60
 
 env:

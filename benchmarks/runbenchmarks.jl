@@ -108,8 +108,10 @@ results = Dict()
 baseline_results = Dict()
 details = Dict()
 
-for cf in get_configs()
-    @info "Running benchmark $( cf.name )..."
+all_configs = get_configs()
+
+for (idx, cf) in enumerate(all_configs)
+    @info "Running benchmark $(idx)/$(length(all_configs)) $( cf.name )..."
     c_h, a, b, c, d = generate_inputs(cf)
 
     try
