@@ -1,27 +1,25 @@
+import GitHub
+using Dates
+using FileWatching.Pidfile
 using GemmKernels, CUDA
 using Git: git
-import GitHub
+using JSON
+using LoggingExtras
 using Printf
 using Statistics
-using JSON
 
 using StableRNGs
 
+include("../configs/configs.jl")
+
+# Logging.
+timestamp_logger(logger) = TransformerLogger(logger) do log
+    merge(log, (; message = "$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS")) $(log.message)"))
+end
+ConsoleLogger(stdout, Logging.Debug) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
+
 # XXX: How to choose good values here?
 const NUM_SAMPLES = 1000
-
-if haskey(ENV, "BUILDKITE_BRANCH")
-    @info "Cloning previous benchmark results"
-    github_token = get(ENV, "GITHUB_TOKEN", nothing)
-    benchmark_results = mktempdir()
-    if github_token === nothing
-        run(`$(git()) clone -q https://github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
-    else
-        run(`$(git()) clone -q https://$github_token:x-oauth-basic@github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
-    end
-    run(`$(git()) -C $benchmark_results config --local user.name "JuliaGPU BenchmarkBot"`)
-    run(`$(git()) -C $benchmark_results config --local user.email "nobody@juliagpu.org"`)
-end
 
 # load previous results.
 function load_results()
@@ -55,12 +53,6 @@ function load_results()
     end
 
     return nothing
-end
-previous_results = load_results()
-if previous_results === nothing
-    @error "No previous benchmark results found"
-else
-    @info "Found previous timings for commit $(previous_results.commit)"
 end
 
 # result rendering functions
@@ -101,78 +93,6 @@ function prettytime(times)
     return "$(rounded_t) $unit ± $(rounded_cv)% ($(rounded_min) … $(rounded_max) $unit)"
 end
 
-@info "Running benchmarks"
-include("../configs/configs.jl")
-
-results = Dict()
-baseline_results = Dict()
-details = Dict()
-
-all_configs = get_configs()
-
-for (idx, cf) in enumerate(all_configs)
-    @info "Running benchmark $(idx)/$(length(all_configs)) $( cf.name )..."
-    c_h, a, b, c, d = generate_inputs(cf)
-
-    try
-        # warmup
-        run_gemm(cf, a, b, c, d)
-
-        # benchmark
-        profile_results = CUDA.@profile begin
-            for sample in 1:NUM_SAMPLES
-                run_gemm(cf, a, b, c, d)
-            end
-        end
-
-        # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
-        # operations consisting of multiple kernel launches...
-        profile_results = profile_results.device
-
-        # get info
-        details[cf.name] = Dict(
-            "registers" => profile_results[1, "registers"],
-            "dynamic_shared_mem" => profile_results[1, "shared_mem"].dynamic,
-            "static_shared_mem" => profile_results[1, "shared_mem"].static,
-            "local_mem" => profile_results[1, "local_mem"].thread
-        )
-
-        times = 1e9 .* (profile_results[!, "stop"] - profile_results[!, "start"])
-        @assert length(times) == NUM_SAMPLES
-
-        @info "\tGemmKernels: $(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
-
-        if !isnothing(cf.baseline)
-            # benchmark baseline
-            baseline_profile_results = CUDA.@profile begin
-                for sample in 1:NUM_SAMPLES
-                    run_baseline(cf, a, b, c, d)
-                end
-            end
-
-            baseline_profile_results = baseline_profile_results.device
-            @assert size(baseline_profile_results, 1) % NUM_SAMPLES == 0
-
-            baseline_times = 1e9 .* sum.(Iterators.partition(baseline_profile_results[!, "stop"] - baseline_profile_results[!, "start"], size(baseline_profile_results, 1) ÷ NUM_SAMPLES))
-            @assert length(baseline_times) == NUM_SAMPLES
-
-            baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
-            @info "\tBaseline:    $(prettytime(baseline_times)) $(prettyflops(baseline_times, cf.config.matmul_shape)) (GemmKernels: $(baseline_ratio)%)"
-
-            baseline_results[cf.name] = Dict("times" => baseline_times)
-        end
-
-        results[cf.name] = Dict("times" => times)
-    catch err
-        if isa(err, GemmKernels.ConfigError)
-            # Skip this benchmark.
-            @warn "Skipping benchmark $(cf.name): Invalid configuration: $(err)."
-        else
-            rethrow()
-        end
-    end
-end
-
 function save_results(results_file, details_file, results, details)
     open(results_file, "w") do io
         JSON.print(io, results)
@@ -181,24 +101,6 @@ function save_results(results_file, details_file, results, details)
     open(details_file, "w") do io
         JSON.print(io, details)
     end
-end
-
-# write results
-if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
-    commit = ENV["BUILDKITE_COMMIT"]
-    results_file = joinpath(benchmark_results, "results-$commit.json")
-    details_file = joinpath(benchmark_results, "details-$commit.json")
-    save_results(results_file, details_file, results, details)
-
-    # commit and push
-    run(`$(git()) -C $benchmark_results add $results_file`)
-    run(`$(git()) -C $benchmark_results add $details_file`)
-    run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
-    run(`$(git()) -C $benchmark_results push -q`)
-else
-    results_file = joinpath(@__DIR__, "results.json")
-    details_file = joinpath(@__DIR__, "details.json")
-    save_results(results_file, details_file, results, details)
 end
 
 function markdown_escaped_code(str)
@@ -268,120 +170,281 @@ function resultrow(k, judgement, old, new, old_details, new_details)
     return "| $(markdown_escaped_code(k)) | $(str_old) | $(str_new) | $(r) $(mark) |"
 end
 
-# compare against previous timings
-if previous_results !== nothing
-    @info "Comparing results"
+function main()
+    @info "Running benchmarks using $(nworkers()) workers..."
 
-    before = previous_results.timings
-    after = results
-
-    before_min = Dict(k => minimum(v["times"]) for (k, v) in before)
-    after_min = Dict(k => minimum(v["times"]) for (k, v) in after)
-
-    judgements = Dict(k => judge(before_min[k], v) for (k, v) in after_min)
-
-    println("Improvements:")
-
-    for (k, v) in judgements
-        (v == improvement) && println(k)
-    end
-
-    println("Regressions:")
-
-    for (k, v) in judgements
-        (v == regression) && println(k)
-    end
-
-    # generate some text
-    io = IOBuffer()
-    commit = get(ENV, "BUILDKITE_COMMIT", "HEAD")
-    println(io, "Benchmark results for commit $commit (comparing to $(previous_results.commit)):")
-
-    filter!(judgements) do (k, v)
-        time_changed = (v != invariant)
-        details_changed = false
-
-        if previous_results.details !== nothing
-            previous_details = previous_results.details[k]
-            current_details = details[k]
-
-            details_changed =
-                previous_details["registers"] != current_details["registers"] ||
-                previous_details["dynamic_shared_mem"] != current_details["dynamic_shared_mem"] ||
-                previous_details["static_shared_mem"] != current_details["static_shared_mem"] ||
-                previous_details["local_mem"] != current_details["local_mem"]
+    # Load previous results.
+    if haskey(ENV, "BUILDKITE_BRANCH")
+        @info "Cloning previous benchmark results"
+        github_token = get(ENV, "GITHUB_TOKEN", nothing)
+        benchmark_results = mktempdir()
+        if github_token === nothing
+            run(`$(git()) clone -q https://github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
+        else
+            run(`$(git()) clone -q https://$github_token:x-oauth-basic@github.com/JuliaGPU/GemmKernels.jl -b benchmark-results $benchmark_results`)
         end
-
-        time_changed || details_changed
+        run(`$(git()) -C $benchmark_results config --local user.name "JuliaGPU BenchmarkBot"`)
+        run(`$(git()) -C $benchmark_results config --local user.email "nobody@juliagpu.org"`)
     end
 
-    if isempty(judgements)
-        println(io, "No regressions or improvements detected.")
+    previous_results = load_results()
+    if previous_results === nothing
+        @error "No previous benchmark results found"
     else
-        print(io, """
-
-            | test | master | PR | Δmin |
-            |------|--------|----|------|
-            """)
-        for (k, v) in judgements
-            old = before[k]
-            new = after[k]
-
-            old_details = previous_results.details === nothing ? nothing : previous_results.details[k]
-            new_details = details[k]
-
-            println(io, resultrow(k, v, old, new, old_details, new_details))
-        end
+        @info "Found previous timings for commit $(previous_results.commit)"
     end
 
-    # Print results compared to baseline.
-    println(io, "# Comparison with baseline")
+    # Run benchmarks.
+    @info "Running benchmarks"
 
-    println(io, "| test | GemmKernels | Baseline | % |")
-    println(io, "|------|-------------|----------|---|")
+    results = Dict()
+    baseline_results = Dict()
+    details = Dict()
 
-    for k in keys(baseline_results)
-        times = results[k]["times"]
-        baseline_times = baseline_results[k]["times"]
-        baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
+    # problematic:
+    # epilogue
+    all_configs = get_configs()
 
-        println(io, "| $(markdown_escaped_code(k)) | $(prettytime(times)) | $(prettytime(baseline_times)) | $(baseline_ratio) |")
-    end
+    channel = RemoteChannel(() -> Channel(), 1)
 
-    body = String(take!(io))
-    println(body)
+    @sync begin
+        @async begin
+            @sync @distributed for cf in all_configs
+                try
+                    @info "Got config $(cf.name)"
 
-    # comment on PR
-    if get(ENV, "BUILDKITE_PULL_REQUEST", "false") !== "false" && github_token !== nothing
-        auth = GitHub.authenticate(github_token)
-        repo = GitHub.repo("JuliaGPU/GemmKernels.jl"; auth)
-        pr = parse(Int, ENV["BUILDKITE_PULL_REQUEST"])
+                    @info "Generating inputs..."
+                    c_h, a, b, c, d = generate_inputs(cf)
 
-        # find a previous comment to edit
-        function find_previous_comment()
-            kwargs = Dict(:auth => auth, :page_limit => 1, :params => (; per_page=100))
-            while true
-                comments, pages = GitHub.comments(repo, pr; auth)
-                for comment in comments
-                    if startswith(comment.body, "Benchmark results for")
-                        return comment
+                    # warmup
+                    @info "Running warmup..."
+                    run_gemm(cf, a, b, c, d)
+
+                    # benchmark
+                    @info "Waiting for lock to benchmark..."
+                    mkpidlock(joinpath(@__DIR__, "benchmarks.pid")) do
+                        @info "Benchmarking using profiler..."
+                        profile_results = CUDA.@profile begin
+                            for sample in 1:NUM_SAMPLES
+                                run_gemm(cf, a, b, c, d)
+                            end
+                        end
+                    end
+
+                    # XXX: This works for now, since every GEMM is one kernel, but later on we may want to benchmark
+                    # operations consisting of multiple kernel launches...
+                    profile_results = profile_results.device
+
+                    # Grab run times.
+                    times = 1e9 .* (profile_results[!, "stop"] - profile_results[!, "start"])
+                    @assert length(times) == NUM_SAMPLES
+
+                    # Get detailed info
+                    details = Dict(
+                        "registers" => profile_results[1, "registers"],
+                        "dynamic_shared_mem" => profile_results[1, "shared_mem"].dynamic,
+                        "static_shared_mem" => profile_results[1, "shared_mem"].static,
+                        "local_mem" => profile_results[1, "local_mem"].thread
+                    )
+
+                    # Run the baseline
+                    baseline_times = nothing
+                    if !isnothing(cf.baseline)
+                        @info "Waiting for lock to benchmark baseline..."
+                        mkpidlock(joinpath(@__DIR__, "benchmarks.pid")) do
+                            @info "Profiling baseline..."
+                            baseline_profile_results = CUDA.@profile begin
+                                for sample in 1:NUM_SAMPLES
+                                    run_baseline(cf, a, b, c, d)
+                                end
+                            end
+                        end
+
+                        baseline_profile_results = baseline_profile_results.device
+                        @assert size(baseline_profile_results, 1) % NUM_SAMPLES == 0
+
+                        baseline_times = 1e9 .* sum.(Iterators.partition(baseline_profile_results[!, "stop"] - baseline_profile_results[!, "start"], size(baseline_profile_results, 1) ÷ NUM_SAMPLES))
+                        @assert length(baseline_times) == NUM_SAMPLES
+                    end
+
+                    @info "Finished configuration $(cf.name)"
+                    put!(channel, (cf, times, baseline_times, details))
+                catch err
+                    if isa(err, GemmKernels.ConfigError)
+                        # Skip this benchmark.
+                        @warn "Skipping benchmark $(cf.name): Invalid configuration: $(err)."
+                    else
+                        msg = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                        @error "Error while running benchmark: $msg"
                     end
                 end
-                if haskey(pages, "next")
-                    delete!(kwargs, :params)
-                    kwargs[:start_page] = pages["next"]
-                else
-                    return nothing
+            end
+
+            put!(channel, nothing)
+        end
+
+        @async begin
+            num_finished = 0
+
+            while true
+                value = take!(channel)
+                isnothing(value) && break
+
+                num_finished += 1
+
+                cf, times, baseline_times, the_details = value
+
+                @info "Benchmark $(num_finished) / $(length(all_configs)): $(cf.name)"
+                @info "\tGemmKernels: $(prettytime(times)) $(prettyflops(times, cf.config.matmul_shape))"
+                results[cf.name] = Dict("times" => times)
+                details[cf.name] = the_details
+
+                if !isnothing(baseline_times)
+                    baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
+                    @info "\tBaseline:    $(prettytime(baseline_times)) $(prettyflops(baseline_times, cf.config.matmul_shape)) (GemmKernels: $(baseline_ratio)%)"
+                    baseline_results[cf.name] = Dict("times" => baseline_times)
                 end
             end
         end
-        previous_comment = find_previous_comment()
+    end
 
-        # submit
-        if previous_comment === nothing
-            GitHub.create_comment(repo, pr, :pr; auth, params=(; body=body))
+    # Write results
+    if get(ENV, "BUILDKITE_BRANCH", nothing) == "master"
+        commit = ENV["BUILDKITE_COMMIT"]
+        results_file = joinpath(benchmark_results, "results-$commit.json")
+        details_file = joinpath(benchmark_results, "details-$commit.json")
+        save_results(results_file, details_file, results, details)
+
+        # commit and push
+        run(`$(git()) -C $benchmark_results add $results_file`)
+        run(`$(git()) -C $benchmark_results add $details_file`)
+        run(`$(git()) -C $benchmark_results commit -q -m "Results for $commit."`)
+        run(`$(git()) -C $benchmark_results push -q`)
+    else
+        results_file = joinpath(@__DIR__, "results.json")
+        details_file = joinpath(@__DIR__, "details.json")
+        save_results(results_file, details_file, results, details)
+    end
+
+    # Compare against previous timings
+    if previous_results !== nothing
+        @info "Comparing results"
+
+        before = previous_results.timings
+        after = results
+
+        before_min = Dict(k => minimum(v["times"]) for (k, v) in before)
+        after_min = Dict(k => minimum(v["times"]) for (k, v) in after)
+
+        judgements = Dict(k => judge(before_min[k], v) for (k, v) in after_min)
+
+        println("Improvements:")
+
+        for (k, v) in judgements
+            (v == improvement) && println(k)
+        end
+
+        println("Regressions:")
+
+        for (k, v) in judgements
+            (v == regression) && println(k)
+        end
+
+        # generate some text
+        io = IOBuffer()
+        commit = get(ENV, "BUILDKITE_COMMIT", "HEAD")
+        println(io, "Benchmark results for commit $commit (comparing to $(previous_results.commit)):")
+
+        filter!(judgements) do (k, v)
+            time_changed = (v != invariant)
+            details_changed = false
+
+            if previous_results.details !== nothing
+                previous_details = previous_results.details[k]
+                current_details = details[k]
+
+                details_changed =
+                    previous_details["registers"] != current_details["registers"] ||
+                    previous_details["dynamic_shared_mem"] != current_details["dynamic_shared_mem"] ||
+                    previous_details["static_shared_mem"] != current_details["static_shared_mem"] ||
+                    previous_details["local_mem"] != current_details["local_mem"]
+            end
+
+            time_changed || details_changed
+        end
+
+        if isempty(judgements)
+            println(io, "No regressions or improvements detected.")
         else
-            GitHub.edit_comment(repo, previous_comment, :pr; auth, params=(; body=body))
+            print(io, """
+
+                | test | master | PR | Δmin |
+                |------|--------|----|------|
+                """)
+            for (k, v) in judgements
+                old = before[k]
+                new = after[k]
+
+                old_details = previous_results.details === nothing ? nothing : previous_results.details[k]
+                new_details = details[k]
+
+                println(io, resultrow(k, v, old, new, old_details, new_details))
+            end
+        end
+
+        # Print results compared to baseline.
+        println(io, "# Comparison with baseline")
+
+        println(io, "| test | GemmKernels | Baseline | % |")
+        println(io, "|------|-------------|----------|---|")
+
+        for k in keys(baseline_results)
+            times = results[k]["times"]
+            baseline_times = baseline_results[k]["times"]
+            baseline_ratio = "$(round(100 * minimum(baseline_times) / minimum(times); sigdigits=3))"
+
+            println(io, "| $(markdown_escaped_code(k)) | $(prettytime(times)) | $(prettytime(baseline_times)) | $(baseline_ratio) |")
+        end
+
+        body = String(take!(io))
+        println(body)
+
+        # comment on PR
+        if get(ENV, "BUILDKITE_PULL_REQUEST", "false") !== "false" && github_token !== nothing
+            auth = GitHub.authenticate(github_token)
+            repo = GitHub.repo("JuliaGPU/GemmKernels.jl"; auth)
+            pr = parse(Int, ENV["BUILDKITE_PULL_REQUEST"])
+
+            # find a previous comment to edit
+            function find_previous_comment()
+                kwargs = Dict(:auth => auth, :page_limit => 1, :params => (; per_page=100))
+                while true
+                    comments, pages = GitHub.comments(repo, pr; auth)
+                    for comment in comments
+                        if startswith(comment.body, "Benchmark results for")
+                            return comment
+                        end
+                    end
+                    if haskey(pages, "next")
+                        delete!(kwargs, :params)
+                        kwargs[:start_page] = pages["next"]
+                    else
+                        return nothing
+                    end
+                end
+            end
+            previous_comment = find_previous_comment()
+
+            # submit
+            if previous_comment === nothing
+                GitHub.create_comment(repo, pr, :pr; auth, params=(; body=body))
+            else
+                GitHub.edit_comment(repo, previous_comment, :pr; auth, params=(; body=body))
+            end
         end
     end
+end
+
+if !isinteractive() && (myid() == 1)
+    main()
 end
