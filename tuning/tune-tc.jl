@@ -4,6 +4,7 @@ using DataStructures
 using Dates
 using Distributed
 using FileWatching.Pidfile
+using JSON
 using Logging
 using LoggingExtras
 using ProgressMeter
@@ -15,6 +16,9 @@ if myid() == 1
     using Plots
     pythonplot()
 end
+
+logger = SimpleLogger(stdout, Logging.Info)
+old_logger = global_logger(logger)
 
 #######
 
@@ -41,8 +45,9 @@ const PLOT_MIN_NUM_SAMPLES = 100
 # Group samples in batches of 10 samples each.
 const PLOT_BATCH_SIZE = 10
 
-const AB_type = Float16
-const CD_type = Float32
+const data_type = Float16
+const compute_type = Float16
+const accumulate_type = Float32
 
 const zero_c = true
 
@@ -54,9 +59,7 @@ a = nothing
 b = nothing
 c = nothing
 d = nothing
-input_transpose_a = nothing
-input_transpose_b = nothing
-input_N = nothing
+input_parseable_name = nothing
 
 include("../configs/configs.jl")
 
@@ -84,9 +87,8 @@ get_label(transpose_a, transpose_b) = "$(transpose_a ? "T" : "N")$(transpose_b ?
 
 function generate_configs()
     all_configs = DataFrame(
-        transpose_a=Bool[],
-        transpose_b=Bool[],
-        N=Int[],
+        parseable_name=String[],
+        extents=Vector{Int}[],
         BLOCK_M=Int[],
         BLOCK_N=Int[],
         BLOCK_K=Int[],
@@ -100,9 +102,11 @@ function generate_configs()
         times=Vector{Any}[]
     )
 
-    for transpose_a in [false, true],
-        transpose_b in [false, true],
-        N in N_vals,
+    config_path = joinpath(@__DIR__, "../test/benchmark-suite.json")
+    fp = open(config_path, "r")
+    jsonData = JSON.parse(read(fp, String))
+
+    for (parseable_name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData],
         BLOCK_M in 2 .^ (6:9),
         BLOCK_N in 2 .^ (6:9),
         BLOCK_K in 2 .^ (5:7),
@@ -116,9 +120,8 @@ function generate_configs()
         kernel_str in ["singlestage", "pipelined"]
 
         push!(all_configs, Dict(
-            :transpose_a => transpose_a,
-            :transpose_b => transpose_b,
-            :N => N,
+            :parseable_name => parseable_name,
+            :extents => extents,
             :BLOCK_M => BLOCK_M,
             :BLOCK_N => BLOCK_N,
             :BLOCK_K => BLOCK_K,
@@ -137,9 +140,8 @@ function generate_configs()
 end
 
 function get_config(row)
-    transpose_a = row["transpose_a"]
-    transpose_b = row["transpose_b"]
-    M = N = K = row["N"]
+    parseable_name = row["parseable_name"]
+    extents = row["extents"]
     BLOCK_M = row["BLOCK_M"]
     BLOCK_N = row["BLOCK_N"]
     BLOCK_K = row["BLOCK_K"]
@@ -150,22 +152,22 @@ function get_config(row)
     OP_K = row["OP_K"]
     kernel = kernel_string_to_function(row["kernel_str"])
 
-    @get_wmma_config
+    @get_tc_wmma_config
 end
 
 function generate_inputs_if_needed(row)
-    global input_transpose_a, input_transpose_b, input_N, c_ref, a, b, c, d
+    global input_parseable_name, c_ref, a, b, c, d
 
     cf = get_config(row)
 
-    if (input_transpose_a, input_transpose_b, input_N) != (row.transpose_a, row.transpose_b, row.N)
+    if (input_parseable_name) != (row.parseable_name)
         for x in [c_ref, a, b, c, d]
             if x !== nothing
                 CUDA.unsafe_free!(x)
             end
         end
-        c_ref, a, b, c, d = generate_inputs(cf)
-        input_transpose_a, input_transpose_b, input_N = row.transpose_a, row.transpose_b, row.N
+        c_ref, a, b, c, d = generate_inputs_tc(cf)
+        input_parseable_name = row.parseable_name
     end
 end
 
@@ -187,7 +189,7 @@ function measure_config(row)
     d .= 0
 
     try
-        run_gemm(cf, a, b, c, d)
+        run_tc(cf, a, b, c, d)
     catch err
         bt = catch_backtrace()
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
@@ -223,7 +225,7 @@ function measure_config(row)
 
         while true
             synchronize(stream())
-            time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
+            time = CUDA.@elapsed run_tc(cf, a, b, c, d)
             push!(times, time)
 
             if length(times) >= BENCH_MIN_NUM_SAMPLES
@@ -506,8 +508,6 @@ function main()
 
     @info "Need to perform parameter sweep over $(num_unknown) configurations."
 
-    return configs
-
     did_error = false
     channel = RemoteChannel(() -> Channel(), 1)
     @sync begin
@@ -542,49 +542,51 @@ function main()
                 put!(channel, nothing)
             end
         end
-
-        # process the results
-        @async begin
-            while true
-                data = take!(channel)
-                data === nothing && break
-
-                try
-                    # Update configuration
-                    i, start_time, end_time, category, times = data
-                    config_row = configs[i, :]
-                    @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
-
-                    # Save results in case the process crashes.
-                    config_row.times = times
-                    config_row.category = category
-                    open(config_path, "w") do io
-                        serialize(io, configs)
-                    end
-
-                    # Update progress bar
-                    counter_dict_abs = Dict(counter(configs[!, "category"]))
-                    counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
-                    next!(p; showvalues=[
-                        (:N, config_row.N),
-                        (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
-                        (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
-                        (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
-                        (:op_shape, (config_row.OP_M, config_row.OP_N, config_row.OP_K)),
-                        (:kernel, config_row.kernel_str),
-                        (:counters, counter_dict_abs),
-                        (:counters_relative, counter_dict_rel),
-                        (:last_result, "$(config_row.category) -- $(prettytime(config_row.times .* 1e9))"),
-                        (:last_iteration_time, end_time - start_time)
-                    ])
-                catch err
-                    bt = catch_backtrace()
-                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                    @error "Error while updating progress bar: $log"
-                end
-            end
-        end
     end
+
+
+        # # process the results
+        # @async begin
+        #     while true
+        #         data = take!(channel)
+        #         data === nothing && break
+
+        #         try
+        #             # Update configuration
+        #             i, start_time, end_time, category, times = data
+        #             config_row = configs[i, :]
+        #             @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
+
+        #             # Save results in case the process crashes.
+        #             config_row.times = times
+        #             config_row.category = category
+        #             open(config_path, "w") do io
+        #                 serialize(io, configs)
+        #             end
+
+        #             # Update progress bar
+        #             counter_dict_abs = Dict(counter(configs[!, "category"]))
+        #             counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
+        #             next!(p; showvalues=[
+        #                 (:N, config_row.N),
+        #                 (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
+        #                 (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
+        #                 (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
+        #                 (:op_shape, (config_row.OP_M, config_row.OP_N, config_row.OP_K)),
+        #                 (:kernel, config_row.kernel_str),
+        #                 (:counters, counter_dict_abs),
+        #                 (:counters_relative, counter_dict_rel),
+        #                 (:last_result, "$(config_row.category) -- $(prettytime(config_row.times .* 1e9))"),
+        #                 (:last_iteration_time, end_time - start_time)
+        #             ])
+        #         catch err
+        #             bt = catch_backtrace()
+        #             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+        #             @error "Error while updating progress bar: $log"
+        #         end
+        #     end
+        # end
+    # end
     if did_error
         exit(1)
     end

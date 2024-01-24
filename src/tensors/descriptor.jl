@@ -36,6 +36,14 @@ mutable struct TensorDescriptor
             dataType, unaryOp
         )
     end
+
+    function TensorDescriptor(newModes::Int, newExtent::Vector{Int}, newStride::Vector{Int}, newDataType::DataType, newUnaryOp)
+        return new(
+            newModes,
+            newExtent, newStride,
+            newDataType, newUnaryOp
+        )
+    end
 end
 
 export ContractionDescriptor

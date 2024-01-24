@@ -8,9 +8,9 @@ mutable struct ContractionPlan
     algorithmPlan::AbstractAlgorithmPlan
     operator
 
-    function ContractionPlan(desc::ContractionDescriptor; algo::ALGO=ALGO_GETT, operator=Operator.WMMAOp)
+    function ContractionPlan(desc::ContractionDescriptor; algo::ALGO=ALGO_GETT, operator=Operator.WMMAOp, blockShape=nothing, warpsPerBlock=nothing, computeWarp=nothing)
         if (algo == ALGO_GETT)
-            algorithmPlan = setUpGETTKernel(desc, operator)
+            algorithmPlan = setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp)
         end
 
         return new(desc, algo, algorithmPlan, operator)
@@ -24,7 +24,10 @@ mutable struct ContractionPlan
         algo::ALGO=ALGO_GETT,
         computeType=eltype(a),
         accumulateType=eltype(c),
-        operator=Operator.WMMAOp
+        operator=Operator.WMMAOp,
+        blockShape=nothing,
+        warpsPerBlock=nothing,
+        computeWarp=nothing
     )
         desc = ContractionDescriptor(
             a, modeA,
@@ -34,7 +37,7 @@ mutable struct ContractionPlan
             computeType,
             accumulateType
         )
-        return ContractionPlan(desc; algo=algo, operator=operator)
+        return ContractionPlan(desc; algo=algo, operator=operator, blockShape=blockShape, warpsPerBlock=warpsPerBlock, computeWarp=computeWarp)
     end
 
     function ContractionPlan(plan::ContractionPlan, operator)

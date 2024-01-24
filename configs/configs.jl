@@ -10,7 +10,9 @@ export Configuration, get_configs, generate_inputs, run_gemm, run_baseline, veri
 ## lazy module loading
 
 using CUDA
+using cuTENSOR
 using GemmKernels
+using GemmKernels.Tensors
 using LinearAlgebra
 
 struct LazyModule
@@ -44,6 +46,27 @@ struct Configuration
     verify         # Verify function to use.
     kernel         # The kernel function to use.
     baseline       # Baseline implementation to compare performance against
+end
+
+struct ContractionConfiguration
+    name           # Human-readable name of the configuration.
+    plan           # GemmKernels.Config instance to use.
+    alpha          # Value of alpha
+    beta           # Value of beta
+    a_type         # Type of the A tensor on host and in GMEM.
+    b_type         # Type of the B tensor on host and in GMEM.
+    c_type         # Type of the C tensor on host and in GMEM.
+    d_type         # Type of the D tensor on host and in GMEM.
+    transpose_a    # Whether or not A is transposed
+    transpose_b    # Whether or not B is transposed
+    epilogue       # The epilogue to use.
+    verify         # Verify function to use.
+    kernel         # The kernel function to use.
+    baseline       # Baseline implementation to compare performance against
+    extents
+    padded_extents
+    tensorModes
+    accumulate_type
 end
 
 function get_custom_mul!(element_update)
@@ -95,6 +118,54 @@ function generate_inputs(cf::Configuration)
     return reference_mul!, a, b, c, d
 end
 
+function generate_inputs_tc(cf::ContractionConfiguration)
+    a_h = rand(cf.a_type, cf.extents[cf.tensorModes[2]])
+    b_h = rand(cf.b_type, cf.extents[cf.tensorModes[3]])
+    c_h = rand(cf.c_type, cf.extents[cf.tensorModes[1]])
+
+    # Prep cuTENSOR ref solution.
+    a = CuArray(a_h)
+    b = CuArray(b_h)
+    c = CuArray(c_h)
+
+    plan = cuTENSOR.plan_contraction(
+        a, cf.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        b, cf.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        c, cf.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cuTENSOR.CUTENSOR_OP_IDENTITY,
+        algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+        compute_type=cf.accumulate_type
+    )
+
+    cuTENSOR.contract!(
+        cf.alpha,
+        (a), cf.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (b), cf.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cf.beta,
+        (c), cf.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cuTENSOR.CUTENSOR_OP_IDENTITY,
+        compute_type=cf.accumulate_type,
+        plan=plan
+    )
+
+    c_ref = c
+    CUDA.unsafe_free!(a)
+    CUDA.unsafe_free!(b)
+    CUDA.unsafe_free!(c)
+
+    # Prep GemmKernels.jl padded inputs.
+    a = CuArray(zeros(cf.a_type, cf.padded_extents[cf.tensorModes[2]]))
+    b = CuArray(zeros(cf.b_type, cf.padded_extents[cf.tensorModes[3]]))
+    c = CuArray(zeros(cf.c_type, cf.padded_extents[cf.tensorModes[1]]))
+    d = CuArray(zeros(cf.d_type, cf.padded_extents[cf.tensorModes[1]]))
+
+    a[(1:extent for extent in cf.extents[cf.tensorModes[2]])...] = a_h
+    b[(1:extent for extent in cf.extents[cf.tensorModes[3]])...] = b_h
+    c[(1:extent for extent in cf.extents[cf.tensorModes[1]])...] = c_h
+
+    c_ref, a, b, c, d
+end
+
 # Run the GEMM.
 function run_gemm(cf::Configuration, a, b, c, d)
     alpha = cf.alpha
@@ -107,6 +178,11 @@ function run_gemm(cf::Configuration, a, b, c, d)
                        transform_shared_to_regs_c = c_transf,
                        epilogue = cf.epilogue,
                        kernel = cf.kernel)
+end
+
+function run_tc(cf::ContractionConfiguration, a, b, c, d)
+    Tensors.contraction!(cf.plan, cf.alpha, a, b, cf.beta, c, d)
+    d = d[(1:extent for extent in cf.extents[cf.tensorModes[1]])...]
 end
 
 # Run the baseline.
@@ -156,6 +232,28 @@ function cublas_mul!(c, a, b, alpha, beta)
     CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T',
                     alpha, parent(a), parent(b), beta, c)
     c
+end
+
+function tc_baseline(a, b, c, d, alpha, beta)
+    plan = cuTENSOR.plan_contraction(
+        a, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        b, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        c, tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cuTENSOR.CUTENSOR_OP_IDENTITY,
+        algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+        compute_type=cf.accumulate_type
+    )
+
+    cuTENSOR.contract!(
+        alpha,
+        (a), tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (b), tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        beta,
+        (c), tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        cuTENSOR.CUTENSOR_OP_IDENTITY,
+        compute_type=cf.accumulate_type,
+        plan=plan
+    )
 end
 
 macro get_fpu_config()
@@ -486,6 +584,90 @@ macro get_wmma_dual_config()
                       $verify_dual,
                       Kernel.matmul_pipelined,
                       nothing)
+    end end)
+end
+
+macro get_tc_wmma_config()
+    esc(quote let
+                name = "TC $(parseable_name) Block ($BLOCK_M, $BLOCK_N, $BLOCK_K) Warps ($WARPS_M, $WARPS_N) OP ($(OP_M), $(OP_N), $(OP_K))"
+
+        # Parsing the name into a threedimensional vector of the modes of each tensor.
+        tensorModes = Vector{Vector{Int}}(undef, 0)
+        for tensor in split(parseable_name, "-")
+            tensorMode = Vector{Int}(undef, 0)
+
+            for mode in split(tensor, ".")
+                push!(tensorMode, parse(Int, mode))
+            end
+
+            push!(tensorModes, tensorMode)
+        end
+
+        # For the sake of simplicity, we pad the extents of the tensors to be a multiple of 512. This
+        # allows for a broad range of possible block shapes in the GEMM.
+        padded_extents = copy(extents)
+        for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
+            intersection = intersect(tensorModes[idx1], tensorModes[idx2])
+
+            if prod(extents[intersection]) % 512 == 0
+                continue
+            end
+
+            padded_extents[intersection[1]] = Int64(ceil(extents[intersection[1]] / 512) * 512)
+        end
+
+        # Casting the extents to tuples.
+        extents = Tuple(extents)
+        padded_extents = Tuple(padded_extents)
+
+        a_extent = padded_extents[tensorModes[2]]
+        a_desc = TensorDescriptor(
+            length(a_extent), collect(Int, a_extent), collect(Int, cumprod((1, a_extent...))[1:end-1]), data_type, identity
+        )
+        b_extent = padded_extents[tensorModes[3]]
+        b_desc = TensorDescriptor(
+            length(b_extent), collect(Int, b_extent), collect(Int, cumprod((1, b_extent...))[1:end-1]), data_type, identity
+        )
+        c_extent = padded_extents[tensorModes[1]]
+        c_desc = TensorDescriptor(
+            length(c_extent), collect(Int, c_extent), collect(Int, cumprod((1, c_extent...))[1:end-1]), data_type, identity
+        )
+
+        plan = Tensors.ContractionPlan(
+            a_desc, tensorModes[2],
+            b_desc, tensorModes[3],
+            c_desc, tensorModes[1],
+            c_desc, tensorModes[1];
+            operator = Operator.WMMAOp{OP_M, OP_N, OP_K, compute_type, accumulate_type},
+            computeType=compute_type,
+            accumulateType=accumulate_type,
+            blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+            warpsPerBlock = WARPS_M * WARPS_N,
+            computeWarp = (M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
+        )
+
+        conf = plan.algorithmPlan.gemmConf
+
+        ContractionConfiguration(
+            name,
+            plan,
+            convert(compute_type, 2),
+            convert(compute_type, zero_c ? 0 : 3),
+            data_type,
+            data_type,
+            data_type,
+            data_type,
+            !conf.is_a_col_major,
+            !conf.is_b_col_major,
+            Epilogue.Default(),
+            verify_default, # TODO
+            kernel,
+            tc_baseline, 
+            extents,
+            padded_extents,
+            tensorModes,
+            accumulate_type
+        )
     end end)
 end
 

@@ -169,7 +169,7 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
 end
 
 export setUpGETTKernel
-function setUpGETTKernel(desc::ContractionDescriptor, operator)
+function setUpGETTKernel(desc::ContractionDescriptor, operator, blockShape, warpsPerBlock, computeWarp)
     (
         gemmShape,
         TensorLayoutA, isColMajorA, 
@@ -196,8 +196,14 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator)
         operator = operator{8, 8, 1, 4, 8, 1, desc.computeType, desc.accumulateType}
     end
 
+    # TODO: conditionally use blockShape and other things.
     gemmConf = GemmKernels.get_config(
         gemm_shape = gemmShape,
+        block_shape = blockShape,
+        warps_per_block = warpsPerBlock,
+
+        compute_warp = computeWarp,
+
         operator = operator,
 
         global_a_layout = TensorLayoutA,
