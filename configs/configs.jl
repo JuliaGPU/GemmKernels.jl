@@ -91,21 +91,23 @@ end
 
 # Verify results.
 function verify(cf::Configuration, c_ref, d)
-    cf.verify(c_ref, d)
+    cf.verify(c_ref, d, cf.a_type)
 end
 
-function verify_default(c_ref, d)
-    all(isapprox.(c_ref, d))
+compare(x, y, T) = isapprox(x, y; rtol=sqrt(eps(T)))
+
+function verify_default(c_ref, d, T)
+    all(compare.(c_ref, d, T))
 end
 
-function verify_bias(c_ref, d, bias)
-    all(isapprox.(c_ref .+ bias, d))
+function verify_bias(c_ref, d, bias, T)
+    all(compare.(c_ref .+ bias, d, T))
 end
 
-function verify_dual(c_ref, d)
+function verify_dual(c_ref, d, T)
     c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_ref)
     d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, d)
-    all(isapprox.(c_dual, d_dual))
+    all(compare.(c_dual, d_dual, T))
 end
 
 function fpu_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
