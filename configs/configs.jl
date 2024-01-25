@@ -148,7 +148,7 @@ function generate_inputs_tc(cf::ContractionConfiguration)
         plan=plan
     )
 
-    c_ref = c
+    c_ref = Array(c)
     CUDA.unsafe_free!(a)
     CUDA.unsafe_free!(b)
     CUDA.unsafe_free!(c)
@@ -182,11 +182,10 @@ end
 
 function run_tc(cf::ContractionConfiguration, a, b, c, d)
     Tensors.contraction!(cf.plan, cf.alpha, a, b, cf.beta, c, d)
-    d = d[(1:extent for extent in cf.extents[cf.tensorModes[1]])...]
 end
 
 # Run the baseline.
-function run_baseline(cf::Configuration, a, b, c, d)
+function run_baseline(cf::Union{Configuration, ContractionConfiguration}, a, b, c, d)
     @assert !isnothing(cf.baseline)
     cf.baseline(a, b, c, d, cf.alpha, cf.beta, cf.transpose_a, cf.transpose_b)
 end
@@ -203,6 +202,11 @@ compare(x, y, T::Type{Complex{U}}) where {U} = compare(x, y, U)
 
 function verify_default(c_ref, d, T)
     all(compare.(c_ref, d, T))
+end
+
+function verify(cf::ContractionConfiguration, c_ref, d)
+    d_h = Array(d[(1:extent for extent in cf.extents[cf.tensorModes[1]])...])
+    cf.verify(c_ref, d_h)
 end
 
 function verify_bias(c_ref, d, bias, T)
@@ -234,7 +238,7 @@ function cublas_mul!(c, a, b, alpha, beta)
     c
 end
 
-function tc_baseline(a, b, c, d, alpha, beta)
+function tc_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
     plan = cuTENSOR.plan_contraction(
         a, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
         b, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,

@@ -161,7 +161,7 @@ function generate_inputs_if_needed(row)
     cf = get_config(row)
 
     if (input_parseable_name) != (row.parseable_name)
-        for x in [c_ref, a, b, c, d]
+        for x in [a, b, c, d]
             if x !== nothing
                 CUDA.unsafe_free!(x)
             end
@@ -542,51 +542,48 @@ function main()
                 put!(channel, nothing)
             end
         end
+
+        # process the results
+        @async begin
+            while true
+                data = take!(channel)
+                data === nothing && break
+
+                try
+                    # Update configuration
+                    i, start_time, end_time, category, times = data
+                    config_row = configs[i, :]
+                    @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
+
+                    # Save results in case the process crashes.
+                    config_row.times = times
+                    config_row.category = category
+                    open(config_path, "w") do io
+                        serialize(io, configs)
+                    end
+
+                    # Update progress bar
+                    counter_dict_abs = Dict(counter(configs[!, "category"]))
+                    counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
+                    next!(p; showvalues=[
+                        (:parseable_name, config_row.parseable_name),
+                        (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
+                        (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
+                        (:op_shape, (config_row.OP_M, config_row.OP_N, config_row.OP_K)),
+                        (:kernel, config_row.kernel_str),
+                        (:counters, counter_dict_abs),
+                        (:counters_relative, counter_dict_rel),
+                        (:last_result, "$(config_row.category) -- $(prettytime(config_row.times .* 1e9))"),
+                        (:last_iteration_time, end_time - start_time)
+                    ])
+                catch err
+                    bt = catch_backtrace()
+                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                    @error "Error while updating progress bar: $log"
+                end
+            end
+        end
     end
-
-
-        # # process the results
-        # @async begin
-        #     while true
-        #         data = take!(channel)
-        #         data === nothing && break
-
-        #         try
-        #             # Update configuration
-        #             i, start_time, end_time, category, times = data
-        #             config_row = configs[i, :]
-        #             @info "Result for $(NamedTuple(config_row)): $(category) -- $(prettytime(times .* 1e9))"
-
-        #             # Save results in case the process crashes.
-        #             config_row.times = times
-        #             config_row.category = category
-        #             open(config_path, "w") do io
-        #                 serialize(io, configs)
-        #             end
-
-        #             # Update progress bar
-        #             counter_dict_abs = Dict(counter(configs[!, "category"]))
-        #             counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
-        #             next!(p; showvalues=[
-        #                 (:N, config_row.N),
-        #                 (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
-        #                 (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
-        #                 (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
-        #                 (:op_shape, (config_row.OP_M, config_row.OP_N, config_row.OP_K)),
-        #                 (:kernel, config_row.kernel_str),
-        #                 (:counters, counter_dict_abs),
-        #                 (:counters_relative, counter_dict_rel),
-        #                 (:last_result, "$(config_row.category) -- $(prettytime(config_row.times .* 1e9))"),
-        #                 (:last_iteration_time, end_time - start_time)
-        #             ])
-        #         catch err
-        #             bt = catch_backtrace()
-        #             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-        #             @error "Error while updating progress bar: $log"
-        #         end
-        #     end
-        # end
-    # end
     if did_error
         exit(1)
     end
@@ -596,40 +593,40 @@ function main()
         serialize(io, configs)
     end
 
-    # And load again, for good measure.
-    configs = open(config_path, "r") do io
-        deserialize(io)
-    end
+    # # And load again, for good measure.
+    # configs = open(config_path, "r") do io
+    #     deserialize(io)
+    # end
 
-    # (4) Select best configurations, and benchmark.
-    best_configs_path = joinpath(@__DIR__, "best-configs.bin")
-    best_configs = nothing
-    if isfile(best_configs_path)
-        try
-            @info "Loading best configurations from disk..."
-            best_configs = open(best_configs_path, "r") do io
-                deserialize(io)
-            end
-        catch err
-            @error "Error while loading best configurations from disk: $(sprint(Base.showerror, err)))"
-            mv(best_configs_path, "$(best_configs_path).broken")
-        end
-    end
-    if best_configs === nothing
-        @info "Benchmarking configurations for plot..."
-        best_configs = benchmark_best_configs(configs)
+    # # (4) Select best configurations, and benchmark.
+    # best_configs_path = joinpath(@__DIR__, "best-configs.bin")
+    # best_configs = nothing
+    # if isfile(best_configs_path)
+    #     try
+    #         @info "Loading best configurations from disk..."
+    #         best_configs = open(best_configs_path, "r") do io
+    #             deserialize(io)
+    #         end
+    #     catch err
+    #         @error "Error while loading best configurations from disk: $(sprint(Base.showerror, err)))"
+    #         mv(best_configs_path, "$(best_configs_path).broken")
+    #     end
+    # end
+    # if best_configs === nothing
+    #     @info "Benchmarking configurations for plot..."
+    #     best_configs = benchmark_best_configs(configs)
 
-        open(best_configs_path, "w") do io
-            serialize(io, best_configs)
-        end
-    end
+    #     open(best_configs_path, "w") do io
+    #         serialize(io, best_configs)
+    #     end
+    # end
 
 
-    # (5) Plotting results
-    @info "Plotting results..."
-    plot_results(best_configs)
+    # # (5) Plotting results
+    # @info "Plotting results..."
+    # plot_results(best_configs)
 end
 
-if !isinteractive() && myid() == 1
+if isinteractive() && myid() == 1
     main()
 end
