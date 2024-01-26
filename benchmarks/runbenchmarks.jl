@@ -278,7 +278,8 @@ if previous_results !== nothing
     before_min = Dict(k => minimum(v["times"]) for (k, v) in before)
     after_min = Dict(k => minimum(v["times"]) for (k, v) in after)
 
-    judgements = Dict(k => judge(before_min[k], v) for (k, v) in after_min)
+    common_keys = keys(before_min) ∩ keys(after_min)
+    judgements = Dict(k => judge(before_min[k], after_min[k]) for k in common_keys)
 
     println("Improvements:")
 
