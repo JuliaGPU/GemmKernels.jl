@@ -94,7 +94,10 @@ function verify(cf::Configuration, c_ref, d)
     cf.verify(c_ref, d, cf.a_type)
 end
 
-compare(x, y, T) = isapprox(x, y; rtol=sqrt(eps(T)))
+compare(x, y, T) = error("Unimplemented compare(x, y, T) function for type $T")
+compare(x, y, T::Type{<:AbstractFloat}) = isapprox(x, y; rtol=sqrt(eps(T)))
+compare(x, y, T::Type{<:Integer}) = (x == y)
+compare(x, y, T::Type{Complex{U}}) where {U} = compare(x, y, U)
 
 function verify_default(c_ref, d, T)
     all(compare.(c_ref, d, T))
@@ -284,7 +287,7 @@ macro get_wmma_bias_config()
                       transpose_b,
                       mul!,
                       Epilogue.Bias(pointer(bias)),
-                      (c_h, d) -> verify_bias(c_h, d, bias),
+                      (c_h, d, T) -> verify_bias(c_h, d, bias, T),
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
