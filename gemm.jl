@@ -59,7 +59,7 @@ D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
 # }}}
 
 # warp mma {{{
-@inline function warp_mma(a_frags, b_frags, acc_frags, warp_mma_k, conf::Config)
+@inline function warp_mma(a_frags, b_frags, acc_frags, conf::Config)
     # WARP_M x WARP_N x WARP_K = 64 x 64 x 4 GEMM per warp using 16 mma.syncs
     @unrolled for instruction = 0:15
         inner_row = b(instruction, 0)
@@ -608,7 +608,7 @@ function kernel(A, B, D, conf::Config)
             # mma(main_loop_it, warp_mma_k)
             @inbounds shared_a_frag = shared_a_frags[convert(Int, warp_mma_k % 2) + 1]
             @inbounds shared_b_frag = shared_b_frags[convert(Int, warp_mma_k % 2) + 1]
-            acc_frag = warp_mma(shared_a_frag, shared_b_frag, acc_frag, warp_mma_k, conf)
+            acc_frag = warp_mma(shared_a_frag, shared_b_frag, acc_frag, conf)
         end
     end
 
