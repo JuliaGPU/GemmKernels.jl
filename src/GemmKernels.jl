@@ -7,10 +7,13 @@ using LinearAlgebra
 include("tiling.jl")
 include("array.jl")
 include("utils.jl")
+include("vectorisation.jl")
+include("bitarrayindex.jl")
 
 # framework
 include("layout.jl")
 include("operator.jl")
+include("mma.jl")
 include("config.jl")
 include("epilogue.jl")
 include("kernel.jl")
