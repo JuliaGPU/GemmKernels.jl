@@ -108,8 +108,10 @@ results = Dict()
 baseline_results = Dict()
 details = Dict()
 
-for cf in get_configs()
-    @info "Running benchmark $( cf.name )..."
+all_configs = get_configs()
+
+for (idx, cf) in enumerate(all_configs)
+    @info "Running benchmark $(idx)/$(length(all_configs)) $( cf.name )..."
     c_h, a, b, c, d = generate_inputs(cf)
 
     try
@@ -276,7 +278,8 @@ if previous_results !== nothing
     before_min = Dict(k => minimum(v["times"]) for (k, v) in before)
     after_min = Dict(k => minimum(v["times"]) for (k, v) in after)
 
-    judgements = Dict(k => judge(before_min[k], v) for (k, v) in after_min)
+    common_keys = keys(before_min) ∩ keys(after_min)
+    judgements = Dict(k => judge(before_min[k], after_min[k]) for k in common_keys)
 
     println("Improvements:")
 
