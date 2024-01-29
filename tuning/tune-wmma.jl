@@ -562,6 +562,10 @@ function main()
                         bt = catch_backtrace()
                         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
                         @error "Error while measuring configurations: $log"
+
+                        # recycle our worker
+                        rmprocs(p; waitfor=30)
+                        p = addworkers(1)[1]
                     end
                 end
             end)
