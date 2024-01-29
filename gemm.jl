@@ -84,10 +84,10 @@ D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
 
         # Get the A fragment for this mma.sync
         @unrolled for i = 0:3
-            offset = b(i, 0, 0) +                                    # k0
-                     b(i, 1, 1) +                                    # k1
-                     (b(zz_inner_row, 0, 2) ⊻ b(warp_mma_k, 1, 2)) + # m2+k3
-                     b(zz_outer_row, 0, 3)                           # m5
+            offset = b(i, 0, 0) +            # k0
+                     b(i, 1, 1) +            # k1
+                     b(zz_inner_row, 0, 2) + # m2+k3
+                     b(zz_outer_row, 0, 3)   # m5
             @inbounds @immutable a_frag[i] = a_frags[offset]
         end
 
@@ -312,7 +312,7 @@ end
     warp_mma_k = warp_k ÷ conf.WARP_K
 
     # Fragments for the data from the shared loads (and hence the MMAs).
-    # index: (m5|m2+k3|k1|k0)
+    # index: (m5|m2|k1|k0)
     a_frag = LocalArray{Tuple{16}, Float16}(undef)
 
     # index: (n5|n2|n1|n0)
@@ -332,10 +332,10 @@ end
         @inbounds val = vloada(Vec{8, Float16}, shmem_a, swizzle_a(warp_m+m, warp_k+k, conf))
 
         @unrolled for offset = 0:7
-            frag_offset = b(offset, 0, 0) +    # k0
-                          b(offset, 1, 1) +    # k1
-                          b(offset, 2, 2) +    # m2+k3
-                          b(ins, 0, 3)         # m5
+            frag_offset = b(offset, 0, 0) +                         # k0
+                          b(offset, 1, 1) +                         # k1
+                          (b(offset, 2, 2) ⊻ b(warp_mma_k, 1, 2)) + # m2 = (m2+k3) + k3
+                          b(ins, 0, 3)                              # m5
 
             @inbounds @immutable a_frag[frag_offset] = val[offset].value
         end
