@@ -29,6 +29,8 @@ const BENCH_MAX_NUM_SECONDS = 5
 # ... but have at least 10 samples.
 const BENCH_MIN_NUM_SAMPLES = 10
 
+const BENCH_MEMORY_USAGE = 5*2^30
+
 #####
 
 # Stop gathering samples for plot if we have spent this much time...
@@ -455,7 +457,34 @@ function plot_results(best_configs)
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end
 
+function addworkers(X)
+    env = [
+        "JULIA_NUM_THREADS" => "1",
+        "OPENBLAS_NUM_THREADS" => "1",
+        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(BENCH_MEMORY_USAGE),
+    ]
+    exeflags = [
+        "--project=$(Base.active_project())",
+        "--heap-size-hint=$BENCH_MEMORY_USAGE"
+    ]
+
+    procs = addprocs(X)
+    @everywhere procs pushfirst!(LOAD_PATH, dirname(@__DIR__))
+    @everywhere procs include($(joinpath(@__DIR__, "tune-wmma.jl")))
+    procs
+end
+
 function main()
+    # Spawn workers
+    cpu_memory = Sys.free_memory()
+    gpu_memory = CUDA.available_memory()
+    let
+        addworkers(min(
+            floor(Int, cpu_memory / BENCH_MEMORY_USAGE),
+            floor(Int, gpu_memory / BENCH_MEMORY_USAGE),
+            Sys.CPU_THREADS
+        ))
+    end
     @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
 
     # (0) Load configurations from disk, or generate them.
