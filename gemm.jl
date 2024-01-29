@@ -7,6 +7,7 @@ using LLVMLoopInfo: @loopinfo
 using Base.Cartesian: @ntuple
 using Base
 using LinearAlgebra
+using GemmKernels.Operator: VoltaMmaSyncOp, mma
 
 # configuration {{{
 @staticdef struct Config
@@ -56,87 +57,6 @@ conf = Config(
 A = CUDA.rand(Float16, (conf.GLOBAL_N, conf.GLOBAL_K))
 B = CUDA.rand(Float16, (conf.GLOBAL_K, conf.GLOBAL_M))
 D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
-# }}}
-
-# warp mma {{{
-@inline function warp_mma(a_frags, b_frags, acc_frags)
-    # WARP_M x WARP_N x WARP_K = 64 x 64 x 4 GEMM per warp using 16 mma.syncs
-    @unrolled for instruction = 0:15
-        inner_row = b(instruction, 0)
-        outer_row = b(instruction, 1)
-        inner_col = b(instruction, 2)
-        outer_col = b(instruction, 3)
-
-        # 16 x 16 x 4 GEMM per warp using 1 mma.sync:
-        # one mma.sync is an 8 x 8 x 4 GEMM per QP,
-        # or a 16 x 16 x 4 GEMM per warp.
-
-        # zig-zag sequence to increase reuse of the A operand
-        # This doesn't seem to influence performance (at least not significantly),
-        # but CUTLASS does this, so we might as well too.
-        zz_inner_row = inner_row ⊻ (inner_col % 2)
-        zz_outer_row = outer_row ⊻ (inner_col % 2)
-
-        # a, b, and c fragments for this particular mma.sync.
-        a_frag = LocalArray{Tuple{4}, Float16}(undef)
-        b_frag = LocalArray{Tuple{4}, Float16}(undef)
-        c_frag = LocalArray{Tuple{8}, Float32}(undef)
-
-        # Get the A fragment for this mma.sync
-        @unrolled for i = 0:3
-            offset = b(i, 0, 0) +            # k0
-                     b(i, 1, 1) +            # k1
-                     b(zz_inner_row, 0, 2) + # m2+k3
-                     b(zz_outer_row, 0, 3)   # m5
-            @inbounds @immutable a_frag[i] = a_frags[offset]
-        end
-
-        # Get the B fragment for this mma.sync
-        @unrolled for i = 0:3
-            offset = b(i, 0, 0) +           # n0
-                     b(i, 1, 1) +           # n1
-                     b(inner_col, 0, 2) +   # n2
-                     b(outer_col, 0, 3)     # n5
-
-            @inbounds @immutable b_frag[i] = b_frags[offset]
-        end
-
-        # Get the C fragment for this mma.sync
-        @unrolled for i = 0:7
-            # index: (m5|m2|m1|n5|n4|n2|n0)
-            offset = b(i, 0, 0) +            # n0
-                     b(inner_col, 0, 1) +    # n2
-                     b(i, 2, 2) +            # n4
-                     b(outer_col, 0, 3) +    # n5
-                     b(i, 1, 4) +            # m1
-                     b(zz_inner_row, 0, 5) + # m2
-                     b(zz_outer_row, 0, 6)   # m5
-            @inbounds @immutable c_frag[i] = acc_frags[offset]
-        end
-
-        # offset in unit of 4x4x4 tiles
-        inst_m = b(zz_inner_row, 0, 2) + b(tid(), 2, 3) + b(zz_outer_row, 0, 5)
-        inst_n = b(inner_col, 0, 2) + b(tid(), 3, 3) + b(outer_col, 0, 5)
-        inst_k = constant(0)
-
-        d_frag = mma884_row_row(a_frag.data, b_frag.data, c_frag.data)
-
-        # Store D fragment for this mma.sync
-        @unrolled for i = 0:7
-            # index: (m5|m2|m1|n5|n4|n2|n0)
-            offset = b(i, 0, 0) +            # n0
-                     b(inner_col, 0, 1) +    # n2
-                     b(i, 2, 2) +            # n4
-                     b(outer_col, 0, 3) +    # n5
-                     b(i, 1, 4) +            # m1
-                     b(zz_inner_row, 0, 5) + # m2
-                     b(zz_outer_row, 0, 6)   # m5
-            @inbounds @immutable acc_frags[offset] = d_frag[i]
-        end
-    end
-
-    acc_frags
-end
 # }}}
 
 # swizzling {{{
@@ -608,7 +528,9 @@ function kernel(A, B, D, conf::Config)
             # mma(main_loop_it, warp_mma_k)
             @inbounds shared_a_frag = shared_a_frags[convert(Int, warp_mma_k % 2) + 1]
             @inbounds shared_b_frag = shared_b_frags[convert(Int, warp_mma_k % 2) + 1]
-            acc_frag = warp_mma(shared_a_frag, shared_b_frag, acc_frag)
+
+            # acc_frag = warp_mma(shared_a_frag, shared_b_frag, acc_frag)
+            acc_frag = mma(VoltaMmaSyncOp, shared_a_frag, shared_b_frag, acc_frag)
         end
     end
 

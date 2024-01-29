@@ -2,9 +2,8 @@ export Operator
 module Operator
 
 using CUDA
-using GemmKernels
 using GemmKernels.Tiling
-using GemmKernels: LocalArray, @immutable
+using GemmKernels: Layout, LocalArray, @immutable, b, @unrolled, constant, mma884_row_row
 using LLVMLoopInfo: @loopinfo
 
 # -------------------------------------
@@ -14,7 +13,6 @@ using LLVMLoopInfo: @loopinfo
 for f in (:fragtype_a, :fragtype_b, :fragtype_accum, :load_a, :load_b, :load_c, :store_d)
     @eval @inline $f(op, ::Type{Layout.Padded{L, P}}, args...) where {L, P} = $f(op, L, args...)
 end
-
 
 # ---
 # FPU
@@ -356,6 +354,111 @@ end
     c_du = WMMA.mma(a_frag[2], b_frag[1], c_du, conf)
 
     return (c_re, c_du)
+end
+
+# --------------
+# Volta mma.sync
+# --------------
+
+# TODO: Generalise this to:
+# - Other configurations than NN
+# - Other architectures
+# - Other shapes?
+struct VoltaMmaSyncOp end
+
+@inline shape(::Type{VoltaMmaSyncOp}) = (M = 64, N = 64, K = 4)
+
+@inline function mma(::Type{VoltaMmaSyncOp}, a_frag, b_frag, acc_frag)
+    # The optimal Volta mma.sync macro-mma is a 64 x 64 x 4 matrix
+    # multiply-accumulate per warp, using 16 mma.sync instructions.
+    @unrolled for instruction = 0:15
+        inner_row = b(instruction, 0)
+        outer_row = b(instruction, 1)
+        inner_col = b(instruction, 2)
+        outer_col = b(instruction, 3)
+
+        # Each mma.sync instruction will perform a 16 x 16 x 4 matrix
+        # multiply-accumulate per warp.
+        # Behind the scenes, each of those mma.syncs are actually four
+        # 8 x 8 x 4 multiply-accumulates: one for each quad-pair (QP).
+
+        # Use a zig-zag sequence to increase reuse of the A operand.
+        # NOTE: This does not seem to influence performance (at least not
+        # significantly), but CUTLASS does this, so we might as well too...
+        #
+        # Basically, this changes the order of instructions from e.g. this:
+        # 0     4       8       12
+        # 1     5       9       13
+        # 2     6      10       14
+        # 3     7      11       15
+        #
+        # to this:
+        #
+        # 0     7       8       15
+        # 1     6       9       14
+        # 2     5      10       13
+        # 3     4      11       12
+        #
+        # by flipping the order we iterate through the rows every 2nd column.
+        zz_inner_row = inner_row ⊻ (inner_col % 2)
+        zz_outer_row = outer_row ⊻ (inner_col % 2)
+
+        # Extract the a, b, and c fragments for this particular mma.sync
+        # instruction.
+        ins_a_frag = LocalArray{Tuple{4}, Float16}(undef)
+        ins_b_frag = LocalArray{Tuple{4}, Float16}(undef)
+        ins_c_frag = LocalArray{Tuple{8}, Float32}(undef)
+
+        # Get the A fragment for this mma.sync
+        @unrolled for i = 0:3
+            offset = b(i, 0, 0) +            # k0
+                     b(i, 1, 1) +            # k1
+                     b(zz_inner_row, 0, 2) + # m2
+                     b(zz_outer_row, 0, 3)   # m5
+            @inbounds @immutable ins_a_frag[i] = a_frag[offset]
+        end
+
+        # Get the B fragment for this mma.sync
+        @unrolled for i = 0:3
+            offset = b(i, 0, 0) +           # n0
+                     b(i, 1, 1) +           # n1
+                     b(inner_col, 0, 2) +   # n2
+                     b(outer_col, 0, 3)     # n5
+
+            @inbounds @immutable ins_b_frag[i] = b_frag[offset]
+        end
+
+        # Get the C fragment for this mma.sync
+        @unrolled for i = 0:7
+            offset = b(i, 0, 0) +            # n0
+                     b(inner_col, 0, 1) +    # n2
+                     b(i, 2, 2) +            # n4
+                     b(outer_col, 0, 3) +    # n5
+                     b(i, 1, 4) +            # m1
+                     b(zz_inner_row, 0, 5) + # m2
+                     b(zz_outer_row, 0, 6)   # m5
+
+            @inbounds @immutable ins_c_frag[i] = acc_frag[offset]
+        end
+
+        # Perform mma.sync
+        ins_d_frag = mma884_row_row(ins_a_frag.data, ins_b_frag.data, ins_c_frag.data)
+
+        # Store D fragment for this mma.sync
+        @unrolled for i = 0:7
+            offset = b(i, 0, 0) +            # n0
+                     b(inner_col, 0, 1) +    # n2
+                     b(i, 2, 2) +            # n4
+                     b(outer_col, 0, 3) +    # n5
+                     b(i, 1, 4) +            # m1
+                     b(zz_inner_row, 0, 5) + # m2
+                     b(zz_outer_row, 0, 6)   # m5
+
+            @inbounds @immutable acc_frag[offset] = ins_d_frag[i]
+        end
+    end
+
+    acc_frag
 end
 
 end

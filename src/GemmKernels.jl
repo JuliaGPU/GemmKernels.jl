@@ -11,9 +11,9 @@ include("vectorisation.jl")
 include("bitarrayindex.jl")
 
 # framework
+include("mma.jl")
 include("layout.jl")
 include("operator.jl")
-include("mma.jl")
 include("config.jl")
 include("epilogue.jl")
 include("kernel.jl")
