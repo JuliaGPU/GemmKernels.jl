@@ -85,18 +85,18 @@ D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
         # Get the A fragment for this mma.sync
         @unrolled for i = 0:3
             offset = b(i, 0, 0) +                                    # k0
-                        b(i, 1, 1) +                                    # k1
-                        (b(zz_inner_row, 0, 2) ⊻ b(warp_mma_k, 1, 2)) + # m2+k3
-                        b(zz_outer_row, 0, 3)                           # m5
+                     b(i, 1, 1) +                                    # k1
+                     (b(zz_inner_row, 0, 2) ⊻ b(warp_mma_k, 1, 2)) + # m2+k3
+                     b(zz_outer_row, 0, 3)                           # m5
             @inbounds @immutable a_frag[i] = a_frags[offset]
         end
 
         # Get the B fragment for this mma.sync
         @unrolled for i = 0:3
             offset = b(i, 0, 0) +           # n0
-                        b(i, 1, 1) +           # n1
-                        b(inner_col, 0, 2) +   # n2
-                        b(outer_col, 0, 3)     # n5
+                     b(i, 1, 1) +           # n1
+                     b(inner_col, 0, 2) +   # n2
+                     b(outer_col, 0, 3)     # n5
 
             @inbounds @immutable b_frag[i] = b_frags[offset]
         end
@@ -105,12 +105,12 @@ D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
         @unrolled for i = 0:7
             # index: (m5|m2|m1|n5|n4|n2|n0)
             offset = b(i, 0, 0) +            # n0
-                        b(inner_col, 0, 1) +    # n2
-                        b(i, 2, 2) +            # n4
-                        b(outer_col, 0, 3) +    # n5
-                        b(i, 1, 4) +            # m1
-                        b(zz_inner_row, 0, 5) + # m2
-                        b(zz_outer_row, 0, 6)   # m5
+                     b(inner_col, 0, 1) +    # n2
+                     b(i, 2, 2) +            # n4
+                     b(outer_col, 0, 3) +    # n5
+                     b(i, 1, 4) +            # m1
+                     b(zz_inner_row, 0, 5) + # m2
+                     b(zz_outer_row, 0, 6)   # m5
             @inbounds @immutable c_frag[i] = acc_frags[offset]
         end
 
@@ -125,12 +125,12 @@ D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
         @unrolled for i = 0:7
             # index: (m5|m2|m1|n5|n4|n2|n0)
             offset = b(i, 0, 0) +            # n0
-                        b(inner_col, 0, 1) +    # n2
-                        b(i, 2, 2) +            # n4
-                        b(outer_col, 0, 3) +    # n5
-                        b(i, 1, 4) +            # m1
-                        b(zz_inner_row, 0, 5) + # m2
-                        b(zz_outer_row, 0, 6)   # m5
+                     b(inner_col, 0, 1) +    # n2
+                     b(i, 2, 2) +            # n4
+                     b(outer_col, 0, 3) +    # n5
+                     b(i, 1, 4) +            # m1
+                     b(zz_inner_row, 0, 5) + # m2
+                     b(zz_outer_row, 0, 6)   # m5
             @inbounds @immutable acc_frags[offset] = d_frag[i]
         end
     end
