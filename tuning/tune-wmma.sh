@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
 GPU_ID=0
 GPU_CLOCK=-1
 MEM_CLOCK=-1
@@ -62,40 +64,11 @@ if [[ $# -ne 0 ]]; then
     exit 1
 fi
 
+# set-up GPUs
+sudo -b $DIR/setup.sh $GPU_ID $GPU_CLOCK $MEM_CLOCK $$
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 
-if [[ "$GPU_CLOCK" == "-1" ]]; then
-    GPU_CLOCK="$(nvidia-smi -i $GPU_ID --query-supported-clocks=graphics --format=csv | sort -rn | head -1 | cut -f1 -d' ')"
-fi
-
-if [[ "$MEM_CLOCK" == "-1" ]]; then
-    MEM_CLOCK="$(nvidia-smi -i $GPU_ID --query-supported-clocks=memory --format=csv | sort -rn | head -1 | cut -f1 -d' ')"
-fi
-
-echo "Locking GPU $GPU_ID clock speeds to $GPU_CLOCK MHz (GPU) / $MEM_CLOCK MHz (Mem)..."
-
-if ! nvidia-smi -i $GPU_ID --query-supported-clocks=graphics,memory --format=csv | grep -F "$GPU_CLOCK MHz, $MEM_CLOCK MHz"; then
-    echo "Unsupported combination of clock speeds!"
-    exit 1
-fi
-
-# Prompt for sudo
-sudo -v &>/dev/null
-
-# Sudo keep-alive
-while true; do
-    sleep 300
-    sudo -n true
-    kill -0 "$$" || exit
-done &> /dev/null &
-
-sudo nvidia-smi -i $GPU_ID -pm 1
-sudo nvidia-smi -i $GPU_ID --lock-gpu-clocks=$GPU_CLOCK
-sudo nvidia-smi -i $GPU_ID --lock-memory-clocks=$MEM_CLOCK
-
-cd "$( dirname "${BASH_SOURCE[0]}" )"
-cd ..
-
+cd $DIR/..
 echo "+++ :julia: Instantiating project"
 julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 julia --project=tuning -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
@@ -135,7 +108,3 @@ until julia --project=tuning -e '
     echo "Tuning script crashed. Resuming after 1 second..." >&2
     sleep 1
 done
-
-echo "Unlocking GPU clock speeds..."
-sudo nvidia-smi -i $GPU_ID --reset-gpu-clocks
-sudo nvidia-smi -i $GPU_ID --reset-memory-clocks
