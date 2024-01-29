@@ -115,6 +115,10 @@ function generate_configs()
         ],
         kernel_str in ["singlestage", "pipelined"]
 
+        if WARPS_M * WARPS_N < 4
+            continue
+        end
+
         push!(all_configs, Dict(
             :transpose_a => transpose_a,
             :transpose_b => transpose_b,
