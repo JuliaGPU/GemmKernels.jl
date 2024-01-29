@@ -172,13 +172,13 @@ function generate_inputs_if_needed(row)
 end
 
 function get_inputs_for_plot(input_dict, row)
-    if row.N ∉ keys(input_dict)
+    if row.parseable_name ∉ keys(input_dict)
         cf = get_config(row)
-        _, a, b, c, d = generate_inputs(cf)
-        input_dict[row.N] = (a, b, c, d)
+        _, a, b, c, d = generate_inputs_tc(cf)
+        input_dict[row.parseable_name] = (a, b, c, d)
     end
 
-    return input_dict[row.N]
+    return input_dict[row.parseable_name]
 end
 
 function measure_config(row)
@@ -308,9 +308,8 @@ end
 
 function benchmark_best_configs(configs)
     best_configs = DataFrame(
-        transpose_a=Bool[],
-        transpose_b=Bool[],
-        N=Int[],
+        parseable_name=String[],
+        extents=Vector{Int}[],
         BLOCK_M=Int[],
         BLOCK_N=Int[],
         BLOCK_K=Int[],
@@ -330,18 +329,23 @@ function benchmark_best_configs(configs)
 
     dev = NVML.Device(parent_uuid(device()))
 
-    for transpose_a = [false, true],
-        transpose_b = [false, true],
-        N = N_vals
+    config_path = joinpath(@__DIR__, "../test/benchmark-suite.json")
+    fp = open(config_path, "r")
+    jsonData = JSON.parse(read(fp, String))
 
-        relevant_configs = configs[(@. (configs[!, "transpose_a"] == transpose_a) & (configs[!, "transpose_b"] == transpose_b) & (configs[!, "N"] == N)), :]
+    for (parseable_name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData]
+        relevant_configs = configs[(@. (configs[!, "parseable_name"] == parseable_name)), :]
+        
+        if size(relevant_configs, 1) == 0
+            @info "Skipping $(parseable_name)..."
+            continue
+        end
         _, best_config_index = findmin(minimum.(relevant_configs[!, "times"], init=Inf))
         best_config = relevant_configs[best_config_index, :]
 
         push!(best_configs, Dict(
-            :transpose_a => transpose_a,
-            :transpose_b => transpose_b,
-            :N => N,
+            :parseable_name => parseable_name,
+            :extents => extents,
             :BLOCK_M => best_config["BLOCK_M"],
             :BLOCK_N => best_config["BLOCK_N"],
             :BLOCK_K => best_config["BLOCK_K"],
@@ -360,66 +364,58 @@ function benchmark_best_configs(configs)
         ))
     end
 
-    # We will reuse matrix inputs across iterations. This takes about 4 GB of GPU memory for e.g. all matrix sizes for NN.
-    # Group runs of the same transposition together, so we don't have to keep 4 * 4 GB of inputs in memory.
-    for transpose_a in [false, true],
-        transpose_b in [false, true]
+    input_dict = Dict()
 
-        input_dict = Dict()
+    p = ProgressUnknown(desc="Benchmarking", dt=1.0)
 
-        p = ProgressUnknown(desc="Benchmarking", dt=1.0)
+    # Spread the samples of one configuration over time, to reduce the effect
+    # of time-related noise. Note that this means that the progress bar may
+    # make big jumps.
+    while true
+        (sum(@. (best_configs[!, "category"] == "todo")) == 0) && break
 
-        # Spread the samples of one configuration over time, to reduce the effect
-        # of time-related noise. Note that this means that the progress bar may
-        # make big jumps.
-        while true
-            (sum(@. (best_configs[!, "category"] == "todo") & (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)) == 0) && break
-
-            for config_row in eachrow(best_configs)
-                if (config_row.category, config_row.transpose_a, config_row.transpose_b) != ("todo", transpose_a, transpose_b)
-                    continue
-                end
-
-                a, b, c, d = get_inputs_for_plot(input_dict, config_row)
-                cf = get_config(config_row)
-
-                @info "Profiling configuration $(NamedTuple(config_row))..."
-
-                for run_baseline in [false, true]
-                    for i in 1:PLOT_BATCH_SIZE
-                        wait_if_throttling()
-
-                        start_time = Dates.now()
-
-                        push!(config_row[if run_baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data(dev))
-
-                        if run_baseline
-                            prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
-                        else
-                            prof = CUDA.@profile concurrent=false run_gemm(cf, a, b, c, d)
-                        end
-
-                        push!(config_row[if run_baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
-
-                        config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
-                    end
-                end
-
-                if got_enough_samples(config_row)
-                    config_row["category"] = "done"
-                end
-
-                # Update progress bar.
-                next!(p; showvalues = [
-                    (:transpose_a, transpose_a),
-                    (:transpose_b, transpose_b),
-                    (:N, config_row["N"]),
-                    (:num_samples, length(config_row["gemmkernels_times"])),
-                    (:time_spent_in_config, config_row["time_spent"]),
-                    (:remaining_N, best_configs[(@. (best_configs[!, "category"] == "todo") & (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)), :].N),
-                    (:remaining_configurations, sum(best_configs[!, "category"] .== "todo"))
-                ])
+        for config_row in eachrow(best_configs)
+            if (config_row.category) != ("todo")
+                continue
             end
+
+            a, b, c, d = get_inputs_for_plot(input_dict, config_row)
+            cf = get_config(config_row)
+
+            @info "Profiling configuration $(NamedTuple(config_row))..."
+            @info "Got config $(cf.tensorModes)"
+
+            for run_baseline_bool in [false, true]
+                for i in 1:PLOT_BATCH_SIZE
+                    # wait_if_throttling()
+
+                    start_time = Dates.now()
+
+                    push!(config_row[if run_baseline_bool "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data(dev))
+
+                    if run_baseline_bool
+                        prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
+                    else
+                        prof = CUDA.@profile concurrent=false run_tc(cf, a, b, c, d)
+                    end
+
+                    push!(config_row[if run_baseline_bool "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
+
+                    config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
+                end
+            end
+
+            if got_enough_samples(config_row)
+                config_row["category"] = "done"
+            end
+
+            # Update progress bar.
+            next!(p; showvalues = [
+                (:parseable_name, config_row["parseable_name"]),
+                (:num_samples, length(config_row["gemmkernels_times"])),
+                (:time_spent_in_config, config_row["time_spent"]),
+                (:remaining_configurations, sum(best_configs[!, "category"] .== "todo"))
+            ])
         end
     end
 
@@ -598,6 +594,8 @@ function main()
     #     deserialize(io)
     # end
 
+    # configs = configs[1:5, :]
+
     # # (4) Select best configurations, and benchmark.
     # best_configs_path = joinpath(@__DIR__, "best-configs.bin")
     # best_configs = nothing
@@ -620,7 +618,6 @@ function main()
     #         serialize(io, best_configs)
     #     end
     # end
-
 
     # # (5) Plotting results
     # @info "Plotting results..."

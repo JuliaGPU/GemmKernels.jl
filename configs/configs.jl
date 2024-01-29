@@ -185,9 +185,14 @@ function run_tc(cf::ContractionConfiguration, a, b, c, d)
 end
 
 # Run the baseline.
-function run_baseline(cf::Union{Configuration, ContractionConfiguration}, a, b, c, d)
+function run_baseline(cf::Configuration, a, b, c, d)
     @assert !isnothing(cf.baseline)
     cf.baseline(a, b, c, d, cf.alpha, cf.beta, cf.transpose_a, cf.transpose_b)
+end
+
+function run_baseline(cf::ContractionConfiguration, a, b, c, d)
+    @assert !isnothing(cf.baseline)
+    cf.baseline(cf, a, b, c, d, cf.alpha, cf.beta, cf.transpose_a, cf.transpose_b)
 end
 
 # Verify results.
@@ -238,11 +243,11 @@ function cublas_mul!(c, a, b, alpha, beta)
     c
 end
 
-function tc_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
+function tc_baseline(cf, a, b, c, d, alpha, beta, transpose_a, transpose_b)
     plan = cuTENSOR.plan_contraction(
-        a, tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        b, tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        c, tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        a, cf.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        b, cf.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        c, cf.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
         cuTENSOR.CUTENSOR_OP_IDENTITY,
         algo=cuTENSOR.CUTENSOR_ALGO_GETT,
         compute_type=cf.accumulate_type
@@ -250,10 +255,10 @@ function tc_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
 
     cuTENSOR.contract!(
         alpha,
-        (a), tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        (b), tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (a), cf.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (b), cf.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
         beta,
-        (c), tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+        (c), cf.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
         cuTENSOR.CUTENSOR_OP_IDENTITY,
         compute_type=cf.accumulate_type,
         plan=plan
