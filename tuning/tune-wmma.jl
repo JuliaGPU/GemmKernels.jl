@@ -533,7 +533,7 @@ function main()
         for p in workers()
             errormonitor(@async begin
                 while length(pending) > 0
-                    i = pop!(pending)
+                    i = popfirst!(pending)
                     config_row = configs[i, :]
                     try
                         start_time = Dates.now()
