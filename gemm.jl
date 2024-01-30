@@ -177,57 +177,11 @@ end
 
 # st shared {{{
 @inline function st_shared(shmem_a, shmem_b, a_frag, b_frag, conf)
-    # TODO: EXTRACT
     # Store A to Shared Memory.
-    @unrolled for ins = 0:3
-            m = b(tid(), 2, 0) +
-                b(tid(), 3, 1) +
-                b(tid(), 4, 2) +
-                b(ins, 1, 3) +
-                b(tid(), 5, 4) +
-                b(tid(), 6, 5) +
-                b(tid(), 7, 6)
+    block_tile = Tile(M = 128, N = 256, K = 32)
 
-            k = b(ins, 0, 2) +
-                b(tid(), 0, 3) +
-                b(tid(), 1, 4)
-
-        @inbounds val = @ntuple 4 i -> begin
-            offset = constant(i-1)
-            frag_offset = b(offset, 0, 0) + # k0
-                          b(offset, 1, 1) + # k1
-                          b(ins, 0, 2) +  # k2
-                          b(ins, 1, 3)    # m3
-            VecElement{Float16}(a_frag[frag_offset])
-        end
-        @inbounds vstorea!(Vec{4, Float16}, shmem_a, swizzle_a(m, k, conf), val)
-    end
-
-    # Store B to Shared Memory.
-    @unrolled for ins = 0:3
-        n = b(tid(), 0, 3) +
-            b(tid(), 1, 4) +
-            b(tid(), 2, 5) +
-            b(ins, 0, 6) +
-            b(ins, 1, 7)
-
-        k = b(tid(), 3, 0) +
-            b(tid(), 4, 1) +
-            b(tid(), 5, 2) +
-            b(tid(), 6, 3) +
-            b(tid(), 7, 4)
-
-        @inbounds val = @ntuple 8 i -> begin
-            offset = constant(i-1)
-            frag_offset = b(offset, 0, 0) + # n0
-                          b(offset, 1, 1) + # n1
-                          b(offset, 2, 2) + # n2
-                          b(ins, 0, 3) +    # n6
-                          b(ins, 1, 4)      # n7
-            VecElement{Float16}(b_frag[frag_offset])
-        end
-        @inbounds vstorea!(Vec{8, Float16}, shmem_b, swizzle_b(k, n, conf), val)
-    end
+    Layout.store!(VoltaSwizzledOperandA{Float16}, shmem_a, a_frag, block_tile)
+    Layout.store!(VoltaSwizzledOperandB{Float16}, shmem_b, b_frag, block_tile)
 end
 # }}}
 
