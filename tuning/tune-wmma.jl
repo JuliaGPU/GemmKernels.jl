@@ -210,6 +210,12 @@ function measure_config(row)
             time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
             push!(times, time)
 
+            # don't bother with very slow configurations
+            if time > BENCH_MAX_NUM_SECONDS
+                break
+            end
+
+            # ensure we have enough samples
             if length(times) >= BENCH_MIN_NUM_SAMPLES
                 (Dates.now() - start_time > Second(BENCH_MAX_NUM_SECONDS)) && break
                 (confidence_interval_95(times) / median(times) < BENCH_NORM_CI_THRESHOLD) && break
