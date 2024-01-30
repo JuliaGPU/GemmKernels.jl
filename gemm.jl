@@ -7,7 +7,7 @@ using LLVMLoopInfo: @loopinfo
 using Base.Cartesian: @ntuple
 using Base
 using LinearAlgebra
-using GemmKernels.Operator: VoltaMmaSyncOp, mma, load_a, load_b
+using GemmKernels.Operator: VoltaMmaSyncOp, mma, load_a, load_b, store_d
 using GemmKernels.Layout: VoltaSwizzledOperandA, VoltaSwizzledOperandB
 using GemmKernels.Tiling
 
@@ -250,46 +250,18 @@ end
 @inline function epilogue_st_shared(epilogue_it, shmem_d, warp_m, warp_n, acc_frag)
     # index: (m5|m2|m1|n5|n4|n2|n0)
 
-    @unrolled for ins = 0:15
-        # TODO: vectorise
-        @unrolled for offset = 0:1
-            m = b(tid(), 0, 0) +
-                b(ins, 3, 1) +
-                b(epilogue_it, 0, 2) +
-                b(tid(), 2, 3) +
-                b(tid(), 4, 4) +
-                b(epilogue_it, 1, 5) +
-                warp_m
+    warpId = (threadIdx().x - 1) ÷ 32 + 1
+    block_tile = Tile(M = 128, N = 256, K = 32)
+    warp_tile = subdivide(block_tile.MN, Tile(M = 64, N = 64), warpId, 8)
+    m_offset = convert(Int, b(epilogue_it, 0, 2) + b(epilogue_it, 1, 5))
+    tile = translate_offset(warp_tile, (M = m_offset, N = 0))
 
-            n = b(offset, 0, 0) +
-                b(tid(), 1, 1) +
-                b(ins, 0, 2) +
-                b(tid(), 3, 3) +
-                b(ins, 1, 4) +
-                b(ins, 2, 5) +
-                warp_n
+    frag_base = b(epilogue_it, 0, 5) + # m2
+                b(epilogue_it, 1, 6)   # m5
 
-            frag_index = b(offset, 0, 0) +      # n0
-                         b(ins, 0, 1) +         # n2
-                         b(ins, 1, 2) +         # n4
-                         b(ins, 2, 3) +         # n5
-                         b(ins, 3, 4) +         # m1
-                         b(epilogue_it, 0, 5) + # m2
-                         b(epilogue_it, 1, 6)   # m5
+    frag = view(acc_frag, (convert(Int, frag_base) + 1):length(acc_frag))
 
-            offset_M = b(tid(), 0, 0) +         # m0
-                       b(ins, 3, 1) +           # m1
-                       b(tid(), 2, 2) +         # m3
-                       b(tid(), 4, 3) +         # m4
-                       b(warpid(), 0, 4)        # m6
-
-            offset_N = n
-
-            offset = convert(Int, offset_N) + 258 * convert(Int, offset_M)
-
-            @inbounds shmem_d[1 + offset] = acc_frag[frag_index]
-        end
-    end
+    store_d(VoltaMmaSyncOp, Layout.Padded{Layout.UnsafeAlignedRowMajor{Float16}, 2}, shmem_d, frag, tile)
 end
 
 @inline function epilogue_ld_shared(epilogue_it, shmem_d)
@@ -535,4 +507,3 @@ end
 
 isinteractive() || test()
 # }}}
-

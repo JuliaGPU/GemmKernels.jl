@@ -432,6 +432,49 @@ end
     b_frag.data
 end
 
+@inline function store_d(::Type{VoltaMmaSyncOp}, ::Type{Layout.Padded{Layout.UnsafeAlignedRowMajor{Float16}, P}}, workspace, frag, tile::Tile) where {P}
+    # index: (m5|m2|m1|n5|n4|n2|n0)
+    warp_m = variadic(tile.base.M) + constant(tile.offset.M)
+    warp_n = variadic(tile.base.N) + constant(tile.offset.N)
+
+    @unrolled for ins = 0:15
+        # TODO: vectorise
+        @unrolled for offset = 0:1
+            m = b(tid(), 0, 0) +
+                b(ins, 3, 1) +
+                b(tid(), 2, 3) +
+                b(tid(), 4, 4) +
+                warp_m
+
+            n = b(offset, 0, 0) +
+                b(tid(), 1, 1) +
+                b(ins, 0, 2) +
+                b(tid(), 3, 3) +
+                b(ins, 1, 4) +
+                b(ins, 2, 5) +
+                warp_n
+
+            frag_index = b(offset, 0, 0) +   # n0
+                         b(ins, 0, 1) +      # n2
+                         b(ins, 1, 2) +      # n4
+                         b(ins, 2, 3) +      # n5
+                         b(ins, 3, 4)        # m1
+
+            offset_M = b(tid(), 0, 0) +      # m0
+                       b(ins, 3, 1) +        # m1
+                       b(tid(), 2, 2) +      # m3
+                       b(tid(), 4, 3) +      # m4
+                       b(tid(), 5, 4)        # m6
+
+            offset_N = n
+
+            offset = convert(Int, offset_N) + 258 * convert(Int, offset_M)
+
+            @inbounds workspace[1 + offset] = frag[frag_index]
+        end
+    end
+end
+
 @inline function mma(::Type{VoltaMmaSyncOp}, a_frag, b_frag, acc_frag)
     # The optimal Volta mma.sync macro-mma is a 64 x 64 x 4 matrix
     # multiply-accumulate per warp, using 16 mma.sync instructions.
