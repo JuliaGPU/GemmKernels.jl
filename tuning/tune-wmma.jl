@@ -11,11 +11,12 @@ using ProgressMeter
 using Serialization
 using Statistics
 using StatsBase
+using Random
 
-if myid() == 1
-    using Plots
-    pythonplot()
-end
+# if myid() == 1
+#     using Plots
+#     pythonplot()
+# end
 
 #######
 
@@ -50,16 +51,6 @@ const CD_type = Float32
 const zero_c = true
 
 #######
-
-# Reuse inputs across iterations.
-c_ref = nothing
-a = nothing
-b = nothing
-c = nothing
-d = nothing
-input_transpose_a = nothing
-input_transpose_b = nothing
-input_N = nothing
 
 include("../configs/configs.jl")
 
@@ -156,22 +147,6 @@ function get_config(row)
     @get_wmma_config
 end
 
-function generate_inputs_if_needed(row)
-    global input_transpose_a, input_transpose_b, input_N, c_ref, a, b, c, d
-
-    cf = get_config(row)
-
-    if (input_transpose_a, input_transpose_b, input_N) != (row.transpose_a, row.transpose_b, row.N)
-        for x in [c_ref, a, b, c, d]
-            if x !== nothing
-                CUDA.unsafe_free!(x)
-            end
-        end
-        c_ref, a, b, c, d = generate_inputs(cf)
-        input_transpose_a, input_transpose_b, input_N = row.transpose_a, row.transpose_b, row.N
-    end
-end
-
 function get_inputs_for_plot(input_dict, row)
     if row.N ∉ keys(input_dict)
         cf = get_config(row)
@@ -186,8 +161,10 @@ function measure_config(row)
     @info "Measuring configuration $(NamedTuple(row))..."
     cf = get_config(row)
 
-    generate_inputs_if_needed(row)
+    pidfile = joinpath(@__DIR__, "tuning.pid")
 
+    get_ref, a, b, c = generate_inputs(cf)
+    d = similar(c)
     d .= 0
 
     try
@@ -210,6 +187,9 @@ function measure_config(row)
         return [Inf], "error"
     end
 
+    c_ref = mkpidlock(pidfile) do
+        get_ref(a, b, c)
+    end
     if !verify(cf, c_ref, d)
         @warn "Configuration produced invalid result: $(NamedTuple(row))"
 
@@ -222,7 +202,7 @@ function measure_config(row)
     device_synchronize()
     GC.gc(true)
 
-    mkpidlock(joinpath(@__DIR__, "tuning.pid")) do
+    mkpidlock(pidfile) do
         start_time = Dates.now()
 
         while true
@@ -469,7 +449,7 @@ function addworkers(X)
         "--heap-size-hint=$BENCH_MEMORY_USAGE"
     ]
 
-    procs = addprocs(X)
+    procs = addprocs(X; exeflags, env)
     @everywhere procs include($(joinpath(@__DIR__, "tune-wmma.jl")))
     procs
 end
@@ -527,6 +507,7 @@ function main()
     pending = filter(1:size(configs, 1)) do i
         configs[i, :category] == "pending"
     end
+    shuffle!(pending)
     results = Channel(Inf)
     @sync begin
         # measure configurations on workers
@@ -541,7 +522,7 @@ function main()
                             remotecall_fetch(measure_config, p, NamedTuple(config_row))
                         end_time = Dates.now()
 
-                        push!(results, (i, start_time, end_time))
+                        push!(results, (p, i, start_time, end_time))
                     catch err
                         config_row.category = "crashed"
 
@@ -560,12 +541,11 @@ function main()
         # process the results
         errormonitor(@async begin
             while !isempty(pending) || !isempty(results)
-                data = take!(results)
+                worker, i, start_time, end_time = take!(results)
 
                 # Update configuration
-                i, start_time, end_time = data
                 config_row = configs[i, :]
-                @info "Result for $(NamedTuple(config_row)): $(config_row.category) -- $(prettytime(config_row.times .* 1e9))"
+                @info "Result from worker $worker for $(NamedTuple(config_row)): $(config_row.category) -- $(prettytime(config_row.times .* 1e9))"
 
                 # Save results in case the process crashes.
                 open(config_path, "w") do io

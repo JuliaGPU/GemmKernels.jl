@@ -74,24 +74,19 @@ function generate_inputs(cf::Configuration)
     N = cf.config.matmul_shape.N
     K = cf.config.matmul_shape.K
 
-    a_h = rand(cf.a_type, (M, K))
-    b_h = rand(cf.b_type, (K, N))
-    c_h = rand(cf.c_type, (M, N))
+    a = CUDA.rand(cf.a_type, cf.transpose_a ? (K, M) : (M, K))
+    b = CUDA.rand(cf.b_type, cf.transpose_b ? (N, K) : (K, N))
+    c = CUDA.rand(cf.c_type, (M, N))
 
-    a_h = cf.transpose_a ? transpose(a_h) : a_h
-    b_h = cf.transpose_b ? transpose(b_h) : b_h
+    function get_reference(a, b, c)
+        # mul! determines transpose from the type of the matrix
+        (cf.calc_reference)(c,
+                            cf.transpose_a ? transpose(a) : a,
+                            cf.transpose_b ? transpose(b) : b,
+                            cf.alpha, cf.beta)
+    end
 
-    a = CuArray(a_h)
-    b = CuArray(b_h)
-    c = CuArray(c_h)
-    d = similar(c)
-
-    new_a_h = cf.transpose_a ? transpose(a_h) : a_h
-    new_b_h = cf.transpose_b ? transpose(b_h) : b_h
-
-    (cf.calc_reference)(c_h, new_a_h, new_b_h, cf.alpha, cf.beta)
-    c_ref = CuArray(c_h)
-    c_ref, a, b, c, d
+    return get_reference, a, b, c
 end
 
 # Run the GEMM.
@@ -139,13 +134,22 @@ function verify_dual(c_ref, d, T)
 end
 
 function fpu_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
-    CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
-    CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+    CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
+    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
 end
 
 function wmma_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
-    CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
-    CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+    CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
+    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+end
+
+function cublas_mul!(c, a, b, alpha, beta)
+    # minimalistic version of mul!, without ever falling back to GPUCompiler.jl
+    transpose_a = a isa Adjoint || a isa Transpose
+    transpose_b = b isa Adjoint || b isa Transpose
+    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T',
+                    alpha, parent(a), parent(b), beta, c)
+    c
 end
 
 macro get_fpu_config()
@@ -188,7 +192,7 @@ macro get_fpu_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      mul!,
+                      $LinearAlgebra.mul!,
                       Epilogue.Default(),
                       $verify_default,
                       Kernel.matmul_pipelined,
@@ -270,7 +274,7 @@ macro get_wmma_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      (args...) -> Octavian.matmul!(args...),
+                      $LinearAlgebra.mul!,
                       Epilogue.Default(),
                       $verify_default,
                       kernel,
