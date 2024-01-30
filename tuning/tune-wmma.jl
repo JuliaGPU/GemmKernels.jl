@@ -32,8 +32,6 @@ const BENCH_MAX_SAMPLE_SECONDS = 1
 # ... but have at least 10 samples.
 const BENCH_MIN_NUM_SAMPLES = 10
 
-const BENCH_MEMORY_USAGE = 5*2^30
-
 #####
 
 # Stop gathering samples for plot if we have spent this much time...
@@ -48,6 +46,10 @@ const PLOT_BATCH_SIZE = 10
 
 const AB_type = Float16
 const CD_type = Float32
+
+const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
+                           maximum(N_vals)^2 * 2 * sizeof(CD_type) +
+                           500*2^20     # 500 MiB for CUDA contexts
 
 const zero_c = true
 
@@ -557,6 +559,11 @@ function main()
                         end_time = Dates.now()
 
                         push!(results, (p, i, start_time, end_time))
+
+                        # keep memory usage under control
+                        remotecall(p) do
+                            CUDA.reclaim()
+                        end
                     catch err
                         config_row.category = "crashed"
 
@@ -649,11 +656,12 @@ if !isinteractive() && myid() == 1
     cpu_memory = Sys.free_memory()
     gpu_memory = CUDA.available_memory()
     let
-        addworkers(min(
+        nworkers = min(
             floor(Int, cpu_memory / BENCH_MEMORY_USAGE),
             floor(Int, gpu_memory / BENCH_MEMORY_USAGE),
             Sys.CPU_THREADS
-        ))
+        )
+        addworkers(max(1, nworkers-1))
     end
     @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
 
