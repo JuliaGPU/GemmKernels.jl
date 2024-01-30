@@ -49,7 +49,9 @@ const CD_type = Float32
 
 const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
                            maximum(N_vals)^2 * 2 * sizeof(CD_type) +
-                           2^20     # 1 GiB for CUDA contexts, etc
+                           128*2^20 # there's always some overhead
+
+const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
 
 const zero_c = true
 
@@ -167,8 +169,21 @@ function measure_config(row)
     pidfile = joinpath(@__DIR__, "tuning.pid")
 
     # allocate inputs
-    reference_mul!, a, b, c = generate_inputs(cf)
-    d = similar(c)
+    reference_mul!, a, b, c, d = try
+        # this is the only place where we allocate device memory.
+        # other allocation failures will be reported as crashes.
+        generate_inputs(cf)
+    catch err
+        bt = catch_backtrace()
+        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+
+        if isa(err, OutOfGPUMemoryError)
+            @info "Not enough memory for configuration $(repr_row(row))\n" * log
+            return [Inf], "oom"
+        else
+            rethrow()
+        end
+    end
 
     # compile and warm-up
     try
@@ -192,7 +207,7 @@ function measure_config(row)
     end
 
     # initialize inputs and verify result
-    time = mkpidlock(pidfile) do
+    time, c_h, d_h = mkpidlock(pidfile) do
         rand!(a)
         rand!(b)
         rand!(c)
@@ -200,13 +215,14 @@ function measure_config(row)
 
         time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
         reference_mul!(c, a, b)
-        time
+        time, Array(c), Array(d)
     end
     if time > BENCH_MAX_SAMPLE_SECONDS
         @warn "Configuration took too long: $(repr_row(row))"
         return [time], "too_slow"
     end
-    if !verify(cf, c, d)
+    if !verify(cf, c_h, d_h)
+        # NOTE: we verify on the CPU because it involves memory allocations
         @warn "Configuration produced invalid result: $(repr_row(row))"
         return [Inf], "invalid_result"
     end
@@ -560,6 +576,11 @@ function main()
 
                         push!(results, (p, i, start_time, end_time))
 
+                        if config_row.category in ["oom"]
+                            # retry later
+                            push!(pending, i)
+                        end
+
                         # keep memory usage under control
                         remotecall(p) do
                             CUDA.reclaim()
@@ -657,8 +678,8 @@ if !isinteractive() && myid() == 1
     gpu_memory = CUDA.available_memory()
     let
         nworkers = min(
-            floor(Int, cpu_memory / BENCH_MEMORY_USAGE),
-            floor(Int, gpu_memory / BENCH_MEMORY_USAGE),
+            floor(Int, cpu_memory / WORKER_MEMORY_USAGE),
+            floor(Int, gpu_memory / WORKER_MEMORY_USAGE),
             Sys.CPU_THREADS
         )
         addworkers(max(1, nworkers-1))

@@ -77,6 +77,7 @@ function generate_inputs(cf::Configuration)
     a = CuArray{cf.a_type}(undef, cf.transpose_a ? (K, M) : (M, K))
     b = CuArray{cf.b_type}(undef, cf.transpose_b ? (N, K) : (K, N))
     c = CuArray{cf.c_type}(undef, (M, N))
+    d = CuArray{cf.c_type}(undef, (M, N))
 
     function reference_mul!(c, a, b)
         # mul! determines transpose from the type of the matrix
@@ -86,7 +87,7 @@ function generate_inputs(cf::Configuration)
                             cf.alpha, cf.beta)
     end
 
-    return reference_mul!, a, b, c
+    return reference_mul!, a, b, c, d
 end
 
 # Run the GEMM.
