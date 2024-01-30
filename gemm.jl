@@ -1,13 +1,15 @@
 # vim: fdm=marker
 
-using GemmKernels: LocalArray, @immutable, mma884_row_row, @staticdef, BitArrayIndex, @unrolled, @not_unrolled, constant, variadic, tid, bid_x, bid_y, warpid, vloada, vstorea!, Vec, b
+using GemmKernels: LocalArray, @immutable, mma884_row_row, @staticdef, BitArrayIndex, @unrolled, @not_unrolled, constant, variadic, tid, bid_x, bid_y, warpid, vloada, vstorea!, Vec, b, Layout
 using Test
 using CUDA
 using LLVMLoopInfo: @loopinfo
 using Base.Cartesian: @ntuple
 using Base
 using LinearAlgebra
-using GemmKernels.Operator: VoltaMmaSyncOp, mma
+using GemmKernels.Operator: VoltaMmaSyncOp, mma, load_a, load_b
+using GemmKernels.Layout: VoltaSwizzledOperandA, VoltaSwizzledOperandB
+using GemmKernels.Tiling
 
 # configuration {{{
 @staticdef struct Config
@@ -171,7 +173,7 @@ end
 # }}}
 
 # st shared {{{
-@inline function st_shared(stage, shmem_a, shmem_b, a_frag, b_frag, conf)
+@inline function st_shared(shmem_a, shmem_b, a_frag, b_frag, conf)
     # Store A to Shared Memory.
     @unrolled for ins = 0:3
             m = b(tid(), 2, 0) +
@@ -184,8 +186,7 @@ end
 
             k = b(ins, 0, 2) +
                 b(tid(), 0, 3) +
-                b(tid(), 1, 4) +
-                b(stage, 0, 5)
+                b(tid(), 1, 4)
 
         @inbounds val = @ntuple 4 i -> begin
             offset = constant(i-1)
@@ -210,8 +211,7 @@ end
             b(tid(), 4, 1) +
             b(tid(), 5, 2) +
             b(tid(), 6, 3) +
-            b(tid(), 7, 4) +
-            b(stage, 0, 5)
+            b(tid(), 7, 4)
 
         @inbounds val = @ntuple 8 i -> begin
             offset = constant(i-1)
@@ -228,62 +228,21 @@ end
 # }}}
 
 # ld shared {{{
-@inline function ld_shared(stage, shmem_a, shmem_b, warp_m, warp_n, warp_k, conf)
+@inline function ld_shared(shmem_a, shmem_b, warp_m, warp_n, warp_k, conf)
     warp_mma_k = warp_k ÷ conf.WARP_K
 
-    # Fragments for the data from the shared loads (and hence the MMAs).
-    # index: (m5|m2|k1|k0)
-    a_frag = LocalArray{Tuple{16}, Float16}(undef)
-
-    # index: (n5|n2|n1|n0)
     b_frag = LocalArray{Tuple{16}, Float16}(undef)
 
-    # Load A from Shared Memory.
-    @unrolled for ins = 0:1
-        m = b(tid(), 0, 0) +
-            b(tid(), 1, 1) +
-            b(warp_mma_k, 1, 2) +
-            b(tid(), 2, 3) +
-            b(tid(), 4, 4) +
-            b(ins, 0, 5)
+    warpId = (threadIdx().x - 1) ÷ 32 + 1
+    block_tile = Tile(M = 128, N = 256, K = 32)
+    warp_tile_mn = subdivide(block_tile, Tile(M = 64, N = 64, K = 32), warpId, 8)
 
-        k = b(stage, 0, 5)
+    tile = translate_offset(warp_tile_mn, (M = 0, N = 0, K = convert(Int, warp_k)))
 
-        @inbounds val = vloada(Vec{8, Float16}, shmem_a, swizzle_a(warp_m+m, warp_k+k, conf))
+    a_frag = load_a(VoltaMmaSyncOp, VoltaSwizzledOperandA{Float16}, shmem_a, tile)
+    b_frag = load_b(VoltaMmaSyncOp, VoltaSwizzledOperandB{Float16}, shmem_b, tile)
 
-        @unrolled for offset = 0:7
-            frag_offset = b(offset, 0, 0) +                         # k0
-                          b(offset, 1, 1) +                         # k1
-                          (b(offset, 2, 2) ⊻ b(warp_mma_k, 1, 2)) + # m2 = (m2+k3) + k3
-                          b(ins, 0, 3)                              # m5
-
-            @inbounds @immutable a_frag[frag_offset] = val[offset].value
-        end
-    end
-
-    # Load B from Shared Memory.
-    @unrolled for ins = 0:1
-        k = b(tid(), 0, 0) +
-            b(tid(), 1, 1) +
-            b(stage, 0, 5)
-
-        n = b(tid(), 3, 3) +
-            b(tid(), 4, 4) +
-            b(ins, 0, 5)
-
-        @inbounds val = vloada(Vec{8, Float16}, shmem_b, swizzle_b(warp_k+k, warp_n+n, conf))
-
-        @unrolled for offset = 0:7
-            frag_offset = b(offset, 0, 0) +    # n0
-                          b(offset, 1, 1) +    # n1
-                          b(offset, 2, 2) +    # n2
-                          b(ins, 0, 3)         # n5
-
-            @inbounds @immutable b_frag[frag_offset] = val[offset].value
-        end
-    end
-
-    a_frag.data, b_frag.data
+    a_frag, b_frag
 end
 # }}}
 
@@ -448,10 +407,9 @@ function kernel(A, B, D, conf::Config)
     SHMEM_A_SIZE = (conf.CTA_M * conf.CTA_K) * conf.SHARED_TO_REGS_STAGES
     SHMEM_B_SIZE = (conf.CTA_K * conf.CTA_N) * conf.SHARED_TO_REGS_STAGES
 
-    shmem_ab = CuDynamicSharedArray(Float16, SHMEM_A_SIZE + SHMEM_B_SIZE)
-
-    shmem_a = view(shmem_ab, 1:SHMEM_A_SIZE)
-    shmem_b = view(shmem_ab, 1+SHMEM_A_SIZE:SHMEM_A_SIZE+SHMEM_B_SIZE)
+    shmem_a = CuDynamicSharedArray(Float16, (conf.CTA_M * conf.CTA_K, conf.SHARED_TO_REGS_STAGES))
+    shmem_b = CuDynamicSharedArray(Float16, (conf.CTA_K * conf.CTA_N, conf.SHARED_TO_REGS_STAGES),
+                                   length(shmem_a) * sizeof(Float16))
 
     shmem_d = CuDynamicSharedArray(Float32, 32 * (256 + 2))
 
@@ -469,16 +427,18 @@ function kernel(A, B, D, conf::Config)
 
     # st_shared(main_loop_it=0)
     main_loop_it = constant(0)
-    stage = constant(0)
-    st_shared(stage, shmem_a, shmem_b, global_a_frag, global_b_frag, conf)
+    st_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
+                view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
+                global_a_frag, global_b_frag, conf)
     sync_threads()
 
     # ld_shared(main_loop_it=0, warp_mma_k=0)
     main_loop_it = constant(0)
     warp_k = constant(0)
     warp_mma_k = constant(0)
-    stage = constant(0)
-    shared_a_frag, shared_b_frag = ld_shared(stage, shmem_a, shmem_b, warp_m, warp_n, warp_k, conf)
+    shared_a_frag, shared_b_frag = ld_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
+                                                view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
+                                                warp_m, warp_n, warp_k, conf)
 
     @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k % 2) + 1] = shared_a_frag
     @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k % 2) + 1] = shared_b_frag
@@ -493,9 +453,6 @@ function kernel(A, B, D, conf::Config)
         main_loop_it_next = variadic((main_loop_it_orig + 1)) % NUM_MAIN_LOOP_ITERS
         cta_k_next = main_loop_it_next * conf.CTA_K
 
-        stage = variadic(main_loop_it_orig) % 2
-        stage_next = variadic((main_loop_it_orig + 1)) % 2
-
         # CTA_M x CTA_N x CTA_K GEMM per CTA
         NUM_WARP_MMA_K_ITERS = conf.CTA_K ÷ conf.WARP_K
         @unrolled for warp_mma_k = 0 : NUM_WARP_MMA_K_ITERS - 1
@@ -507,12 +464,16 @@ function kernel(A, B, D, conf::Config)
 
             if warp_mma_k == NUM_WARP_MMA_K_ITERS-1
                 # st_shared(main_loop_it+1)
-                st_shared(stage_next, shmem_a, shmem_b, global_a_frag, global_b_frag, conf)
+                st_shared(view(shmem_a, :, convert(Int, main_loop_it_next % 2) + 1),
+                          view(shmem_b, :, convert(Int, main_loop_it_next % 2) + 1),
+                          global_a_frag, global_b_frag, conf)
                 sync_threads()
             end
 
             # ld_shared(main_loop_it, warp_mma_k + 1)
-            shared_a_frag, shared_b_frag = ld_shared(stage, shmem_a, shmem_b, warp_m, warp_n, warp_k_next, conf)
+            shared_a_frag, shared_b_frag = ld_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
+                                                     view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
+                                                     warp_m, warp_n, warp_k_next, conf)
 
             @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k_next % 2) + 1] = shared_a_frag
             @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k_next % 2) + 1] = shared_b_frag
@@ -574,3 +535,4 @@ end
 
 isinteractive() || test()
 # }}}
+

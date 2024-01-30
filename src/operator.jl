@@ -2,8 +2,8 @@ export Operator
 module Operator
 
 using CUDA
+using GemmKernels: vloada, vstorea!, Layout, LocalArray, @immutable, b, @unrolled, constant, mma884_row_row, tid, constant, variadic, Vec
 using GemmKernels.Tiling
-using GemmKernels: Layout, LocalArray, @immutable, b, @unrolled, constant, mma884_row_row
 using LLVMLoopInfo: @loopinfo
 
 # -------------------------------------
@@ -368,6 +368,70 @@ struct VoltaMmaSyncOp end
 
 @inline shape(::Type{VoltaMmaSyncOp}) = (M = 64, N = 64, K = 4)
 
+@inline function load_a(::Type{VoltaMmaSyncOp}, L::Type{Layout.VoltaSwizzledOperandA{Float16}}, workspace, tile::Tile)
+    # Index: (m5|m2|k1|k0)
+    a_frag = LocalArray{Tuple{16}, Float16}(undef)
+
+    warp_m = variadic(tile.base.M) + constant(tile.offset.M)
+    warp_n = variadic(tile.base.N) + constant(tile.offset.N)
+    warp_k = variadic(tile.base.K) + constant(tile.offset.K)
+
+    @unrolled for ins = 0:1
+        m = b(tid(), 0, 0)  +
+            b(tid(), 1, 1)  +
+            b(warp_k, 3, 2) +
+            b(tid(), 2, 3)  +
+            b(tid(), 4, 4)  +
+            b(ins, 0, 5)
+
+        k = constant(0)
+
+        @inbounds val = vloada(Vec{8, Float16}, workspace, Layout.swizzle(L, warp_m+m, warp_k+k))
+
+        @unrolled for offset = 0:7
+            frag_offset = b(offset, 0, 0) +                     # k0
+                          b(offset, 1, 1) +                     # k1
+                          (b(offset, 2, 2) ⊻ b(warp_k, 3, 2)) + # m2 = (m2+k3) + k3
+                          b(ins, 0, 3)                          # m5
+
+            @inbounds @immutable a_frag[frag_offset] = val[offset].value
+        end
+    end
+
+    a_frag.data
+end
+
+@inline function load_b(::Type{VoltaMmaSyncOp}, L::Type{Layout.VoltaSwizzledOperandB{Float16}}, workspace, tile::Tile)
+    # index: (n5|n2|n1|n0)
+    b_frag = LocalArray{Tuple{16}, Float16}(undef)
+
+    warp_m = variadic(tile.base.M) + constant(tile.offset.M)
+    warp_n = variadic(tile.base.N) + constant(tile.offset.N)
+    warp_k = variadic(tile.base.K) + constant(tile.offset.K)
+
+    @unrolled for ins = 0:1
+        k = b(tid(), 0, 0) +
+            b(tid(), 1, 1)
+
+        n = b(tid(), 3, 3) +
+            b(tid(), 4, 4) +
+            b(ins, 0, 5)
+
+        @inbounds val = vloada(Vec{8, Float16}, workspace, Layout.swizzle(L, warp_k+k, warp_n+n))
+
+        @unrolled for offset = 0:7
+            frag_offset = b(offset, 0, 0) +    # n0
+                          b(offset, 1, 1) +    # n1
+                          b(offset, 2, 2) +    # n2
+                          b(ins, 0, 3)         # n5
+
+            @inbounds @immutable b_frag[frag_offset] = val[offset].value
+        end
+    end
+
+    b_frag.data
+end
+
 @inline function mma(::Type{VoltaMmaSyncOp}, a_frag, b_frag, acc_frag)
     # The optimal Volta mma.sync macro-mma is a 64 x 64 x 4 matrix
     # multiply-accumulate per warp, using 16 mma.sync instructions.
@@ -387,6 +451,7 @@ struct VoltaMmaSyncOp end
         # significantly), but CUTLASS does this, so we might as well too...
         #
         # Basically, this changes the order of instructions from e.g. this:
+        #
         # 0     4       8       12
         # 1     5       9       13
         # 2     6      10       14

@@ -4,7 +4,7 @@ module Layout
 using CUDA
 using LLVMLoopInfo: @loopinfo
 using GemmKernels.Tiling
-using GemmKernels: LocalArray, @immutable
+using GemmKernels: LocalArray, @immutable, b, tid
 
 # ---------------------
 # Customise computation
@@ -354,6 +354,63 @@ end
             workspace[t.index[2] + 1, t.index[1] + 1, 2] = val.im
         end
     end
+end
+
+# ----------------------
+# Volta swizzled layouts
+# ----------------------
+
+# TODO: Generalise this to:
+# - Other configurations than NN
+# - Other architectures
+# - Other tile sizes?
+
+abstract type SwizzledLayout{T} <: LayoutBase{T} end
+
+abstract type VoltaSwizzledOperandA{T} <: SwizzledLayout{T} end
+abstract type VoltaSwizzledOperandB{T} <: SwizzledLayout{T} end
+
+@inline function swizzle(::Type{VoltaSwizzledOperandA{Float16}}, m, k)
+    # TODO: Generalise this to larger extents?
+    # m : 7 bits
+    # k : 5 bits
+    offset = b(k, 0, 0) +
+             b(k, 1, 1) +
+             (b(k, 3, 2) ⊻ b(m, 2, 2)) +
+             (b(k, 4, 3) ⊻ b(m, 3, 3) ⊻ b(m, 4, 3)) +
+             b(m, 0, 4) +
+             b(m, 1, 5) +
+             b(m, 4, 6) +
+             b(m, 5, 7) +
+             b(m, 6, 8) +
+             b(k, 2, 9) +
+             b(k, 3, 10) +
+             b(k, 4, 11) +
+             b(k, 5, 12)
+
+    return offset
+end
+
+@inline function swizzle(::Type{VoltaSwizzledOperandB{Float16}}, k, n)
+    # TODO: Generalise this to larger extents?
+    # k: 5 bits
+    # n: 8 bits
+    offset = b(n, 0, 0) +
+             b(n, 1, 1) +
+             b(n, 2, 2) +
+             (b(n, 3, 3) ⊻ b(k, 0, 3)) +
+             (b(n, 4, 4) ⊻ b(k, 1, 4)) +
+             b(n, 5, 5) +
+             b(n, 6, 6) +
+             b(n, 7, 7) +
+             b(n, 3, 8) +
+             b(n, 4, 9) +
+             b(k, 2, 10) +
+             b(k, 3, 11) +
+             b(k, 4, 12) +
+             b(k, 5, 13)
+
+    return offset
 end
 
 end
