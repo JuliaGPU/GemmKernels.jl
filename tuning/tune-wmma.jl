@@ -49,7 +49,7 @@ const CD_type = Float32
 
 const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
                            maximum(N_vals)^2 * 2 * sizeof(CD_type) +
-                           500*2^20     # 500 MiB for CUDA contexts
+                           2^20     # 1 GiB for CUDA contexts, etc
 
 const zero_c = true
 
