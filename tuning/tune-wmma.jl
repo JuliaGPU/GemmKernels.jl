@@ -13,10 +13,10 @@ using Statistics
 using StatsBase
 using Random
 
-# if myid() == 1
-#     using Plots
-#     pythonplot()
-# end
+if myid() == 1
+    using Plots
+    pythonplot()
+end
 
 #######
 
