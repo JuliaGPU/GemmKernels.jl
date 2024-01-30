@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+cd $DIR
 
 GPU_ID=0
 GPU_CLOCK=-1
@@ -65,12 +66,10 @@ if [[ $# -ne 0 ]]; then
 fi
 
 # set-up GPUs
-sudo -b $DIR/setup.sh $GPU_ID $GPU_CLOCK $MEM_CLOCK $$
+sudo -b ./setup.sh $GPU_ID $GPU_CLOCK $MEM_CLOCK $$
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 
-cd $DIR/..
 echo "+++ :julia: Instantiating project"
-#julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
-#julia --project=tuning -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
-julia --project=tuning tuning/tune-wmma.jl "$@"
+julia --project tune-wmma.jl "$@"
