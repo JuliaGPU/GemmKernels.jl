@@ -1,9 +1,34 @@
 # List of configurations to use for testing and benchmarking.
 
+module Configs
+
+export Configuration, get_configs, generate_inputs, run_gemm, run_baseline, verify,
+       @get_fpu_config, @get_tropical_config, @get_wmma_config, @get_wmma_bias_config,
+       @get_wmma_diagonal_config, @get_wmma_complex_config, @get_wmma_dual_config,
+       get_configs
+
+## lazy module loading
+
+using CUDA
 using GemmKernels
 using LinearAlgebra
-using ForwardDiff
-using Octavian
+
+using UUIDs
+struct LazyModule
+    pkg::Base.PkgId
+    LazyModule(name, uuid) = new(Base.PkgId(uuid, name))
+end
+function Base.getproperty(lazy_mod::LazyModule, sym::Symbol)
+    pkg = getfield(lazy_mod, :pkg)
+    mod = get(Base.loaded_modules, pkg, nothing)
+    if mod === nothing
+        error("This functionality requires the $(pkg.name) package, which should be installed and loaded first.")
+    end
+    getfield(mod, sym)
+end
+
+const ForwardDiff = LazyModule("ForwardDiff", UUID("f6369f11-7733-5829-9624-2563aa707210"))
+const Octavian = LazyModule("Octavian", UUID("6fd5a793-0b7e-452c-907f-f8bfe9c57db4"))
 
 struct Configuration
     name           # Human-readable name of the configuration.
@@ -126,10 +151,10 @@ end
 macro get_fpu_config()
     esc(quote let
         baseline_func = Dict(
-                (Float16, Float16, Float32) => fpu_baseline,
-                (Float32, Float32, Float32) => fpu_baseline,
+                (Float16, Float16, Float32) => $fpu_baseline,
+                (Float32, Float32, Float32) => $fpu_baseline,
                 (Float32, Float32, Float64) => nothing,
-                (Float64, Float64, Float64) => fpu_baseline,
+                (Float64, Float64, Float64) => $fpu_baseline,
                 (Int16, Int16, Int16) => nothing,
                 (Int32, Int32, Int32) => nothing,
                 (Int64, Int64, Int64) => nothing,
@@ -165,7 +190,7 @@ macro get_fpu_config()
                       transpose_b,
                       mul!,
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_pipelined,
                       baseline_func)
     end end)
@@ -202,7 +227,7 @@ macro get_tropical_config()
                       transpose_b,
                       get_custom_mul!((a, b, c) -> max(a + b, c)),
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -245,11 +270,11 @@ macro get_wmma_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      Octavian.matmul!,
+                      (args...) -> Octavian.matmul!(args...),
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       kernel,
-                      wmma_baseline)
+                      $wmma_baseline)
     end end)
 end
 
@@ -287,7 +312,7 @@ macro get_wmma_bias_config()
                       transpose_b,
                       mul!,
                       Epilogue.Bias(pointer(bias)),
-                      (c_h, d, T) -> verify_bias(c_h, d, bias, T),
+                      (c_h, d, T) -> $verify_bias(c_h, d, bias, T),
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -332,7 +357,7 @@ macro get_wmma_diagonal_config()
                       transpose_b,
                       (C, A, B, alpha, beta) -> mul!(C, Diagonal(A[1:M,1]), B, true, true),
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_singlestage,
                       nothing)
     end end)
@@ -386,7 +411,7 @@ macro get_wmma_complex_config()
                       transpose_b,
                       mul!,
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -439,7 +464,7 @@ macro get_wmma_dual_config()
                       transpose_b,
                       (C, A, B, alpha, beta) -> mul!(dual_conv(C), dual_conv(Complex{Float32}.(A)), dual_conv(Complex{Float32}.(B)), true, true),
                       Epilogue.Default(),
-                      verify_dual,
+                      $verify_dual,
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -652,3 +677,6 @@ function get_configs()
 
     rv
 end
+
+end
+using .Configs

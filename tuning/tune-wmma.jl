@@ -6,6 +6,7 @@ using Distributed
 using FileWatching.Pidfile
 using Logging
 using LoggingExtras
+using Octavian
 using ProgressMeter
 using Serialization
 using Statistics
@@ -469,24 +470,11 @@ function addworkers(X)
     ]
 
     procs = addprocs(X)
-    @everywhere procs pushfirst!(LOAD_PATH, dirname(@__DIR__))
     @everywhere procs include($(joinpath(@__DIR__, "tune-wmma.jl")))
     procs
 end
 
 function main()
-    # Spawn workers
-    cpu_memory = Sys.free_memory()
-    gpu_memory = CUDA.available_memory()
-    let
-        addworkers(min(
-            floor(Int, cpu_memory / BENCH_MEMORY_USAGE),
-            floor(Int, gpu_memory / BENCH_MEMORY_USAGE),
-            Sys.CPU_THREADS
-        ))
-    end
-    @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
-
     # (0) Load configurations from disk, or generate them.
     config_path = joinpath(@__DIR__, "configs.bin")
     configs = nothing
@@ -536,7 +524,9 @@ function main()
 
     @info "Need to perform parameter sweep over $(num_pending) configurations."
 
-    pending = collect(1:size(configs, 1))
+    pending = filter(1:size(configs, 1)) do i
+        configs[i, :category] == "pending"
+    end
     results = Channel(Inf)
     @sync begin
         # measure configurations on workers
@@ -545,10 +535,6 @@ function main()
                 while length(pending) > 0
                     i = pop!(pending)
                     config_row = configs[i, :]
-                    if config_row.category != "pending"
-                        continue
-                    end
-
                     try
                         start_time = Dates.now()
                         config_row.times, config_row.category =
@@ -645,5 +631,17 @@ function main()
 end
 
 if !isinteractive() && myid() == 1
+    # Spawn workers
+    cpu_memory = Sys.free_memory()
+    gpu_memory = CUDA.available_memory()
+    let
+        addworkers(min(
+            floor(Int, cpu_memory / BENCH_MEMORY_USAGE),
+            floor(Int, gpu_memory / BENCH_MEMORY_USAGE),
+            Sys.CPU_THREADS
+        ))
+    end
+    @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
+
     main()
 end

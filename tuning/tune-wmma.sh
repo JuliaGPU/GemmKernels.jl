@@ -73,5 +73,4 @@ echo "+++ :julia: Instantiating project"
 #julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 #julia --project=tuning -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
-julia --project=tuning -e 'pushfirst!(LOAD_PATH, @__DIR__)
-                           include("tuning/tune-wmma.jl")' "$@"
+julia --project=tuning tuning/tune-wmma.jl "$@"
