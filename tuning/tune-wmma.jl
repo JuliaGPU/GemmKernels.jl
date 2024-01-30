@@ -140,18 +140,18 @@ function generate_configs()
 end
 
 function get_config(row)
-    transpose_a = row["transpose_a"]
-    transpose_b = row["transpose_b"]
-    M = N = K = row["N"]
-    BLOCK_M = row["BLOCK_M"]
-    BLOCK_N = row["BLOCK_N"]
-    BLOCK_K = row["BLOCK_K"]
-    WARPS_M = row["WARPS_M"]
-    WARPS_N = row["WARPS_N"]
-    OP_M = row["OP_M"]
-    OP_N = row["OP_N"]
-    OP_K = row["OP_K"]
-    kernel = kernel_string_to_function(row["kernel_str"])
+    transpose_a = row.transpose_a
+    transpose_b = row.transpose_b
+    M = N = K = row.N
+    BLOCK_M = row.BLOCK_M
+    BLOCK_N = row.BLOCK_N
+    BLOCK_K = row.BLOCK_K
+    WARPS_M = row.WARPS_M
+    WARPS_N = row.WARPS_N
+    OP_M = row.OP_M
+    OP_N = row.OP_N
+    OP_K = row.OP_K
+    kernel = kernel_string_to_function(row.kernel_str)
 
     @get_wmma_config
 end
@@ -538,7 +538,7 @@ function main()
                     try
                         start_time = Dates.now()
                         config_row.times, config_row.category =
-                            remotecall_fetch(measure_config, p, config_row)
+                            remotecall_fetch(measure_config, p, NamedTuple(config_row))
                         end_time = Dates.now()
 
                         push!(results, (i, start_time, end_time))
