@@ -64,6 +64,7 @@ D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
 # swizzling {{{
 # swizzling function for the shared memory layout for A
 @inline function swizzle_a(m, k, conf)
+    # TODO: REMOVE
     # m : 7 bits
     # k : 5 bits
     offset = b(k, 0, 0) +
@@ -85,6 +86,7 @@ end
 
 # swizzling function for the shared memory layout for B
 @inline function swizzle_b(k, n, conf)
+    # TODO: REMOVE
     # k: 5 bits
     # n: 8 bits
     offset = b(n, 0, 0) +
@@ -109,6 +111,7 @@ end
 # ld global {{{
 # Load from global memory
 @inline function ld_global(A, B, cta_m, cta_n, cta_k, conf)
+    # TODO: EXTRACT
     # Fragments for the data from the global loads (and hence shared stores).
     # index: (m3|k2|k1|k0)
     a_frag = LocalArray{Tuple{16}, Float16}(undef)
@@ -174,6 +177,7 @@ end
 
 # st shared {{{
 @inline function st_shared(shmem_a, shmem_b, a_frag, b_frag, conf)
+    # TODO: EXTRACT
     # Store A to Shared Memory.
     @unrolled for ins = 0:3
             m = b(tid(), 2, 0) +
@@ -265,6 +269,7 @@ end
 end
 
 @inline function epilogue_ld_shared(epilogue_it, shmem_d)
+    # TODO: EXTRACT
     # index: (m1|n7|n6|n1|n0)
     frag = LocalArray{Tuple{32}, Float32}(undef)
 
@@ -312,6 +317,7 @@ end
 end
 
 @inline function epilogue_st_global(epilogue_it, D, shmem_d, cta_m, cta_n, frag, conf)
+    # TODO: EXTRACT
     @unrolled for ins = 0:7
         m = b(tid(), 4, 0) +
             b(ins, 2, 1) +
@@ -344,6 +350,7 @@ end
 end
 
 @inline function epilogue(D, shmem_d, acc_frag, cta_m, cta_n, warp_m, warp_n, conf)
+    # TODO: EXTRACT
     @unrolled for epilogue_it = 0:3
         # TODO: Can we not remove this one?
         sync_threads()
