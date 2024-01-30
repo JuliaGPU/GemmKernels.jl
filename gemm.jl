@@ -61,53 +61,6 @@ B = CUDA.rand(Float16, (conf.GLOBAL_K, conf.GLOBAL_M))
 D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
 # }}}
 
-# swizzling {{{
-# swizzling function for the shared memory layout for A
-@inline function swizzle_a(m, k, conf)
-    # TODO: REMOVE
-    # m : 7 bits
-    # k : 5 bits
-    offset = b(k, 0, 0) +
-             b(k, 1, 1) +
-             (b(k, 3, 2) ⊻ b(m, 2, 2)) +
-             (b(k, 4, 3) ⊻ b(m, 3, 3) ⊻ b(m, 4, 3)) +
-             b(m, 0, 4) +
-             b(m, 1, 5) +
-             b(m, 4, 6) +
-             b(m, 5, 7) +
-             b(m, 6, 8) +
-             b(k, 2, 9) +
-             b(k, 3, 10) +
-             b(k, 4, 11) +
-             b(k, 5, 12)
-
-    return offset
-end
-
-# swizzling function for the shared memory layout for B
-@inline function swizzle_b(k, n, conf)
-    # TODO: REMOVE
-    # k: 5 bits
-    # n: 8 bits
-    offset = b(n, 0, 0) +
-             b(n, 1, 1) +
-             b(n, 2, 2) +
-             (b(n, 3, 3) ⊻ b(k, 0, 3)) +
-             (b(n, 4, 4) ⊻ b(k, 1, 4)) +
-             b(n, 5, 5) +
-             b(n, 6, 6) +
-             b(n, 7, 7) +
-             b(n, 3, 8) +
-             b(n, 4, 9) +
-             b(k, 2, 10) +
-             b(k, 3, 11) +
-             b(k, 4, 12) +
-             b(k, 5, 13)
-
-    return offset
-end
-# }}}
-
 # ld global {{{
 # Load from global memory
 @inline function ld_global(A, B, cta_m, cta_n, cta_k, conf)
