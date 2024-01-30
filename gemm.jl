@@ -12,7 +12,7 @@ using GemmKernels.Layout: VoltaSwizzledOperandA, VoltaSwizzledOperandB
 using GemmKernels.Tiling
 
 # configuration {{{
-@staticdef struct Config
+@staticdef struct Config2
     # Size of the matrices in global memory.
     GLOBAL_M
     GLOBAL_N
@@ -35,16 +35,16 @@ using GemmKernels.Tiling
     SHARED_TO_REGS_STAGES
 end
 
-NUM_WARPS_M(c::Config) = c.CTA_M ÷ c.WARP_M
-NUM_WARPS_N(c::Config) = c.CTA_N ÷ c.WARP_N
-NUM_THREADS(c::Config) = NUM_WARPS_M(c) * NUM_WARPS_N(c) * 32
-NUM_BLOCKS_M(c::Config) = c.GLOBAL_M ÷ c.CTA_M
-NUM_BLOCKS_N(c::Config) = c.GLOBAL_N ÷ c.CTA_N
+NUM_WARPS_M(c::Config2) = c.CTA_M ÷ c.WARP_M
+NUM_WARPS_N(c::Config2) = c.CTA_N ÷ c.WARP_N
+NUM_THREADS(c::Config2) = NUM_WARPS_M(c) * NUM_WARPS_N(c) * 32
+NUM_BLOCKS_M(c::Config2) = c.GLOBAL_M ÷ c.CTA_M
+NUM_BLOCKS_N(c::Config2) = c.GLOBAL_N ÷ c.CTA_N
 
 # }}}
 
 # globals {{{
-conf = Config(
+conf = Config2(
     2048, 2048, 2048, # GLOBAL_MNK
     128, 256, 32,     # CTA_MNK
     64, 64, 4,        # WARP_MNK
@@ -278,23 +278,23 @@ end
 
 # kernel {{{
 # row-major A x row-major B = row-major D
-function kernel(A, B, D, conf::Config)
+function kernel(A, B, D, conf2::Config2)
     # The modulo is so that the BitArrayIndex knows which bits are 0.
-    num_warps = NUM_WARPS_M(conf) * NUM_WARPS_N(conf)
-    warpid_m = (warpid() % num_warps) % NUM_WARPS_M(conf)
-    warpid_n = (warpid() % num_warps) ÷ NUM_WARPS_M(conf)
+    num_warps = NUM_WARPS_M(conf2) * NUM_WARPS_N(conf2)
+    warpid_m = (warpid() % num_warps) % NUM_WARPS_M(conf2)
+    warpid_n = (warpid() % num_warps) ÷ NUM_WARPS_M(conf2)
 
-    cta_m = (bid_x() % NUM_BLOCKS_M(conf)) * conf.CTA_M
-    cta_n = (bid_y() % NUM_BLOCKS_N(conf)) * conf.CTA_N
+    cta_m = (bid_x() % NUM_BLOCKS_M(conf2)) * conf2.CTA_M
+    cta_n = (bid_y() % NUM_BLOCKS_N(conf2)) * conf2.CTA_N
 
-    warp_m = warpid_m * conf.WARP_M
-    warp_n = warpid_n * conf.WARP_N
+    warp_m = warpid_m * conf2.WARP_M
+    warp_n = warpid_n * conf2.WARP_N
 
-    SHMEM_A_SIZE = (conf.CTA_M * conf.CTA_K) * conf.SHARED_TO_REGS_STAGES
-    SHMEM_B_SIZE = (conf.CTA_K * conf.CTA_N) * conf.SHARED_TO_REGS_STAGES
+    SHMEM_A_SIZE = (conf2.CTA_M * conf2.CTA_K) * conf2.SHARED_TO_REGS_STAGES
+    SHMEM_B_SIZE = (conf2.CTA_K * conf2.CTA_N) * conf2.SHARED_TO_REGS_STAGES
 
-    shmem_a = CuDynamicSharedArray(Float16, (conf.CTA_M * conf.CTA_K, conf.SHARED_TO_REGS_STAGES))
-    shmem_b = CuDynamicSharedArray(Float16, (conf.CTA_K * conf.CTA_N, conf.SHARED_TO_REGS_STAGES),
+    shmem_a = CuDynamicSharedArray(Float16, (conf2.CTA_M * conf2.CTA_K, conf2.SHARED_TO_REGS_STAGES))
+    shmem_b = CuDynamicSharedArray(Float16, (conf2.CTA_K * conf2.CTA_N, conf2.SHARED_TO_REGS_STAGES),
                                    length(shmem_a) * sizeof(Float16))
 
     shmem_d = CuDynamicSharedArray(Float32, 32 * (256 + 2))
@@ -309,13 +309,13 @@ function kernel(A, B, D, conf::Config)
     # Prologue.
     # ld_global(main_loop_it=0)
     cta_k = constant(0)
-    global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k, conf)
+    global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k, conf2)
 
     # st_shared(main_loop_it=0)
     main_loop_it = constant(0)
     st_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
                 view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
-                global_a_frag, global_b_frag, conf)
+                global_a_frag, global_b_frag, conf2)
     sync_threads()
 
     # ld_shared(main_loop_it=0, warp_mma_k=0)
@@ -324,42 +324,42 @@ function kernel(A, B, D, conf::Config)
     warp_mma_k = constant(0)
     shared_a_frag, shared_b_frag = ld_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
                                                 view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
-                                                warp_m, warp_n, warp_k, conf)
+                                                warp_m, warp_n, warp_k, conf2)
 
     @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k % 2) + 1] = shared_a_frag
     @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k % 2) + 1] = shared_b_frag
 
-    NUM_MAIN_LOOP_ITERS = conf.GLOBAL_K ÷ conf.CTA_K
+    NUM_MAIN_LOOP_ITERS = conf2.GLOBAL_K ÷ conf2.CTA_K
     @not_unrolled for main_loop_it = 0 : NUM_MAIN_LOOP_ITERS - 1
         # The modulo is so that the BitArrayIndex knowns which bits are 0.
         # TODO: Do this automatically in the @not_unrolled macro?
         # TODO: Generate _next variables automatically.
-        cta_k = (main_loop_it % NUM_MAIN_LOOP_ITERS) * conf.CTA_K
+        cta_k = (main_loop_it % NUM_MAIN_LOOP_ITERS) * conf2.CTA_K
 
         main_loop_it_next = variadic((main_loop_it_orig + 1)) % NUM_MAIN_LOOP_ITERS
-        cta_k_next = main_loop_it_next * conf.CTA_K
+        cta_k_next = main_loop_it_next * conf2.CTA_K
 
         # CTA_M x CTA_N x CTA_K GEMM per CTA
-        NUM_WARP_MMA_K_ITERS = conf.CTA_K ÷ conf.WARP_K
+        NUM_WARP_MMA_K_ITERS = conf2.CTA_K ÷ conf2.WARP_K
         @unrolled for warp_mma_k = 0 : NUM_WARP_MMA_K_ITERS - 1
-            warp_k = warp_mma_k * conf.WARP_K
+            warp_k = warp_mma_k * conf2.WARP_K
 
             # TODO: Do this in macro.
             warp_mma_k_next = constant(warp_mma_k_orig + 1) % NUM_WARP_MMA_K_ITERS
-            warp_k_next = warp_mma_k_next * conf.WARP_K
+            warp_k_next = warp_mma_k_next * conf2.WARP_K
 
             if warp_mma_k == NUM_WARP_MMA_K_ITERS-1
                 # st_shared(main_loop_it+1)
                 st_shared(view(shmem_a, :, convert(Int, main_loop_it_next % 2) + 1),
                           view(shmem_b, :, convert(Int, main_loop_it_next % 2) + 1),
-                          global_a_frag, global_b_frag, conf)
+                          global_a_frag, global_b_frag, conf2)
                 sync_threads()
             end
 
             # ld_shared(main_loop_it, warp_mma_k + 1)
             shared_a_frag, shared_b_frag = ld_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
                                                      view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
-                                                     warp_m, warp_n, warp_k_next, conf)
+                                                     warp_m, warp_n, warp_k_next, conf2)
 
             @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k_next % 2) + 1] = shared_a_frag
             @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k_next % 2) + 1] = shared_b_frag
@@ -368,7 +368,7 @@ function kernel(A, B, D, conf::Config)
             if warp_mma_k == 0
                 # ld_global(main_loop_it + 1)
                 # Copy the data for a CTA_M x CTA_N x CTA_K GEMM from GMEM to SHMEM, cooperatively in a CTA.
-                global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k_next, conf)
+                global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k_next, conf2)
             end
 
             # WARP_M x WARP_N x WARP_K = 64 x 64 x 4 GEMM per warp
@@ -382,7 +382,7 @@ function kernel(A, B, D, conf::Config)
     end
 
     # epilogue: store matrix from registers to global memory
-    epilogue(D, shmem_d, acc_frag, cta_m, cta_n, warp_m, warp_n, conf)
+    epilogue(D, shmem_d, acc_frag, cta_m, cta_n, warp_m, warp_n, conf2)
 
     nothing
 end
