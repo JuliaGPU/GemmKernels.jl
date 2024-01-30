@@ -26,7 +26,8 @@ const N_vals = 2 .^ (7:14)
 const BENCH_NORM_CI_THRESHOLD = 0.01
 
 # ... or we have exceeded the time limit...
-const BENCH_MAX_NUM_SECONDS = 5
+const BENCH_MAX_TOTAL_SECONDS = 5
+const BENCH_MAX_SAMPLE_SECONDS = 1
 
 # ... but have at least 10 samples.
 const BENCH_MIN_NUM_SAMPLES = 10
@@ -163,10 +164,11 @@ function measure_config(row)
 
     pidfile = joinpath(@__DIR__, "tuning.pid")
 
-    get_ref, a, b, c = generate_inputs(cf)
+    # allocate inputs
+    reference_mul!, a, b, c = generate_inputs(cf)
     d = similar(c)
-    d .= 0
 
+    # compile and warm-up
     try
         run_gemm(cf, a, b, c, d)
     catch err
@@ -187,37 +189,42 @@ function measure_config(row)
         return [Inf], "error"
     end
 
-    c_ref = mkpidlock(pidfile) do
-        get_ref(a, b, c)
-    end
-    if !verify(cf, c_ref, d)
-        @warn "Configuration produced invalid result: $(repr_row(row))"
+    # initialize inputs and verify result
+    time = mkpidlock(pidfile) do
+        rand!(a)
+        rand!(b)
+        rand!(c)
+        d .= 0
 
+        time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
+        reference_mul!(c, a, b)
+        time
+    end
+    if time > BENCH_MAX_SAMPLE_SECONDS
+        @warn "Configuration took too long: $(repr_row(row))"
+        return [time], "too_slow"
+    end
+    if !verify(cf, c, d)
+        @warn "Configuration produced invalid result: $(repr_row(row))"
         return [Inf], "invalid_result"
     end
 
-    times = Float64[]
-
-    # Use CUDA.@elapsed instead of CUDA.@profile, because the latter is slower.
+    # settle down
     device_synchronize()
     GC.gc(true)
 
+    # benchmark (using `CUDA.@elapsed` instead of `CUDA.@profile` because the latter is slower)
+    times = Float64[]
     mkpidlock(pidfile) do
         start_time = Dates.now()
 
         while true
-            synchronize(stream())
             time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
             push!(times, time)
 
-            # don't bother with very slow configurations
-            if time > BENCH_MAX_NUM_SECONDS
-                break
-            end
-
             # ensure we have enough samples
             if length(times) >= BENCH_MIN_NUM_SAMPLES
-                (Dates.now() - start_time > Second(BENCH_MAX_NUM_SECONDS)) && break
+                (Dates.now() - start_time > Second(BENCH_MAX_TOTAL_SECONDS)) && break
                 (confidence_interval_95(times) / median(times) < BENCH_NORM_CI_THRESHOLD) && break
             end
         end

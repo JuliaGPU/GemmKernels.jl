@@ -74,11 +74,11 @@ function generate_inputs(cf::Configuration)
     N = cf.config.matmul_shape.N
     K = cf.config.matmul_shape.K
 
-    a = CUDA.rand(cf.a_type, cf.transpose_a ? (K, M) : (M, K))
-    b = CUDA.rand(cf.b_type, cf.transpose_b ? (N, K) : (K, N))
-    c = CUDA.rand(cf.c_type, (M, N))
+    a = CuArray{cf.a_type}(undef, cf.transpose_a ? (K, M) : (M, K))
+    b = CuArray{cf.b_type}(undef, cf.transpose_b ? (N, K) : (K, N))
+    c = CuArray{cf.c_type}(undef, (M, N))
 
-    function get_reference(a, b, c)
+    function reference_mul!(c, a, b)
         # mul! determines transpose from the type of the matrix
         (cf.calc_reference)(c,
                             cf.transpose_a ? transpose(a) : a,
@@ -86,7 +86,7 @@ function generate_inputs(cf::Configuration)
                             cf.alpha, cf.beta)
     end
 
-    return get_reference, a, b, c
+    return reference_mul!, a, b, c
 end
 
 # Run the GEMM.
