@@ -158,7 +158,7 @@ function get_inputs_for_plot(input_dict, row)
 end
 
 function measure_config(row)
-    @info "Measuring configuration $(NamedTuple(row))..."
+    @info "Measuring configuration $(repr_row(row))..."
     cf = get_config(row)
 
     pidfile = joinpath(@__DIR__, "tuning.pid")
@@ -174,16 +174,16 @@ function measure_config(row)
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
         if isa(err, GemmKernels.ConfigError)
-            @info "Skipping configuration $(NamedTuple(row))\n" * log
+            @info "Skipping configuration $(repr_row(row))\n" * log
             return [Inf], "unsupported_config_post_run"
         end
 
         if isa(err, CuError)
-            @error "Configuration failed: $(NamedTuple(row))\n" * log
+            @error "Configuration failed: $(repr_row(row))\n" * log
             rethrow()
         end
 
-        @info "Skipping configuration: $(NamedTuple(row))\n" * log
+        @info "Skipping configuration: $(repr_row(row))\n" * log
         return [Inf], "error"
     end
 
@@ -191,7 +191,7 @@ function measure_config(row)
         get_ref(a, b, c)
     end
     if !verify(cf, c_ref, d)
-        @warn "Configuration produced invalid result: $(NamedTuple(row))"
+        @warn "Configuration produced invalid result: $(repr_row(row))"
 
         return [Inf], "invalid_result"
     end
@@ -223,6 +223,8 @@ end
 confidence_interval_95(times) = 1.58 * iqr(times) / sqrt(length(times))
 
 function prettytime(times)
+    times == [Inf] && return "no samples"
+
     min, q1, med, q3, max = nquantile(times, 4)
     ci_95 = confidence_interval_95(times)
 
@@ -365,7 +367,7 @@ function benchmark_best_configs(configs)
                 a, b, c, d = get_inputs_for_plot(input_dict, config_row)
                 cf = get_config(config_row)
 
-                @info "Profiling configuration $(NamedTuple(config_row))..."
+                @info "Profiling configuration $(repr_row(config_row))..."
 
                 for run_baseline in [false, true]
                     for i in 1:PLOT_BATCH_SIZE
@@ -436,6 +438,25 @@ function plot_results(best_configs)
     end
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
+end
+
+function repr_row(row)
+    io = IOBuffer()
+
+    # gemm shape
+    print(io, "$(row.N)×$(row.N)")
+    row.transpose_a && print(io, "'")
+    print(io, "*$(row.N)×$(row.N)")
+    row.transpose_b && print(io, "'")
+    print(io, "=$(row.N)×$(row.N)")
+
+    # details
+    print(io, " ($(row.BLOCK_M)×$(row.BLOCK_N)×$(row.BLOCK_K) block")
+    print(io, ", $(row.WARPS_M)×$(row.WARPS_N) warp")
+    print(io, ", $(row.OP_M)×$(row.OP_N)×$(row.OP_K) operator")
+    print(io, ", $(row.kernel_str) kernel)")
+
+    return String(take!(io))
 end
 
 function addworkers(X)
@@ -545,7 +566,7 @@ function main()
 
                 # Update configuration
                 config_row = configs[i, :]
-                @info "Result from worker $worker for $(NamedTuple(config_row)): $(config_row.category) -- $(prettytime(config_row.times .* 1e9))"
+                @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.times .* 1e9))"
 
                 # Save results in case the process crashes.
                 open(config_path, "w") do io
