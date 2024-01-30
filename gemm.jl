@@ -1,6 +1,7 @@
 # vim: fdm=marker
 
-using GemmKernels: LocalArray, @immutable, mma884_row_row, @staticdef, BitArrayIndex, @unrolled, @not_unrolled, constant, variadic, tid, bid_x, bid_y, warpid, vloada, vstorea!, Vec, b, Layout
+using GemmKernels
+using GemmKernels: Config, LocalArray, @immutable, mma884_row_row, @staticdef, BitArrayIndex, @unrolled, @not_unrolled, constant, variadic, tid, bid_x, bid_y, warpid, vloada, vstorea!, Vec, b, Layout
 using Test
 using CUDA
 using LLVMLoopInfo: @loopinfo
@@ -44,7 +45,30 @@ NUM_BLOCKS_N(c::Config2) = c.GLOBAL_N ÷ c.CTA_N
 # }}}
 
 # globals {{{
-conf = Config2(
+conf = GemmKernels.get_config(
+    gemm_shape = (M = 2048, N = 2048, K = 2048),
+    block_shape = (M = 128, N = 256, K = 32),
+    warps_per_block = 8,
+
+    compute_warp = (M = 64, N = 64, K = 4),
+
+    global_a_layout = Layout.UnsafeAlignedRowMajor{Float16},
+    global_b_layout = Layout.UnsafeAlignedRowMajor{Float16},
+    global_c_layout = Layout.Zero{Float32},
+    global_d_layout = Layout.UnsafeAlignedRowMajor{Float32},
+
+    shared_a_layout = Layout.VoltaSwizzledOperandA{Float16},
+    shared_b_layout = Layout.VoltaSwizzledOperandB{Float16},
+    shared_c_layout = Layout.Zero{Float32},
+    shared_d_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float32}, 2},
+
+    operator = VoltaMmaSyncOp,
+
+    is_a_col_major = false,
+    is_b_col_major = false
+   )
+
+conf2 = Config2(
     2048, 2048, 2048, # GLOBAL_MNK
     128, 256, 32,     # CTA_MNK
     64, 64, 4,        # WARP_MNK
@@ -56,9 +80,9 @@ conf = Config2(
 # convention.
 # To calculate A * B = D in col-major, just flip the A and B operands
 # and transpose: A * B = D <=> B^T * A^T = D^T.
-A = CUDA.rand(Float16, (conf.GLOBAL_N, conf.GLOBAL_K))
-B = CUDA.rand(Float16, (conf.GLOBAL_K, conf.GLOBAL_M))
-D = CUDA.zeros(Float32, (conf.GLOBAL_N, conf.GLOBAL_M))
+A = CUDA.rand(Float16, (conf2.GLOBAL_N, conf2.GLOBAL_K))
+B = CUDA.rand(Float16, (conf2.GLOBAL_K, conf2.GLOBAL_M))
+D = CUDA.zeros(Float32, (conf2.GLOBAL_N, conf2.GLOBAL_M))
 # }}}
 
 # ld global {{{
@@ -278,7 +302,7 @@ end
 
 # kernel {{{
 # row-major A x row-major B = row-major D
-function kernel(A, B, D, conf2::Config2)
+function kernel(A, B, D, conf::Config, conf2::Config2)
     # The modulo is so that the BitArrayIndex knows which bits are 0.
     num_warps = NUM_WARPS_M(conf2) * NUM_WARPS_N(conf2)
     warpid_m = (warpid() % num_warps) % NUM_WARPS_M(conf2)
@@ -391,12 +415,12 @@ end
 # driver {{{
 function test(; dump_code=false, debug=false)
     if debug
-        @device_code_warntype interactive=true @cuda threads=NUM_THREADS(conf) blocks=(NUM_BLOCKS_M(conf), NUM_BLOCKS_N(conf)) shmem=48*1024 kernel(B, A, D, conf)
+        @device_code_warntype interactive=true @cuda threads=NUM_THREADS(conf2) blocks=(NUM_BLOCKS_M(conf2), NUM_BLOCKS_N(conf2)) shmem=48*1024 kernel(B, A, D, conf, conf2)
         return
     end
 
     if dump_code
-        @device_code dir="gemm-output" @cuda threads=NUM_THREADS(conf) blocks=(NUM_BLOCKS_M(conf), NUM_BLOCKS_N(conf)) shmem=48*1024 kernel(B, A, D, conf)
+        @device_code dir="gemm-output" @cuda threads=NUM_THREADS(conf2) blocks=(NUM_BLOCKS_M(conf2), NUM_BLOCKS_N(conf2)) shmem=48*1024 kernel(B, A, D, conf, conf2)
     end
 
     D_ref = similar(D)
@@ -405,7 +429,7 @@ function test(; dump_code=false, debug=false)
     CUDA.CUBLAS.gemmEx!('N', 'N', Float32(1), A, B, Float32(0), D_ref)
 
     # TODO: do not hardcode shared memory size
-    @cuda threads=NUM_THREADS(conf) blocks=(NUM_BLOCKS_M(conf), NUM_BLOCKS_N(conf)) shmem=48*1024 kernel(B, A, D, conf)
+    @cuda threads=NUM_THREADS(conf2) blocks=(NUM_BLOCKS_M(conf2), NUM_BLOCKS_N(conf2)) shmem=48*1024 kernel(B, A, D, conf, conf2)
 
     compare(x, y) = isapprox(x, y; rtol=sqrt(eps(Float16)))
 
