@@ -12,38 +12,6 @@ using GemmKernels.Operator: VoltaMmaSyncOp, mma, load_a, load_b, store_d
 using GemmKernels.Layout: VoltaSwizzledOperandA, VoltaSwizzledOperandB
 using GemmKernels.Tiling
 
-# configuration {{{
-@staticdef struct Config2
-    # Size of the matrices in global memory.
-    GLOBAL_M
-    GLOBAL_N
-    GLOBAL_K
-
-    # Tile size at the CTA level.
-    CTA_M
-    CTA_N
-    CTA_K
-
-    # Tile size at the warp level.
-    WARP_M
-    WARP_N
-    WARP_K
-
-    # Number of stages in the global -> shared copy pipeline.
-    GLOBAL_TO_SHARED_STAGES
-
-    # Number of stages in the shared -> register file copy pipeline.
-    SHARED_TO_REGS_STAGES
-end
-
-NUM_WARPS_M(c::Config2) = c.CTA_M ÷ c.WARP_M
-NUM_WARPS_N(c::Config2) = c.CTA_N ÷ c.WARP_N
-NUM_THREADS(c::Config2) = NUM_WARPS_M(c) * NUM_WARPS_N(c) * 32
-NUM_BLOCKS_M(c::Config2) = c.GLOBAL_M ÷ c.CTA_M
-NUM_BLOCKS_N(c::Config2) = c.GLOBAL_N ÷ c.CTA_N
-
-# }}}
-
 # globals {{{
 conf = GemmKernels.get_config(
     gemm_shape = (M = 2048, N = 2048, K = 2048),
