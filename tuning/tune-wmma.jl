@@ -6,11 +6,9 @@ using Distributed
 using FileWatching.Pidfile
 using Logging
 using LoggingExtras
-using Octavian
 using ProgressMeter
 using Serialization
 using Statistics
-using StatsBase
 using Random
 
 if myid() == 1
@@ -22,15 +20,21 @@ end
 
 const N_vals = 2 .^ (7:14)
 
-# Stop sampling when normalised 95p CI is smaller than this...
-const BENCH_NORM_CI_THRESHOLD = 0.01
+const AB_type = Float16
+const CD_type = Float32
 
-# ... or we have exceeded the time limit...
-const BENCH_MAX_TOTAL_SECONDS = 5
+const zero_c = true
+
+#######
+
+# Stop sampling when a configuration is really slow
 const BENCH_MAX_SAMPLE_SECONDS = 1
 
-# ... but have at least 10 samples.
-const BENCH_MIN_NUM_SAMPLES = 10
+const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
+                           maximum(N_vals)^2 * 2 * sizeof(CD_type) +
+                           128*2^20 # there's always some overhead
+
+const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
 
 #####
 
@@ -43,17 +47,6 @@ const PLOT_MIN_NUM_SAMPLES = 100
 
 # Group samples in batches of 10 samples each.
 const PLOT_BATCH_SIZE = 10
-
-const AB_type = Float16
-const CD_type = Float32
-
-const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
-                           maximum(N_vals)^2 * 2 * sizeof(CD_type) +
-                           128*2^20 # there's always some overhead
-
-const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
-
-const zero_c = true
 
 #######
 
@@ -96,7 +89,7 @@ function generate_configs()
         OP_K=Int[],
         kernel_str=String[],
         category=String[],
-        times=Vector{Any}[]
+        time=Float64[]
     )
 
     for transpose_a in [false, true],
@@ -128,7 +121,7 @@ function generate_configs()
             :OP_K => OP_K,
             :kernel_str => kernel_str,
             :category => "pending",
-            :times => [],
+            :time => Inf,
         ))
     end
 
@@ -179,7 +172,7 @@ function measure_config(row)
 
         if isa(err, OutOfGPUMemoryError)
             @info "Not enough memory for configuration $(repr_row(row))\n" * log
-            return [Inf], "oom"
+            return Inf, "oom"
         else
             rethrow()
         end
@@ -194,7 +187,7 @@ function measure_config(row)
 
         if isa(err, GemmKernels.ConfigError)
             @info "Skipping configuration $(repr_row(row))\n" * log
-            return [Inf], "unsupported_config_post_run"
+            return Inf, "unsupported_config_post_run"
         end
 
         if isa(err, CuError)
@@ -203,77 +196,76 @@ function measure_config(row)
         end
 
         @info "Skipping configuration: $(repr_row(row))\n" * log
-        return [Inf], "error"
+        return Inf, "error"
     end
 
-    # initialize inputs and verify result
-    time, c_h, d_h = mkpidlock(pidfile) do
+    # initialize inputs and calculate the reference
+    c_h = mkpidlock(pidfile) do
         rand!(a)
         rand!(b)
         rand!(c)
         d .= 0
 
-        time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
         reference_mul!(c, a, b)
-        time, Array(c), Array(d)
-    end
-    if time > BENCH_MAX_SAMPLE_SECONDS
-        @warn "Configuration took too long: $(repr_row(row))"
-        return [time], "too_slow"
-    end
-    if !verify(cf, c_h, d_h)
-        # NOTE: we verify on the CPU because it involves memory allocations
-        @warn "Configuration produced invalid result: $(repr_row(row))"
-        return [Inf], "invalid_result"
+        Array(c)
     end
 
     # settle down
     device_synchronize()
     GC.gc(true)
 
-    # benchmark (using `CUDA.@elapsed` instead of `CUDA.@profile` because the latter is slower)
-    times = Float64[]
-    mkpidlock(pidfile) do
-        start_time = Dates.now()
+    # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
+    # only taking the minimum time, etc)
+    time = Inf
+    d_h = mkpidlock(pidfile) do
+        # make sure we're starting with an idle device
+        wait_if_throttling()
 
+        # keep benchmarking until the time isn't improving anymore
         while true
-            time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
-            push!(times, time)
+            new_time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
+            if new_time > time
+                break
+            end
+            time = new_time
 
-            # ensure we have enough samples
-            if length(times) >= BENCH_MIN_NUM_SAMPLES
-                (Dates.now() - start_time > Second(BENCH_MAX_TOTAL_SECONDS)) && break
-                (confidence_interval_95(times) / median(times) < BENCH_NORM_CI_THRESHOLD) && break
+            # if this configuration is really slow, don't even bother running a second time
+            if time > BENCH_MAX_SAMPLE_SECONDS
+                break
             end
         end
+
+        # fetch the results
+        Array(d)
     end
 
-    return times, "success"
+    # verify the results
+    if !verify(cf, c_h, d_h)
+        # NOTE: we verify on the CPU because it involves memory allocations
+        @warn "Configuration produced invalid result: $(repr_row(row))"
+        return [time], "invalid_result"
+    end
+
+    return time, "success"
 end
 
-confidence_interval_95(times) = 1.58 * iqr(times) / sqrt(length(times))
-
-function prettytime(times)
-    times == [Inf] && return "no samples"
-
-    min, q1, med, q3, max = nquantile(times, 4)
-    ci_95 = confidence_interval_95(times)
+function prettytime(time)
+    time == Inf && return "Inf"
 
     # timescale
-    scale, unit = if med < 1e3
+    time *= 1e9
+    scale, unit = if time < 1e3
         1, "ns"
-    elseif med < 1e6
+    elseif time < 1e6
         1e3, "μs"
-    elseif med < 1e9
+    elseif time < 1e9
         1e6, "ms"
     else
         1e9, "s"
     end
 
-    rnd_min, rnd_q1, rnd_med, rnd_q3, rnd_max, rnd_ci_95 = round.([min, q1, med, q3, max, ci_95] ./ scale; sigdigits=3)
-    rnd_rel_ci_95 = round(100 * ci_95 / med; sigdigits=3)
-
-    return "$rnd_med $unit ± $rnd_ci_95 $unit ($rnd_rel_ci_95%) (length: $(length(times)), 5-num summary: $rnd_min, $rnd_q1, $rnd_med, $rnd_q3, $rnd_max $unit)"
+    rnd_time = round(time / scale; sigdigits=3)
+    return "$rnd_time $unit"
 end
 
 perf_ratio(gemmkernels, baseline) = percentile(baseline, 0) / percentile(gemmkernels, 0)
@@ -299,7 +291,7 @@ function got_enough_samples(row)
     row["time_spent"] >= PLOT_NUM_SECONDS
 end
 
-function get_nvml_data(dev)
+function get_nvml_data(dev=NVML.Device(parent_uuid(device())))
     Dict(
          :clock_info => NVML.clock_info(dev),
          :max_clock_info => NVML.max_clock_info(dev),
@@ -312,12 +304,17 @@ function get_nvml_data(dev)
     )
 end
 
-function wait_if_throttling(dev)
+function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
+    # make sure we're reading accurate data
+    # (for when this function is called in a loop)
+    sleep(0.01)
+
     cer = NVML.clock_event_reasons(dev)
 
     while cer.hw_power_brake || cer.sw_power_cap || cer.hw_slow || cer.sw_thermal || cer.hw_thermal
         @info "Throttling detected. Sleeping for one second..."
-        sleep(1)
+        sleep(0.1)
+        cer = NVML.clock_event_reasons(dev)
     end
 end
 
@@ -343,14 +340,12 @@ function benchmark_best_configs(configs)
         baseline_nvml=Vector{Any}[]
     )
 
-    dev = NVML.Device(parent_uuid(device()))
-
     for transpose_a = [false, true],
         transpose_b = [false, true],
         N = N_vals
 
         relevant_configs = configs[(@. (configs[!, "transpose_a"] == transpose_a) & (configs[!, "transpose_b"] == transpose_b) & (configs[!, "N"] == N)), :]
-        _, best_config_index = findmin(minimum.(relevant_configs[!, "times"], init=Inf))
+        _, best_config_index = findmin(relevant_configs[!, "time"], init=Inf)
         best_config = relevant_configs[best_config_index, :]
 
         push!(best_configs, Dict(
@@ -406,7 +401,7 @@ function benchmark_best_configs(configs)
 
                         start_time = Dates.now()
 
-                        push!(config_row[if run_baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data(dev))
+                        push!(config_row[if run_baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
 
                         if run_baseline
                             prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
@@ -570,7 +565,7 @@ function main()
                     config_row = configs[i, :]
                     try
                         start_time = Dates.now()
-                        config_row.times, config_row.category =
+                        config_row.time, config_row.category =
                             remotecall_fetch(measure_config, p, NamedTuple(config_row))
                         end_time = Dates.now()
 
@@ -607,7 +602,7 @@ function main()
 
                 # Update configuration
                 config_row = configs[i, :]
-                @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.times .* 1e9))"
+                @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
 
                 # Save results in case the process crashes.
                 open(config_path, "w") do io
@@ -626,7 +621,7 @@ function main()
                     (:kernel, config_row.kernel_str),
                     (:counters, counter_dict_abs),
                     (:counters_relative, counter_dict_rel),
-                    (:last_result, "$(config_row.category) -- $(prettytime(config_row.times .* 1e9))"),
+                    (:last_result, "$(config_row.category) -- $(prettytime(config_row.time))"),
                     (:last_iteration_time, end_time - start_time)
                 ])
             end
