@@ -304,21 +304,24 @@ end
 # row-major A x row-major B = row-major D
 function kernel(A, B, D, conf::Config, conf2::Config2)
     # The modulo is so that the BitArrayIndex knows which bits are 0.
-    num_warps = NUM_WARPS_M(conf2) * NUM_WARPS_N(conf2)
-    warpid_m = (warpid() % num_warps) % NUM_WARPS_M(conf2)
-    warpid_n = (warpid() % num_warps) ÷ NUM_WARPS_M(conf2)
+    num_warps_m = conf.block_shape.M ÷ conf.compute_warp.M
+    num_warps_n = conf.block_shape.N ÷ conf.compute_warp.N
 
-    cta_m = (bid_x() % NUM_BLOCKS_M(conf2)) * conf2.CTA_M
-    cta_n = (bid_y() % NUM_BLOCKS_N(conf2)) * conf2.CTA_N
+    num_blocks_m = conf.matmul_shape.M ÷ conf.block_shape.M
+    num_blocks_n = conf.matmul_shape.N ÷ conf.block_shape.N
 
-    warp_m = warpid_m * conf2.WARP_M
-    warp_n = warpid_n * conf2.WARP_N
+    num_warps = num_warps_m * num_warps_n
+    warpid_m = (warpid() % num_warps) % num_warps_m
+    warpid_n = (warpid() % num_warps) ÷ num_warps_n
 
-    SHMEM_A_SIZE = (conf2.CTA_M * conf2.CTA_K) * conf2.SHARED_TO_REGS_STAGES
-    SHMEM_B_SIZE = (conf2.CTA_K * conf2.CTA_N) * conf2.SHARED_TO_REGS_STAGES
+    cta_m = (bid_x() % num_blocks_m) * conf.block_shape.M
+    cta_n = (bid_y() % num_blocks_n) * conf.block_shape.N
 
-    shmem_a = CuDynamicSharedArray(Float16, (conf2.CTA_M * conf2.CTA_K, conf2.SHARED_TO_REGS_STAGES))
-    shmem_b = CuDynamicSharedArray(Float16, (conf2.CTA_K * conf2.CTA_N, conf2.SHARED_TO_REGS_STAGES),
+    warp_m = warpid_m * conf.compute_warp.M
+    warp_n = warpid_n * conf.compute_warp.N
+
+    shmem_a = CuDynamicSharedArray(Float16, (conf.block_shape.M * conf.block_shape.K, 2))
+    shmem_b = CuDynamicSharedArray(Float16, (conf.block_shape.K * conf.block_shape.N, 2),
                                    length(shmem_a) * sizeof(Float16))
 
     shmem_d = CuDynamicSharedArray(Float32, 32 * (256 + 2))
@@ -353,24 +356,24 @@ function kernel(A, B, D, conf::Config, conf2::Config2)
     @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k % 2) + 1] = shared_a_frag
     @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k % 2) + 1] = shared_b_frag
 
-    NUM_MAIN_LOOP_ITERS = conf2.GLOBAL_K ÷ conf2.CTA_K
+    NUM_MAIN_LOOP_ITERS = conf.matmul_shape.K ÷ conf.block_shape.K
     @not_unrolled for main_loop_it = 0 : NUM_MAIN_LOOP_ITERS - 1
         # The modulo is so that the BitArrayIndex knowns which bits are 0.
         # TODO: Do this automatically in the @not_unrolled macro?
         # TODO: Generate _next variables automatically.
-        cta_k = (main_loop_it % NUM_MAIN_LOOP_ITERS) * conf2.CTA_K
+        cta_k = (main_loop_it % NUM_MAIN_LOOP_ITERS) * conf.block_shape.K
 
         main_loop_it_next = variadic((main_loop_it_orig + 1)) % NUM_MAIN_LOOP_ITERS
-        cta_k_next = main_loop_it_next * conf2.CTA_K
+        cta_k_next = main_loop_it_next * conf.block_shape.K
 
         # CTA_M x CTA_N x CTA_K GEMM per CTA
-        NUM_WARP_MMA_K_ITERS = conf2.CTA_K ÷ conf2.WARP_K
+        NUM_WARP_MMA_K_ITERS = conf.block_shape.K ÷ conf.compute_warp.K
         @unrolled for warp_mma_k = 0 : NUM_WARP_MMA_K_ITERS - 1
-            warp_k = warp_mma_k * conf2.WARP_K
+            warp_k = warp_mma_k * conf.compute_warp.K
 
             # TODO: Do this in macro.
             warp_mma_k_next = constant(warp_mma_k_orig + 1) % NUM_WARP_MMA_K_ITERS
-            warp_k_next = warp_mma_k_next * conf2.WARP_K
+            warp_k_next = warp_mma_k_next * conf.compute_warp.K
 
             if warp_mma_k == NUM_WARP_MMA_K_ITERS-1
                 # st_shared(main_loop_it+1)
