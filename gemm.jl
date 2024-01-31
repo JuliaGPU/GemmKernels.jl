@@ -68,21 +68,13 @@ conf = GemmKernels.get_config(
     is_b_col_major = false
    )
 
-conf2 = Config2(
-    2048, 2048, 2048, # GLOBAL_MNK
-    128, 256, 32,     # CTA_MNK
-    64, 64, 4,        # WARP_MNK
-    2,                # GLOBAL_TO_SHARED_STAGES
-    2,                # SHARED_TO_REGS_STAGES
-)
-
 # The kernel calculates A * B = D (in row-major), as this is CUTLASS's
 # convention.
 # To calculate A * B = D in col-major, just flip the A and B operands
 # and transpose: A * B = D <=> B^T * A^T = D^T.
-A = CUDA.rand(Float16, (conf2.GLOBAL_N, conf2.GLOBAL_K))
-B = CUDA.rand(Float16, (conf2.GLOBAL_K, conf2.GLOBAL_M))
-D = CUDA.zeros(Float32, (conf2.GLOBAL_N, conf2.GLOBAL_M))
+A = CUDA.rand(Float16, (conf.matmul_shape.N, conf.matmul_shape.K))
+B = CUDA.rand(Float16, (conf.matmul_shape.K, conf.matmul_shape.M))
+D = CUDA.zeros(Float32, (conf.matmul_shape.N, conf.matmul_shape.M))
 # }}}
 
 # ld global {{{
@@ -109,7 +101,7 @@ D = CUDA.zeros(Float32, (conf2.GLOBAL_N, conf2.GLOBAL_M))
         k = b(tid(), 0, 3) +
             b(tid(), 1, 4)
 
-        @inbounds val = vloada(Vec{8, Float16}, A, cta_k + k + conf.GLOBAL_K * (cta_m + m))
+        @inbounds val = vloada(Vec{8, Float16}, A, cta_k + k + conf.matmul_shape.K * (cta_m + m))
 
         @unrolled for offset = 0:7
             frag_offset = b(offset, 0, 0) +  # k0
@@ -135,7 +127,7 @@ D = CUDA.zeros(Float32, (conf2.GLOBAL_N, conf2.GLOBAL_M))
             b(tid(), 6, 3) +
             b(tid(), 7, 4)
 
-        @inbounds val = vloada(Vec{8, Float16}, B, cta_n + n + conf.GLOBAL_N * (cta_k + k))
+        @inbounds val = vloada(Vec{8, Float16}, B, cta_n + n + conf.matmul_shape.K * (cta_k + k))
 
 
         @unrolled for offset = 0:7
@@ -153,7 +145,7 @@ end
 # }}}
 
 # st shared {{{
-@inline function st_shared(shmem_a, shmem_b, a_frag, b_frag, conf)
+@inline function st_shared(shmem_a, shmem_b, a_frag, b_frag)
     # Store A to Shared Memory.
     block_tile = Tile(M = 128, N = 256, K = 32)
 
@@ -164,7 +156,7 @@ end
 
 # ld shared {{{
 @inline function ld_shared(shmem_a, shmem_b, warp_m, warp_n, warp_k, conf)
-    warp_mma_k = warp_k ÷ conf.WARP_K
+    warp_mma_k = warp_k ÷ conf.compute_warp.K
 
     b_frag = LocalArray{Tuple{16}, Float16}(undef)
 
@@ -276,7 +268,7 @@ end
             VecElement{Float32}(frag[frag_index])
         end
 
-        @inbounds vstorea!(Vec{4, Float32}, D, cta_n + n + conf.GLOBAL_N * cta_m + conf.GLOBAL_N * m, val)
+        @inbounds vstorea!(Vec{4, Float32}, D, cta_n + n + conf.matmul_shape.N * cta_m + conf.matmul_shape.N * m, val)
     end
 end
 
@@ -302,7 +294,7 @@ end
 
 # kernel {{{
 # row-major A x row-major B = row-major D
-function kernel(A, B, D, conf::Config, conf2::Config2)
+function kernel(A, B, D, conf::Config)
     # The modulo is so that the BitArrayIndex knows which bits are 0.
     num_warps_m = conf.block_shape.M ÷ conf.compute_warp.M
     num_warps_n = conf.block_shape.N ÷ conf.compute_warp.N
@@ -336,13 +328,13 @@ function kernel(A, B, D, conf::Config, conf2::Config2)
     # Prologue.
     # ld_global(main_loop_it=0)
     cta_k = constant(0)
-    global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k, conf2)
+    global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k, conf)
 
     # st_shared(main_loop_it=0)
     main_loop_it = constant(0)
     st_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
                 view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
-                global_a_frag, global_b_frag, conf2)
+                global_a_frag, global_b_frag)
     sync_threads()
 
     # ld_shared(main_loop_it=0, warp_mma_k=0)
@@ -351,7 +343,7 @@ function kernel(A, B, D, conf::Config, conf2::Config2)
     warp_mma_k = constant(0)
     shared_a_frag, shared_b_frag = ld_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
                                                 view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
-                                                warp_m, warp_n, warp_k, conf2)
+                                                warp_m, warp_n, warp_k, conf)
 
     @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k % 2) + 1] = shared_a_frag
     @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k % 2) + 1] = shared_b_frag
@@ -379,14 +371,14 @@ function kernel(A, B, D, conf::Config, conf2::Config2)
                 # st_shared(main_loop_it+1)
                 st_shared(view(shmem_a, :, convert(Int, main_loop_it_next % 2) + 1),
                           view(shmem_b, :, convert(Int, main_loop_it_next % 2) + 1),
-                          global_a_frag, global_b_frag, conf2)
+                          global_a_frag, global_b_frag)
                 sync_threads()
             end
 
             # ld_shared(main_loop_it, warp_mma_k + 1)
             shared_a_frag, shared_b_frag = ld_shared(view(shmem_a, :, convert(Int, main_loop_it % 2) + 1),
                                                      view(shmem_b, :, convert(Int, main_loop_it % 2) + 1),
-                                                     warp_m, warp_n, warp_k_next, conf2)
+                                                     warp_m, warp_n, warp_k_next, conf)
 
             @inbounds @immutable shared_a_frags[convert(Int, warp_mma_k_next % 2) + 1] = shared_a_frag
             @inbounds @immutable shared_b_frags[convert(Int, warp_mma_k_next % 2) + 1] = shared_b_frag
@@ -395,7 +387,7 @@ function kernel(A, B, D, conf::Config, conf2::Config2)
             if warp_mma_k == 0
                 # ld_global(main_loop_it + 1)
                 # Copy the data for a CTA_M x CTA_N x CTA_K GEMM from GMEM to SHMEM, cooperatively in a CTA.
-                global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k_next, conf2)
+                global_a_frag, global_b_frag = ld_global(A, B, cta_m, cta_n, cta_k_next, conf)
             end
 
             # WARP_M x WARP_N x WARP_K = 64 x 64 x 4 GEMM per warp
@@ -409,7 +401,7 @@ function kernel(A, B, D, conf::Config, conf2::Config2)
     end
 
     # epilogue: store matrix from registers to global memory
-    epilogue(D, shmem_d, acc_frag, cta_m, cta_n, warp_m, warp_n, conf2)
+    epilogue(D, shmem_d, acc_frag, cta_m, cta_n, warp_m, warp_n, conf)
 
     nothing
 end
@@ -417,13 +409,16 @@ end
 
 # driver {{{
 function test(; dump_code=false, debug=false)
+    blocks = (cld(conf.matmul_shape.M, conf.block_shape.M),
+              cld(conf.matmul_shape.N, conf.block_shape.N))
+
     if debug
-        @device_code_warntype interactive=true @cuda threads=NUM_THREADS(conf2) blocks=(NUM_BLOCKS_M(conf2), NUM_BLOCKS_N(conf2)) shmem=48*1024 kernel(B, A, D, conf, conf2)
+        @device_code_warntype interactive=true @cuda threads=(conf.warps_per_block * 32) blocks=blocks shmem=48*1024 kernel(B, A, D, conf)
         return
     end
 
     if dump_code
-        @device_code dir="gemm-output" @cuda threads=NUM_THREADS(conf2) blocks=(NUM_BLOCKS_M(conf2), NUM_BLOCKS_N(conf2)) shmem=48*1024 kernel(B, A, D, conf, conf2)
+        @device_code dir="gemm-output" @cuda threads=(conf.warps_per_block * 32) blocks=blocks shmem=48*1024 kernel(B, A, D, conf)
     end
 
     D_ref = similar(D)
@@ -432,7 +427,7 @@ function test(; dump_code=false, debug=false)
     CUDA.CUBLAS.gemmEx!('N', 'N', Float32(1), A, B, Float32(0), D_ref)
 
     # TODO: do not hardcode shared memory size
-    @cuda threads=NUM_THREADS(conf2) blocks=(NUM_BLOCKS_M(conf2), NUM_BLOCKS_N(conf2)) shmem=48*1024 kernel(B, A, D, conf, conf2)
+    @cuda threads=(conf.warps_per_block * 32) blocks=blocks shmem=48*1024 kernel(B, A, D, conf)
 
     compare(x, y) = isapprox(x, y; rtol=sqrt(eps(Float16)))
 
