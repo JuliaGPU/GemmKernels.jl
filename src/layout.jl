@@ -5,7 +5,7 @@ using CUDA
 using LLVMLoopInfo: @loopinfo
 using Base.Cartesian: @ntuple
 using GemmKernels.Tiling
-using GemmKernels: LocalArray, @immutable, b, tid, @unrolled, variadic, constant, vstorea!, Vec
+using GemmKernels: LocalArray, @immutable, b, tid, @unrolled, variadic, constant, vloada, vstorea!, Vec
 
 # ---------------------
 # Customise computation

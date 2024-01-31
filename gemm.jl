@@ -48,7 +48,6 @@ D = CUDA.zeros(Float32, (conf.matmul_shape.N, conf.matmul_shape.M))
 # ld global {{{
 # Load from global memory
 @inline function ld_global(A, B, cta_m, cta_n, cta_k, conf)
-    # TODO: EXTRACT
     # Fragments for the data from the global loads (and hence shared stores).
     # index: (m3|k2|k1|k0)
     a_frag = LocalArray{Tuple{16}, Float16}(undef)
@@ -69,7 +68,12 @@ D = CUDA.zeros(Float32, (conf.matmul_shape.N, conf.matmul_shape.M))
         k = b(tid(), 0, 3) +
             b(tid(), 1, 4)
 
-        @inbounds val = vloada(Vec{8, Float16}, A, cta_k + k + conf.matmul_shape.K * (cta_m + m))
+        tile = Tile(M = 1, K = 8)
+        tile = translate_base(tile, (M = convert(Int, cta_m), K = convert(Int, cta_k)))
+        tile = translate_base(tile, (M = convert(Int, m.variadic_part), K = convert(Int, k.variadic_part)))
+        tile = translate_offset(tile, (M = convert(Int, m.known_one), K = convert(Int, k.known_one)))
+
+        @inbounds val = Layout.load(conf.global_a_layout, A, tile)
 
         @unrolled for offset = 0:7
             frag_offset = b(offset, 0, 0) +  # k0
@@ -95,8 +99,12 @@ D = CUDA.zeros(Float32, (conf.matmul_shape.N, conf.matmul_shape.M))
             b(tid(), 6, 3) +
             b(tid(), 7, 4)
 
-        @inbounds val = vloada(Vec{8, Float16}, B, cta_n + n + conf.matmul_shape.K * (cta_k + k))
+        tile = Tile(K = 1, N = 8)
+        tile = translate_base(tile, (K = convert(Int, cta_k), N = convert(Int, cta_n)))
+        tile = translate_base(tile, (K = convert(Int, k.variadic_part), N = convert(Int, n.variadic_part)))
+        tile = translate_offset(tile, (K = convert(Int, k.known_one), N = convert(Int, n.known_one)))
 
+        @inbounds val = Layout.load(conf.global_b_layout, B, tile)
 
         @unrolled for offset = 0:7
             frag_offset = b(offset, 0, 0) + # n0
