@@ -5,7 +5,7 @@ using CUDA
 using LLVMLoopInfo: @loopinfo
 using Base.Cartesian: @ntuple
 using GemmKernels.Tiling
-using GemmKernels: LocalArray, @immutable, b, tid, @unrolled, constant, vstorea!, Vec
+using GemmKernels: LocalArray, @immutable, b, tid, @unrolled, variadic, constant, vstorea!, Vec
 
 # ---------------------
 # Customise computation
@@ -416,61 +416,18 @@ end
 
 @inline Base.@propagate_inbounds function store!(L::Type{VoltaSwizzledOperandA{Float16}}, workspace, value, tile::Tile)
     # TODO: Boundschecking logic.
+    m = variadic(tile.base.M) + constant(tile.offset.M)
+    k = variadic(tile.base.K) + constant(tile.offset.K)
 
-    @unrolled for ins = 0:3
-            m = b(tid(), 2, 0) +
-                b(tid(), 3, 1) +
-                b(tid(), 4, 2) +
-                b(ins, 1, 3) +
-                b(tid(), 5, 4) +
-                b(tid(), 6, 5) +
-                b(tid(), 7, 6)
-
-            k = b(ins, 0, 2) +
-                b(tid(), 0, 3) +
-                b(tid(), 1, 4)
-
-        @inbounds val = @ntuple 4 i -> begin
-            offset = constant(i-1)
-            frag_offset = b(offset, 0, 0) + # k0
-                          b(offset, 1, 1) + # k1
-                          b(ins, 0, 2) +  # k2
-                          b(ins, 1, 3)    # m3
-            VecElement{Float16}(value[frag_offset])
-        end
-
-        @inbounds vstorea!(Vec{4, Float16}, workspace, Layout.swizzle(L, m, k), val)
-    end
+    @inbounds vstorea!(Vec{4, Float16}, workspace, Layout.swizzle(L, m, k), value)
 end
 
 @inline Base.@propagate_inbounds function store!(L::Type{VoltaSwizzledOperandB{Float16}}, workspace, value, tile::Tile)
     # TODO: Boundchecking logic.
+    k = variadic(tile.base.K) + constant(tile.offset.K)
+    n = variadic(tile.base.N) + constant(tile.offset.N)
 
-    @unrolled for ins = 0:3
-        n = b(tid(), 0, 3) +
-            b(tid(), 1, 4) +
-            b(tid(), 2, 5) +
-            b(ins, 0, 6) +
-            b(ins, 1, 7)
-
-        k = b(tid(), 3, 0) +
-            b(tid(), 4, 1) +
-            b(tid(), 5, 2) +
-            b(tid(), 6, 3) +
-            b(tid(), 7, 4)
-
-        @inbounds val = @ntuple 8 i -> begin
-            offset = constant(i-1)
-            frag_offset = b(offset, 0, 0) + # n0
-                          b(offset, 1, 1) + # n1
-                          b(offset, 2, 2) + # n2
-                          b(ins, 0, 3) +    # n6
-                          b(ins, 1, 4)      # n7
-            VecElement{Float16}(value[frag_offset])
-        end
-
-        @inbounds vstorea!(Vec{8, Float16}, workspace, Layout.swizzle(L, k, n), val)
-    end
+    @inbounds vstorea!(Vec{8, Float16}, workspace, Layout.swizzle(L, k, n), value)
 end
 
 end

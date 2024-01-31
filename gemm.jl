@@ -117,8 +117,76 @@ end
     # Store A to Shared Memory.
     block_tile = Tile(M = 128, N = 256, K = 32)
 
-    Layout.store!(VoltaSwizzledOperandA{Float16}, shmem_a, a_frag, block_tile)
-    Layout.store!(VoltaSwizzledOperandB{Float16}, shmem_b, b_frag, block_tile)
+    let
+        # TODO: Introduce abstraction for this: CopyStrategy or CopyThreadMapping.
+        # And multiple dispatch function: preferred_copy_strategy(global_layout, shared_layout).
+
+        # Thread mapping for global -> shared copy for A.
+        # TODO: Do not iterate over ins here, but instead iterate over individual elements,
+        # and let the layout handle vectorisation for us... Maybe by letting the layout emit
+        # stores with alignment, and letting LSV handle the rest?
+        @unrolled for ins = 0 : 3
+            m = b(tid(), 2, 0) +
+                b(tid(), 3, 1) +
+                b(tid(), 4, 2) +
+                b(ins, 1, 3) +
+                b(tid(), 5, 4) +
+                b(tid(), 6, 5) +
+                b(tid(), 7, 6)
+
+            k = b(ins, 0, 2) +
+                b(tid(), 0, 3) +
+                b(tid(), 1, 4)
+
+            @inbounds val = @ntuple 4 i -> begin
+                offset = constant(i-1)
+                frag_offset = b(offset, 0, 0) + # k0
+                              b(offset, 1, 1) + # k1
+                              b(ins, 0, 2) +    # k2
+                              b(ins, 1, 3)      # m3
+                VecElement{Float16}(a_frag[frag_offset])
+            end
+
+            tile = Tile(M = 1, K = 4)
+
+            tile = translate_base(tile, (M = convert(Int, m.variadic_part), K = convert(Int, k.variadic_part)))
+            tile = translate_offset(tile, (M = convert(Int, m.known_one), K = convert(Int, k.known_one)))
+
+            Layout.store!(VoltaSwizzledOperandA{Float16}, shmem_a, val, tile)
+        end
+    end
+
+    let
+        @unrolled for ins = 0:3
+            n = b(tid(), 0, 3) +
+                b(tid(), 1, 4) +
+                b(tid(), 2, 5) +
+                b(ins, 0, 6) +
+                b(ins, 1, 7)
+
+            k = b(tid(), 3, 0) +
+                b(tid(), 4, 1) +
+                b(tid(), 5, 2) +
+                b(tid(), 6, 3) +
+                b(tid(), 7, 4)
+
+            @inbounds val = @ntuple 8 i -> begin
+                offset = constant(i-1)
+                frag_offset = b(offset, 0, 0) + # n0
+                            b(offset, 1, 1) + # n1
+                            b(offset, 2, 2) + # n2
+                            b(ins, 0, 3) +    # n6
+                            b(ins, 1, 4)      # n7
+                VecElement{Float16}(b_frag[frag_offset])
+            end
+
+            tile = Tile(K = 1, N = 8)
+            tile = translate_base(tile, (K = convert(Int, k.variadic_part), N = convert(Int, n.variadic_part)))
+            tile = translate_offset(tile, (K = convert(Int, k.known_one), N = convert(Int, n.known_one)))
+
+            Layout.store!(VoltaSwizzledOperandB{Float16}, shmem_b, val, tile)
+        end
+    end
 end
 # }}}
 
