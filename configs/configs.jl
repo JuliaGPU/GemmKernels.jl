@@ -13,7 +13,6 @@ using CUDA
 using GemmKernels
 using LinearAlgebra
 
-using UUIDs
 struct LazyModule
     pkg::Base.PkgId
     LazyModule(name, uuid) = new(Base.PkgId(uuid, name))
@@ -27,8 +26,7 @@ function Base.getproperty(lazy_mod::LazyModule, sym::Symbol)
     getfield(mod, sym)
 end
 
-const ForwardDiff = LazyModule("ForwardDiff", UUID("f6369f11-7733-5829-9624-2563aa707210"))
-const Octavian = LazyModule("Octavian", UUID("6fd5a793-0b7e-452c-907f-f8bfe9c57db4"))
+const ForwardDiff = LazyModule("ForwardDiff", Base.UUID("f6369f11-7733-5829-9624-2563aa707210"))
 
 struct Configuration
     name           # Human-readable name of the configuration.
