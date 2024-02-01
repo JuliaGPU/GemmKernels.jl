@@ -30,6 +30,11 @@ const zero_c = true
 # Stop sampling when a configuration is really slow
 const BENCH_MAX_SAMPLE_SECONDS = 1
 
+# After a certain time, a measurement is considered stale (i.e., because of a crash).
+# The time here determines when to ignore a lock. Note that it is automatically
+# multiplied by 5 when the process is still alive, so it shouldn't be too large.
+const BENCH_STALE_AGE = 60
+
 const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
                            maximum(N_vals)^2 * 2 * sizeof(CD_type) +
                            128*2^20 # there's always some overhead
@@ -37,6 +42,9 @@ const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
 const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
 
 const PIDFILE = joinpath(@__DIR__, "tuning.pid")
+
+# Retry configurations with these categories.
+const RETRY_CATEGORIES = ["oom", "crash"]
 
 #####
 
@@ -185,29 +193,26 @@ function measure_config(row)
         bt = catch_backtrace()
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
+        # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
-            @info "Skipping configuration $(repr_row(row))\n" * log
-            return Inf, "unsupported_config_post_run"
+            @info "Skipping unsupported configuration $(repr_row(row))\n" * log
+            return Inf, "config_error"
+        end
+        if isa(err, CUDA.InvalidIRError)
+            @info "Failed to compile $(repr_row(row))\n" * log
+            return Inf, "compilation_error"
         end
 
-        if isa(err, CuError)
-            @error "Configuration failed: $(repr_row(row))\n" * log
-            rethrow()
-        end
-
-        @info "Skipping configuration: $(repr_row(row))\n" * log
-        return Inf, "error"
+        @info "Unknown error processing $(repr_row(row))\n" * log
+        return Inf, "unknown_error"
     end
 
     # initialize inputs and calculate the reference
-    c_h = mkpidlock(PIDFILE) do
+    c_h = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
         rand!(a)
         rand!(b)
         rand!(c)
         d .= 0
-
-        reference_mul!(c, a, b)
-        Array(c)
     end
 
     # settle down
@@ -217,7 +222,7 @@ function measure_config(row)
     # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
     # only taking the minimum time, etc)
     time = Inf
-    d_h = mkpidlock(PIDFILE) do
+    c_h, d_h = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
         # make sure we're starting with an idle device
         wait_if_throttling()
 
@@ -235,13 +240,15 @@ function measure_config(row)
             end
         end
 
-        # fetch the results
-        Array(d)
+        # compute the reference (mutating c, so we need to do this last)
+        reference_mul!(c, a, b)
+
+        # copy results to host, so that we can verify without additional GPU allocations
+        Array(c), Array(d)
     end
 
     # verify the results
     if !verify(cf, c_h, d_h)
-        # NOTE: we verify on the CPU because it involves memory allocations
         @warn "Configuration produced invalid result: $(repr_row(row))"
         return [time], "invalid_result"
     end
@@ -524,21 +531,21 @@ function main()
         @info "Generated $(size(configs, 1)) configurations."
 
         # (2) Filter configurations where we can determine upfront that they are unsupported.
-        @info "Filtering configurations that we know are unsupported a-priori..."
+        @info "Finding configurations that we know are unsupported a-priori..."
 
         for config_row in eachrow(configs)
             try
                 cf = get_config(config_row)
             catch err
                 if isa(err, GemmKernels.ConfigError)
-                    config_row["category"] = "unsupported_config_pre_run"
+                    config_row["category"] = "skipped"
                 else
                     rethrow()
                 end
             end
         end
 
-        @info "Filtered $(counter(configs[!, "category"])["unsupported_config_pre_run"]) configurations."
+        @info "Skipping $(counter(configs[!, "category"])["skipped"]) configurations."
 
         open(config_path, "w") do io
             serialize(io, configs)
@@ -552,7 +559,7 @@ function main()
     @info "Need to perform parameter sweep over $(num_pending) configurations."
 
     pending = filter(1:size(configs, 1)) do i
-        configs[i, :category] == "pending"
+        configs[i, :category] in ["pending"; RETRY_CATEGORIES]
     end
     shuffle!(pending)
     results = Channel(Inf)
@@ -570,31 +577,26 @@ function main()
                     try
                         config_row.time, config_row.category =
                             remotecall_fetch(measure_config, p, NamedTuple(config_row))
-                        end_time = time()
-
-                        push!(results, (p, i, start_time, end_time))
-
-                        if config_row.category in ["oom"]
-                            # retry later
-                            push!(pending, i)
-                        end
 
                         # keep memory usage under control
                         remotecall(p) do
                             CUDA.reclaim()
                         end
                     catch err
-                        config_row.category = "crashed"
+                        config_row.category = "crash"
 
                         bt = catch_backtrace()
                         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                        @error "Error while measuring configurations: $log"
+                        @error "Unexpected exception on worker $p: $log"
 
                         # recycle our worker
                         rmprocs(p; waitfor=30)
                         p = addworkers(1)[1]
                     finally
                         delete!(worker_jobs, p)
+
+                        end_time = time()
+                        push!(results, (p, i, start_time, end_time))
                     end
                 end
             end)
@@ -611,6 +613,11 @@ function main()
                         # Update configuration
                         config_row = configs[i, :]
                         @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
+
+                        # Consider retrying failed configurations
+                        if config_row.category in RETRY_CATEGORIES
+                            push!(pending, i)
+                        end
                     end
 
                     # Save results in case the process crashes.
