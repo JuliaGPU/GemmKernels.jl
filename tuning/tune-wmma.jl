@@ -9,6 +9,7 @@ using LoggingExtras
 using ProgressMeter: Progress, ProgressUnknown, next!, update!, finish!
 using Serialization
 using Statistics
+using StatsBase: percentile
 using Random
 
 if myid() == 1
