@@ -354,6 +354,15 @@ macro get_wmma_diagonal_config()
                                         is_b_col_major = !transpose_b,
                                         )
 
+        # XXX: perform this on the GPU
+        function reference_mul!(C, A, B, alpha, beta)
+            # XXX: alpha/beta ignored, and not used by other configs?
+            Ah = Array(A)
+            Bh = Array(B)
+            Ch = Array(C)
+            mul!(Ch, Diagonal(Ah[1:M,1]), Bh, true, true)
+            copyto!(C, Ch)
+        end
 
         Configuration(name,
                       conf,
@@ -365,7 +374,7 @@ macro get_wmma_diagonal_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      (C, A, B, alpha, beta) -> mul!(C, Diagonal(A[1:M,1]), B, true, true),
+                      reference_mul!,
                       Epilogue.Default(),
                       $verify_default,
                       Kernel.matmul_singlestage,
