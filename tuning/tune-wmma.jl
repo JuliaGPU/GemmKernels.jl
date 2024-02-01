@@ -6,7 +6,7 @@ using Distributed
 using FileWatching.Pidfile
 using Logging
 using LoggingExtras
-using ProgressMeter: Progress, ProgressUnknown, next!, update!
+using ProgressMeter: Progress, ProgressUnknown, next!, update!, finish!
 using Serialization
 using Statistics
 using Random
@@ -44,7 +44,7 @@ const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context 
 const PIDFILE = joinpath(@__DIR__, "tuning.pid")
 
 # Retry configurations with these categories.
-const RETRY_CATEGORIES = ["oom", "crash"]
+const RETRY_CATEGORIES = ["oom", "crashed"]
 
 #####
 
@@ -352,7 +352,7 @@ function benchmark_best_configs(configs)
         N = N_vals
 
         relevant_configs = configs[(@. (configs[!, "transpose_a"] == transpose_a) & (configs[!, "transpose_b"] == transpose_b) & (configs[!, "N"] == N)), :]
-        _, best_config_index = findmin(relevant_configs[!, "time"], init=Inf)
+        _, best_config_index = findmin(relevant_configs[!, "time"])
         best_config = relevant_configs[best_config_index, :]
 
         push!(best_configs, Dict(
@@ -402,21 +402,21 @@ function benchmark_best_configs(configs)
 
                 @info "Profiling configuration $(repr_row(config_row))..."
 
-                for run_baseline in [false, true]
+                for baseline in [false, true]
                     for i in 1:PLOT_BATCH_SIZE
                         wait_if_throttling()
 
                         start_time = time()
 
-                        push!(config_row[if run_baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
+                        push!(config_row[if baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
 
-                        if run_baseline
+                        if baseline
                             prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
                         else
                             prof = CUDA.@profile concurrent=false run_gemm(cf, a, b, c, d)
                         end
 
-                        push!(config_row[if run_baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
+                        push!(config_row[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
                         config_row["time_spent"] += (time() - start_time)
                     end
@@ -553,50 +553,65 @@ function main()
     end
 
     # (3) Measure performance of configurations.
-    num_pending = counter(configs[!, "category"])["pending"]
-    p = Progress(num_pending; desc="Parameter sweep", dt=1.0, showspeed=true)
-
-    @info "Need to perform parameter sweep over $(num_pending) configurations."
-
-    pending = filter(1:size(configs, 1)) do i
+    jobs = filter(1:size(configs, 1)) do i
         configs[i, :category] in ["pending"; RETRY_CATEGORIES]
     end
-    shuffle!(pending)
+    shuffle!(jobs)
+
+    njobs = length(jobs)
+    p = Progress(njobs; desc="Parameter sweep", showspeed=true)
+    @info "Need to perform parameter sweep over $(njobs) configurations."
+
+    if njobs > 0
+        # Spawn workers
+        cpu_memory = Sys.free_memory()
+        gpu_memory = CUDA.available_memory()
+        max_workers = min(
+            floor(Int, cpu_memory / WORKER_MEMORY_USAGE),
+            floor(Int, gpu_memory / WORKER_MEMORY_USAGE),
+            Sys.CPU_THREADS,
+            njobs+1
+        )
+        addworkers(max(1, max_workers-1))
+        @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
+    end
+
     results = Channel(Inf)
     @sync begin
         # measure configurations on workers
         worker_jobs = Dict()
-        for p in workers()
+        for worker in workers()
             errormonitor(@async begin
-                while length(pending) > 0
-                    start_time = time()
-
-                    i = popfirst!(pending)
+                while length(jobs) > 0
+                    i = popfirst!(jobs)
                     config_row = configs[i, :]
-                    worker_jobs[p] = (; start_time, i)
+                    worker_jobs[worker] = (; start_time=time(), i)
                     try
                         config_row.time, config_row.category =
-                            remotecall_fetch(measure_config, p, NamedTuple(config_row))
+                            remotecall_fetch(measure_config, worker, NamedTuple(config_row))
 
                         # keep memory usage under control
-                        remotecall(p) do
+                        remotecall(worker) do
                             CUDA.reclaim()
                         end
                     catch err
-                        config_row.category = "crash"
+                        config_row.category = "crashed"
 
                         bt = catch_backtrace()
                         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                        @error "Unexpected exception on worker $p: $log"
+                        @error "Unexpected exception on worker $worker: $log"
 
                         # recycle our worker
-                        rmprocs(p; waitfor=30)
-                        p = addworkers(1)[1]
+                        rmprocs(worker; waitfor=30)
+                        worker = addworkers(1)[1]
                     finally
-                        delete!(worker_jobs, p)
+                        delete!(worker_jobs, worker)
+                        push!(results, (worker, i))
 
-                        end_time = time()
-                        push!(results, (p, i, start_time, end_time))
+                        # Consider retrying failed configurations
+                        if config_row.category in RETRY_CATEGORIES
+                            push!(jobs, i)
+                        end
                     end
                 end
             end)
@@ -604,20 +619,15 @@ function main()
 
         # monitor progress
         errormonitor(@async begin
-            while !isempty(pending) || !isempty(results)
+            while !isempty(jobs) || !isempty(results)
                 # process results
                 if isready(results)
                     while isready(results)
-                        worker, i, start_time, end_time = take!(results)
+                        worker, i = take!(results)
 
                         # Update configuration
                         config_row = configs[i, :]
                         @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
-
-                        # Consider retrying failed configurations
-                        if config_row.category in RETRY_CATEGORIES
-                            push!(pending, i)
-                        end
                     end
 
                     # Save results in case the process crashes.
@@ -665,8 +675,8 @@ function main()
 
                     vals
                 end
-                num_finished = num_pending - length(pending)
-                update!(p, num_finished; showvalues)
+                nfinished = njobs - length(jobs)
+                update!(p, nfinished; showvalues)
 
                 sleep(5)
             end
@@ -677,6 +687,11 @@ function main()
     # Save data for final iteration.
     open(config_path, "w") do io
         serialize(io, configs)
+    end
+
+    # Kill workers
+    if njobs > 0
+        rmprocs(workers()...; waitfor=30)
     end
 
     # And load again, for good measure.
@@ -715,19 +730,5 @@ end
 
 if !isinteractive() && myid() == 1
     isfile(PIDFILE) && error("Another tuning process is already running. If this is not the case, please remove the file $(PIDFILE).")
-
-    # Spawn workers
-    cpu_memory = Sys.free_memory()
-    gpu_memory = CUDA.available_memory()
-    let
-        nworkers = min(
-            floor(Int, cpu_memory / WORKER_MEMORY_USAGE),
-            floor(Int, gpu_memory / WORKER_MEMORY_USAGE),
-            Sys.CPU_THREADS
-        )
-        addworkers(max(1, nworkers-1))
-    end
-    @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
-
     main()
 end
