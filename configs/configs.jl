@@ -52,17 +52,24 @@ function get_custom_mul!(element_update)
         N = size(C, 2)
         K = size(A, 2)
 
+        # XXX: this assumes CPU execution
+        Ah = Array(A)
+        Bh = Array(B)
+        Ch = Array(C)
+
         for i in 1:M
             for j in 1:N
-                res = beta * C[i, j]
+                res = beta * Ch[i, j]
 
                 for k in 1:K
-                    res = alpha * element_update(A[i, k], B[k, j], res)
+                    res = alpha * element_update(Ah[i, k], Bh[k, j], res)
                 end
 
-                C[i, j] = res
+                Ch[i, j] = res
             end
         end
+
+        copyto!(C, Ch)
     end
 end
 
