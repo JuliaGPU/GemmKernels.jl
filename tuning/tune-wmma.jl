@@ -1,12 +1,12 @@
 using CUDA, GemmKernels
 using DataFrames
-using DataStructures
+using DataStructures: counter
 using Dates
 using Distributed
 using FileWatching.Pidfile
 using Logging
 using LoggingExtras
-using ProgressMeter
+using ProgressMeter: Progress, ProgressUnknown, next!, update!
 using Serialization
 using Statistics
 using Random
@@ -35,6 +35,8 @@ const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
                            128*2^20 # there's always some overhead
 
 const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
+
+const PIDFILE = joinpath(@__DIR__, "tuning.pid")
 
 #####
 
@@ -159,8 +161,6 @@ function measure_config(row)
     @info "Measuring configuration $(repr_row(row))..."
     cf = get_config(row)
 
-    pidfile = joinpath(@__DIR__, "tuning.pid")
-
     # allocate inputs
     reference_mul!, a, b, c, d = try
         # this is the only place where we allocate device memory.
@@ -200,7 +200,7 @@ function measure_config(row)
     end
 
     # initialize inputs and calculate the reference
-    c_h = mkpidlock(pidfile) do
+    c_h = mkpidlock(PIDFILE) do
         rand!(a)
         rand!(b)
         rand!(c)
@@ -217,7 +217,7 @@ function measure_config(row)
     # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
     # only taking the minimum time, etc)
     time = Inf
-    d_h = mkpidlock(pidfile) do
+    d_h = mkpidlock(PIDFILE) do
         # make sure we're starting with an idle device
         wait_if_throttling()
 
@@ -377,7 +377,7 @@ function benchmark_best_configs(configs)
 
         input_dict = Dict()
 
-        p = ProgressUnknown(desc="Benchmarking", dt=1.0)
+        p = ProgressUnknown(desc="Benchmarking")
 
         # Spread the samples of one configuration over time, to reduce the effect
         # of time-related noise. Note that this means that the progress bar may
@@ -399,7 +399,7 @@ function benchmark_best_configs(configs)
                     for i in 1:PLOT_BATCH_SIZE
                         wait_if_throttling()
 
-                        start_time = Dates.now()
+                        start_time = time()
 
                         push!(config_row[if run_baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
 
@@ -411,7 +411,7 @@ function benchmark_best_configs(configs)
 
                         push!(config_row[if run_baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
-                        config_row["time_spent"] += (Dates.now() - start_time) / Second(1)
+                        config_row["time_spent"] += (time() - start_time)
                     end
                 end
 
@@ -558,16 +558,19 @@ function main()
     results = Channel(Inf)
     @sync begin
         # measure configurations on workers
+        worker_jobs = Dict()
         for p in workers()
             errormonitor(@async begin
                 while length(pending) > 0
+                    start_time = time()
+
                     i = popfirst!(pending)
                     config_row = configs[i, :]
+                    worker_jobs[p] = (; start_time, i)
                     try
-                        start_time = Dates.now()
                         config_row.time, config_row.category =
                             remotecall_fetch(measure_config, p, NamedTuple(config_row))
-                        end_time = Dates.now()
+                        end_time = time()
 
                         push!(results, (p, i, start_time, end_time))
 
@@ -590,41 +593,77 @@ function main()
                         # recycle our worker
                         rmprocs(p; waitfor=30)
                         p = addworkers(1)[1]
+                    finally
+                        delete!(worker_jobs, p)
                     end
                 end
             end)
         end
 
-        # process the results
+        # monitor progress
         errormonitor(@async begin
             while !isempty(pending) || !isempty(results)
-                worker, i, start_time, end_time = take!(results)
+                # process results
+                if isready(results)
+                    while isready(results)
+                        worker, i, start_time, end_time = take!(results)
 
-                # Update configuration
-                config_row = configs[i, :]
-                @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
+                        # Update configuration
+                        config_row = configs[i, :]
+                        @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
+                    end
 
-                # Save results in case the process crashes.
-                open(config_path, "w") do io
-                    serialize(io, configs)
+                    # Save results in case the process crashes.
+                    open(config_path, "w") do io
+                        serialize(io, configs)
+                    end
                 end
 
-                # Update progress bar
-                counter_dict_abs = Dict(counter(configs[!, "category"]))
-                counter_dict_rel = Dict(k => "$(round(100 * v / sum(values(counter_dict_abs)); sigdigits=3))%" for (k, v) in counter_dict_abs)
-                next!(p; showvalues=[
-                    (:N, config_row.N),
-                    (:transpose, get_label(config_row.transpose_a, config_row.transpose_b)),
-                    (:block_shape, (config_row.BLOCK_M, config_row.BLOCK_N, config_row.BLOCK_K)),
-                    (:num_warps, (config_row.WARPS_M, config_row.WARPS_N)),
-                    (:op_shape, (config_row.OP_M, config_row.OP_N, config_row.OP_K)),
-                    (:kernel, config_row.kernel_str),
-                    (:counters, counter_dict_abs),
-                    (:counters_relative, counter_dict_rel),
-                    (:last_result, "$(config_row.category) -- $(prettytime(config_row.time))"),
-                    (:last_iteration_time, end_time - start_time)
-                ])
+                # update the progress bar
+                function showvalues()
+                    vals = []
+
+                    # worker stats
+                    for worker in workers()
+                        job = get(worker_jobs, worker, nothing)
+                        if job === nothing
+                            push!(vals, ("worker $worker", "idle"))
+                        else
+                            config_row = configs[job.i, :]
+                            elapsed = time() - job.start_time
+                            push!(vals, ("worker $worker", "$(prettytime(elapsed)) @ $(repr_row(config_row))"))
+                        end
+                    end
+
+                    push!(vals, ("", ""))
+
+                    # job state
+                    category_counters = Dict(counter(configs[!, "category"]))
+                    for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
+                        abs = category_counters[k]
+                        rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
+                        push!(vals, (k, "$(abs) ($(rel)%)"))
+                    end
+
+                    push!(vals, ("", ""))
+
+                    # gpu stats
+                    dev = NVML.Device(parent_uuid(device()))
+                    push!(vals, ("power usage", "$(NVML.power_usage(dev)) W"))
+                    push!(vals, ("temperature", "$(NVML.temperature(dev)) °C"))
+                    meminfo = NVML.memory_info(dev)
+                    push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
+                    utilization = NVML.utilization_rates(dev)
+                    push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
+
+                    vals
+                end
+                num_finished = num_pending - length(pending)
+                update!(p, num_finished; showvalues)
+
+                sleep(5)
             end
+            finish!(p)
         end)
     end
 
@@ -668,6 +707,8 @@ function main()
 end
 
 if !isinteractive() && myid() == 1
+    isfile(PIDFILE) && error("Another tuning process is already running. If this is not the case, please remove the file $(PIDFILE).")
+
     # Spawn workers
     cpu_memory = Sys.free_memory()
     gpu_memory = CUDA.available_memory()
