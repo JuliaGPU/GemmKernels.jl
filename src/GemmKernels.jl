@@ -4,11 +4,11 @@ using CUDA
 using LinearAlgebra
 
 # utilities
+include("vectorisation.jl")
+include("bitarrayindex.jl")
 include("tiling.jl")
 include("array.jl")
 include("utils.jl")
-include("vectorisation.jl")
-include("bitarrayindex.jl")
 
 # framework
 include("mma.jl")

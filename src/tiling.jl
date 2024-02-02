@@ -1,5 +1,7 @@
 module Tiling
 
+using GemmKernels: BitArrayIndex
+
 # -----------
 # Tile object
 # -----------
@@ -7,7 +9,7 @@ module Tiling
 export Tile
 
 """
-    Tile{size, names, T}
+    Tile{size, names}
 
 A [`Tile`](@ref) represents a part of a multidimensional tensor that is
 contiguous and aligned to the tensor's dimensions.
@@ -16,11 +18,7 @@ Note that the dimensions of this [`Tile`](@ref) are named. Similar to a
 [`NamedTuple`](@ref), the names are stored as a type parameter `names`.
 
 A [`Tile`](@ref) contains several fields:
-- `index`: A [`NamedTuple`](@ref) that represents the "first" multidimensional
-           index of the parent tensor that this tile contains.
-- `base`: The part of the `index` that depends on runtime values, such as the
-          `threadIdx`.
-- `offset`: The part of the `index` that is known at compile-time.
+- `index`: The offset of this tile relative to its parent tensor.
 - `size`: A [`NamedTuple`](@ref) representing the size of the tile along each
           dimension.
 
@@ -31,20 +29,18 @@ you intend to keep.
 For example, to drop the `K` dimension of a tile containing `M`, `N` and `K`
 dimensions, you can use the syntax `tile.MN`.
 """
-struct Tile{size, names, T}
-    base::NamedTuple{names, T}
-    offset::NamedTuple{names, T}
+struct Tile{size, names}
+    index::NamedTuple{names, BitArrayIndex}
 end
 
-@inline _size(tile::Tile{size, names, T}) where {size, names, T} = size
-@inline _names(tile::Tile{size, names, T}) where {size, names, T} = names
+@inline _size(tile::Tile{size, names}) where {size, names} = size
+@inline _names(tile::Tile{size, names}) where {size, names} = names
 
 """
     Tile(; kw_args...)
 
-Creates a new [`Tile`](@ref) of the given `size`, with zero `base` and
-`offset`. The `size` for each dimension must be specified by a keyword
-argument.
+Creates a new [`Tile`](@ref) of the given `size`, with zero `index`.
+The `size` for each dimension must be specified by a keyword argument.
 
 # Example
 ```julia
@@ -54,7 +50,7 @@ GemmKernels.Tiling.Tile(M = 24, N = 16, K = 4)
 Tile(; kw_args...) = Tile((; kw_args...))
 
 """
-    Tile(size::NamedTuple{names, T})
+    Tile(size::NamedTuple{names})
 
 Creates a new [`Tile`](@ref) of the given `size`, with zero `base` and
 `offset`.
@@ -67,50 +63,45 @@ Creates a new [`Tile`](@ref) of the given `size`, with zero `base` and
 GemmKernels.Tiling.Tile((M = 24, N = 16, K = 4))
 ```
 """
-@inline Tile(size::NamedTuple{names, T}) where {names, T} = Tile{size, names, T}(map(x -> 0, size), map(x -> 0, size))
+@inline Tile(size::NamedTuple{names}) where {names} = Tile{size, names}(map(x -> constant(0), size))
 
 # ------------
 # Pretty print
 # ------------
 
-function Base.show(io::IO, tile::Tile{size, names, T}) where {size, names, T}
-    print(io, "base:   ", tile.base, '\n')
-    print(io, "offset: ", tile.offset, '\n')
-    print(io, "size:   ", tile.size)
+function Base.show(io::IO, tile::Tile{size, names}) where {size, names}
+    print(io, "index: ", tile.index, '\n')
+    print(io, "size:  ", tile.size)
 end
 
 # --------------------------
 # Projection & transposition
 # --------------------------
 
-@inline _projection_impl(base::NamedTuple{names, T}, offset::NamedTuple{names, T}, size::NamedTuple{names, T}) where {names, T} = Tile{size, names, T}(base, offset)
+@inline _projection_impl(index::NamedTuple{names}, size::NamedTuple{names}) where {names} = Tile{size, names}(index)
 
-@generated function _getproperty_impl(tile::Tile{size, names, T}, ::Val{sym}) where {names, T, sym, size}
-    if sym == :base || sym == :offset
+@generated function _getproperty_impl(tile::Tile{size, names}, ::Val{sym}) where {names, sym, size}
+    if sym == :index
         # fields
         return :(getfield(tile, sym))
     elseif sym == :size
         # size
         return size
-    elseif sym == :index
-        # index: sum of base and offset
-        return :(map(+, getfield(tile, :base), getfield(tile, :offset)))
     else
         # tile projection
         sym_str = String(sym)
         names = ntuple(i -> Symbol(sym_str[i]), length(sym_str))
-        return :( _projection_impl(NamedTuple{$names}(getfield(tile, :base)),
-                                   NamedTuple{$names}(getfield(tile, :offset)),
+        return :( _projection_impl(NamedTuple{$names}(getfield(tile, :index)),
                                    NamedTuple{$names}(size)) )
     end
 end
 
-@generated function Base.transpose(tile::Tile{size, names, T}) where {names, T, size}
+@generated function Base.transpose(tile::Tile{size, names}) where {names, size}
     new_names = reverse(names)
-    return :( _projection_impl(NamedTuple{$new_names}(tile.base), NamedTuple{$new_names}(tile.offset), NamedTuple{$new_names}(size)) )
+    return :( _projection_impl(NamedTuple{$new_names}(tile.index), NamedTuple{$new_names}(size)) )
 end
 
-@inline Base.getproperty(tile::Tile{size, names, T}, sym::Symbol) where {names, T, size} = _getproperty_impl(tile, Val(sym))
+@inline Base.getproperty(tile::Tile{size, names}, sym::Symbol) where {names, size} = _getproperty_impl(tile, Val(sym))
 
 # -------------
 # Linearisation
@@ -119,17 +110,17 @@ end
 export linearise
 
 """
-    linearise(coord, dims)
+    linearise(tile, dims)
 
-Convert a multidimensional coordinate to a linear index with respect to a
+Convert a multidimensional tile to a linear index with respect to a
 tensor with dimensions `dims`.
 
 # Arguments
-- `coord`: The coordinate (base, offset, or index) to linearise.
+- `tile`: The tile to linearise.
 - `dims`: The dimensions of the parent tensor.
 """
-@inline function linearise(coord, dims)
-    ind = Tuple(coord) .+ 1
+@inline function linearise(tile::Tile, dims)
+    ind = Tuple(convert.(Int, tile.index)) .+ 1
     @inbounds return LinearIndices(Tuple(dims))[ind...]
 end
 
@@ -137,45 +128,23 @@ end
 # Translation
 # -----------
 
-export translate_base, translate_offset
+export translate
 
 """
-    translate_base(tile, offset)
+    translate(tile, offset)
 
-Translate (i.e. move) a [`Tile`](@ref) by a constant `offset`.
-The `offset` is added to the [`Tile`](@ref)'s base.
+Translate (i.e. move) a [`Tile`](@ref) by a variadic or constant `offset`.
 
 # Arguments
 - `tile`: The [`Tile`](@ref) to translate.
 - `offset`: The `offset` in each dimension.
 """
-function translate_base end
+function translate end
 
-"""
-    translate_offset(tile, offset)
-
-Translate (i.e. move) a [`Tile`](@ref) by a constant `offset`.
-The `offset` is added to the [`Tile`](@ref)'s base.
-
-# Arguments
-- `tile`: The [`Tile`](@ref) to translate.
-- `offset`: The `offset` in each dimension.
-"""
-function translate_offset end
-
-@inline function translate_base(tile::Tile{size, names, T}, offset::NamedTuple{names, T}) where {names, T, size}
-    new_base = map(+, tile.base, offset)
-    return Tile{size, names, T}(new_base, tile.offset)
+@inline function translate(tile::Tile{size, names}, offset::NamedTuple{names}) where {names, size}
+    new_index = map(+, tile.index, offset)
+    return Tile{size, names}(new_index)
 end
-
-@inline translate_base(tile::Tile{size, names, T}, offset::Tuple) where {names, T, size} = translate_base(tile, NamedTuple{names}(offset))
-
-@inline function translate_offset(tile::Tile{size, names, T}, offset::NamedTuple{names, T}) where {names, T, size}
-    new_offset = map(+, tile.offset, offset)
-    return Tile{size, names, T}(tile.base, new_offset)
-end
-
-@inline translate_offset(tile::Tile{size, names, T}, offset::Tuple) where {names, T, size} = translate_offset(tile, NamedTuple{names}(offset))
 
 # -------------
 # TileIterators
@@ -184,14 +153,14 @@ end
 export TileIterator
 
 """
-    TileIterator{names, T, N, R}
+    TileIterator{names, N, R}
 
 A [`TileIterator`](@ref) represents an iterator over a set of [`Tile`](@ref)s.
 
 See also: [`subdivide`](@ref), [`parallelise`](@ref).
 """
-struct TileIterator{tile_size, parent_size, names, T, S, idxs, col_major}
-    parent::Tile{parent_size, names, T}
+struct TileIterator{tile_size, parent_size, names, S, idxs, col_major}
+    parent::Tile{parent_size, names}
     subtile_indices::S
     idx::Int32
 end
@@ -221,7 +190,7 @@ the calling entity.
 - `idx`: The identity of the calling entity.
 - `count`: The number of cooperating entities.
 """
-@inline function parallelise(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, idxs, col_major::Bool=true) where {names, T, size, tile_sz}
+@inline function parallelise(tile::Tile{size, names}, tiling_size::Tile{tile_sz, names}, idx, idxs, col_major::Bool=true) where {names, size, tile_sz}
     # Transpose
     tile = col_major ? tile : transpose(tile)
     tiling_size = col_major ? tiling_size : transpose(tiling_size)
@@ -232,7 +201,7 @@ the calling entity.
     parent = tile
     subtile_indices = CartesianIndices(num_tiles)
 
-    return TileIterator{_size(tiling_size), _size(tile), _names(tile), T, typeof(subtile_indices), idxs, col_major}(parent, subtile_indices, convert(Int32, idx))
+    return TileIterator{_size(tiling_size), _size(tile), _names(tile), typeof(subtile_indices), idxs, col_major}(parent, subtile_indices, convert(Int32, idx))
 end
 
 """
@@ -252,7 +221,7 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
 - `idx`: The identity of the calling entity.
 - `count`: The number of cooperating entities.
 """
-@inline function subdivide(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count) where {names, T, size, tile_sz}
+@inline function subdivide(tile::Tile{size, names}, tiling_size::Tile{tile_sz, names}, idx, count) where {names, size, tile_sz}
     iter = iterate(parallelise(tile, tiling_size, idx, count))::Tuple{Tile,Any}
     @boundscheck begin
         iter === nothing && throw(BoundsError())
@@ -260,7 +229,7 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
     @inbounds iter[1]
 end
 
-@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, T, S, idxs, col_major}, state = 1) where {tile_size, parent_size, names, T, S, idxs, col_major}
+@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, S, idxs, col_major}, state = 1) where {tile_size, parent_size, names, T, S, idxs, col_major}
     if idxs > length(it.subtile_indices) && it.idx > length(it.subtile_indices)
         # the number of cooperating entities exceeds the number of subtiles.
         # the short-circuiting check against a static value is crucial for performance,
@@ -272,12 +241,11 @@ end
         return nothing
     end
 
-    # Calculate base and offset in number of tiles
-    @inbounds base   = Tuple(it.parent.base)   .+ (Tuple(it.subtile_indices[it.idx]) .- 1) .* Tuple(tile_size)
-    @inbounds offset = Tuple(it.parent.offset) .+ (Tuple(it.subtile_indices[state])  .- 1) .* Tuple(tile_size)
+    # Calculate index in number of tiles
+    @inbounds index = Tuple(it.parent.index) .+ Tuple(variadic(it.subtitle_indices[it.idx])) .* Tuple(tile_size) .+ Tuple(constant(it.subtile_indices[state]) .- 1) .* Tuple(tile_size)
 
     # Create tile
-    tile = Tile{tile_size, names, T}(NamedTuple{names, T}(base), NamedTuple{names, T}(offset))
+    tile = Tile{tile_size, names}(NamedTuple{names}(index))
 
     # Transpose
     tile = col_major ? tile : transpose(tile)

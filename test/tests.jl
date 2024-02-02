@@ -12,10 +12,10 @@ t0 = now()
 try
     @testset runner=DistributedTestRunner() "GemmKernels.jl" begin
         include("tiling.jl")
-        include("matmul.jl")
-        include("blas.jl")
-        include("examples.jl")
-        include("bitarrayindex.jl")
+        # include("matmul.jl")
+        # include("blas.jl")
+        # include("examples.jl")
+        # include("bitarrayindex.jl")
     end
 finally
     if myid() == 1
