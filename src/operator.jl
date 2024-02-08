@@ -87,7 +87,6 @@ for (layout_type, convert_index_func) in [
 
             y, x = (tile.base.M + tile.offset.M + op_y, tile.base.N + tile.offset.N + op_x)
 
-
             frag = LocalArray{Tuple{M ÷ mb, N ÷ nb}, AT}(undef)
             @loopinfo unroll for m = 1 : M ÷ mb
                 @loopinfo unroll for n = 1 : N ÷ nb
@@ -178,47 +177,43 @@ end
 for (layout_type, wmma_layout_type, convert_index_func) in [
                                         (Layout.ColMajor, WMMA.ColMajor, identity),
                                         (Layout.UnsafeAlignedColMajor, WMMA.ColMajor, identity),
-                                        (Layout.RowMajor, WMMA.RowMajor, x -> reverse(Tuple(x))),
-                                        (Layout.UnsafeAlignedRowMajor, WMMA.RowMajor, x -> reverse(Tuple(x))),
+                                        (Layout.RowMajor, WMMA.RowMajor, transpose),
+                                        (Layout.UnsafeAlignedRowMajor, WMMA.RowMajor, transpose),
                                        ]
     @eval begin
         @inline function load_a(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
 
-            linear_base = linearise($convert_index_func(tile.base), size(workspace))
-            linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
+            linear_index = linearise($convert_index_func(tile), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(CT)
+            ptr = pointer(workspace, linear_index)
             return WMMA.load_a(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
         @inline function load_b(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
 
-            linear_base = linearise($convert_index_func(tile.base), size(workspace))
-            linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
+            linear_index = linearise($convert_index_func(tile), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(CT)
+            ptr = pointer(workspace, linear_index)
             return WMMA.load_b(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
         @inline function load_c(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{AT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
 
-            linear_base = linearise($convert_index_func(tile.base), size(workspace))
-            linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
+            linear_index = linearise($convert_index_func(tile), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(AT)
+            ptr = pointer(workspace, linear_index)
             return WMMA.load_c(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
         @inline function store_d(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{$layout_type{AT}}, workspace, frag, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
 
-            linear_base = linearise($convert_index_func(tile.base), size(workspace))
-            linear_offset = linearise($convert_index_func(tile.offset), size(workspace))
+            linear_index = linearise($convert_index_func(tile), size(workspace))
 
-            ptr = pointer(workspace, linear_base) + (linear_offset - 1) * sizeof(AT)
+            ptr = pointer(workspace, linear_index)
             WMMA.store_d(ptr, frag, size(workspace, 1), $wmma_layout_type, conf)
         end
     end
@@ -372,27 +367,23 @@ struct VoltaMmaSyncOp end
     # Index: (m5|m2|k1|k0)
     a_frag = LocalArray{Tuple{16}, Float16}(undef)
 
-    warp_m = variadic(tile.base.M) + constant(tile.offset.M)
-    warp_n = variadic(tile.base.N) + constant(tile.offset.N)
-    warp_k = variadic(tile.base.K) + constant(tile.offset.K)
-
     @unrolled for ins = 0:1
         m = b(tid(), 0, 0)  +
             b(tid(), 1, 1)  +
-            b(warp_k, 3, 2) +
+            b(tile.index.K, 3, 2) +
             b(tid(), 2, 3)  +
             b(tid(), 4, 4)  +
             b(ins, 0, 5)
 
         k = constant(0)
 
-        @inbounds val = vloada(Vec{8, Float16}, workspace, Layout.swizzle(L, warp_m+m, warp_k+k))
+        @inbounds val = vloada(Vec{8, Float16}, workspace, Layout.swizzle(L, tile.index.M+m, tile.index.K+k))
 
         @unrolled for offset = 0:7
-            frag_offset = b(offset, 0, 0) +                     # k0
-                          b(offset, 1, 1) +                     # k1
-                          (b(offset, 2, 2) ⊻ b(warp_k, 3, 2)) + # m2 = (m2+k3) + k3
-                          b(ins, 0, 3)                          # m5
+            frag_offset = b(offset, 0, 0) +                           # k0
+                          b(offset, 1, 1) +                           # k1
+                          (b(offset, 2, 2) ⊻ b(tile.index.K, 3, 2)) + # m2 = (m2+k3) + k3
+                          b(ins, 0, 3)                                # m5
 
             @inbounds @immutable a_frag[frag_offset] = val[offset].value
         end
@@ -405,10 +396,6 @@ end
     # index: (n5|n2|n1|n0)
     b_frag = LocalArray{Tuple{16}, Float16}(undef)
 
-    warp_m = variadic(tile.base.M) + constant(tile.offset.M)
-    warp_n = variadic(tile.base.N) + constant(tile.offset.N)
-    warp_k = variadic(tile.base.K) + constant(tile.offset.K)
-
     @unrolled for ins = 0:1
         k = b(tid(), 0, 0) +
             b(tid(), 1, 1)
@@ -417,7 +404,7 @@ end
             b(tid(), 4, 4) +
             b(ins, 0, 5)
 
-        @inbounds val = vloada(Vec{8, Float16}, workspace, Layout.swizzle(L, warp_k+k, warp_n+n))
+        @inbounds val = vloada(Vec{8, Float16}, workspace, Layout.swizzle(L, tile.index.K+k, tile.index.N+n))
 
         @unrolled for offset = 0:7
             frag_offset = b(offset, 0, 0) +    # n0
@@ -434,8 +421,6 @@ end
 
 @inline function store_d(::Type{VoltaMmaSyncOp}, ::Type{Layout.Padded{Layout.UnsafeAlignedRowMajor{Float16}, P}}, workspace, frag, tile::Tile) where {P}
     # index: (m5|m2|m1|n5|n4|n2|n0)
-    warp_m = variadic(tile.base.M) + constant(tile.offset.M)
-    warp_n = variadic(tile.base.N) + constant(tile.offset.N)
 
     @unrolled for ins = 0:15
         # TODO: vectorise
@@ -444,7 +429,7 @@ end
                 b(ins, 3, 1) +
                 b(tid(), 2, 3) +
                 b(tid(), 4, 4) +
-                warp_m
+                tile.index.M
 
             n = b(offset, 0, 0) +
                 b(tid(), 1, 1) +
@@ -452,7 +437,7 @@ end
                 b(tid(), 3, 3) +
                 b(ins, 1, 4) +
                 b(ins, 2, 5) +
-                warp_n
+                tile.index.N
 
             frag_index = b(offset, 0, 0) +   # n0
                          b(ins, 0, 1) +      # n2

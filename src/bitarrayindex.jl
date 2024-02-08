@@ -30,6 +30,25 @@ struct BitArrayIndex
     variadic_part::UInt # the variadic part of the index
 end
 
+function Base.show(io::IO, I::BitArrayIndex)
+    print(io, convert(Int, I))
+    print(io, " (")
+
+    for i in 8 * sizeof(UInt) - 1 : -1 : 0
+        mask = 1 << i
+
+        if (I.known_zero & mask) != 0
+            print(io, "0")
+        elseif (I.known_one & mask) != 0
+            print(io, "1")
+        else
+            print(io, "V")
+        end
+    end
+
+    print(io, ")")
+end
+
 constant(i::Int) = BitArrayIndex(~reinterpret(UInt, i), reinterpret(UInt, i), reinterpret(UInt, 0))
 variadic(i::Int) = BitArrayIndex(reinterpret(UInt, 0), reinterpret(UInt, 0), reinterpret(UInt, i))
 Base.convert(::Type{UInt}, I::BitArrayIndex) = I.variadic_part + I.known_one

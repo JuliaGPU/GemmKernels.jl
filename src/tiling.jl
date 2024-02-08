@@ -1,6 +1,6 @@
 module Tiling
 
-using GemmKernels: BitArrayIndex
+using GemmKernels: BitArrayIndex, constant, variadic
 
 # -----------
 # Tile object
@@ -9,7 +9,7 @@ using GemmKernels: BitArrayIndex
 export Tile
 
 """
-    Tile{size, names}
+    Tile{size, names, N}
 
 A [`Tile`](@ref) represents a part of a multidimensional tensor that is
 contiguous and aligned to the tensor's dimensions.
@@ -29,8 +29,8 @@ you intend to keep.
 For example, to drop the `K` dimension of a tile containing `M`, `N` and `K`
 dimensions, you can use the syntax `tile.MN`.
 """
-struct Tile{size, names}
-    index::NamedTuple{names, BitArrayIndex}
+struct Tile{size, names, N}
+    index::NamedTuple{names, NTuple{N, BitArrayIndex}}
 end
 
 @inline _size(tile::Tile{size, names}) where {size, names} = size
@@ -63,7 +63,7 @@ Creates a new [`Tile`](@ref) of the given `size`, with zero `base` and
 GemmKernels.Tiling.Tile((M = 24, N = 16, K = 4))
 ```
 """
-@inline Tile(size::NamedTuple{names}) where {names} = Tile{size, names}(map(x -> constant(0), size))
+@inline Tile(size::NamedTuple{names}) where {names} = Tile{size, names, length(size)}(map(x -> constant(0), size))
 
 # ------------
 # Pretty print
@@ -78,12 +78,20 @@ end
 # Projection & transposition
 # --------------------------
 
-@inline _projection_impl(index::NamedTuple{names}, size::NamedTuple{names}) where {names} = Tile{size, names}(index)
+@inline _projection_impl(index::NamedTuple{names, NTuple{N, T}}, size::NamedTuple{names, NTuple{N, U}}) where {names, N, T, U} = Tile{size, names, N}(index)
 
-@generated function _getproperty_impl(tile::Tile{size, names}, ::Val{sym}) where {names, sym, size}
+@inline _base_part(x::BitArrayIndex) = x.variadic_part
+@inline _offset_part(x::BitArrayIndex) = x.known_one
+
+@generated function _getproperty_impl(tile::Tile{size, names, N}, ::Val{sym}) where {names, sym, N, size}
     if sym == :index
         # fields
         return :(getfield(tile, sym))
+    # Fallback for old code that uses the base and offset fields.
+    elseif sym == :base
+        return :(map(_base_part, getfield(tile, :index)))
+    elseif sym == :offset
+        return :(map(_offset_part, getfield(tile, :index)))
     elseif sym == :size
         # size
         return size
@@ -101,7 +109,7 @@ end
     return :( _projection_impl(NamedTuple{$new_names}(tile.index), NamedTuple{$new_names}(size)) )
 end
 
-@inline Base.getproperty(tile::Tile{size, names}, sym::Symbol) where {names, size} = _getproperty_impl(tile, Val(sym))
+@inline Base.getproperty(tile::Tile{size, names, N}, sym::Symbol) where {names, size, N} = _getproperty_impl(tile, Val(sym))
 
 # -------------
 # Linearisation
@@ -120,7 +128,7 @@ tensor with dimensions `dims`.
 - `dims`: The dimensions of the parent tensor.
 """
 @inline function linearise(tile::Tile, dims)
-    ind = Tuple(convert.(Int, tile.index)) .+ 1
+    ind = Tuple(map(x -> convert(Int, x), tile.index)) .+ 1
     @inbounds return LinearIndices(Tuple(dims))[ind...]
 end
 
@@ -141,9 +149,9 @@ Translate (i.e. move) a [`Tile`](@ref) by a variadic or constant `offset`.
 """
 function translate end
 
-@inline function translate(tile::Tile{size, names}, offset::NamedTuple{names}) where {names, size}
+@inline function translate(tile::Tile{size, names, N}, offset::NamedTuple{names, NTuple{N, BitArrayIndex}}) where {names, size, N}
     new_index = map(+, tile.index, offset)
-    return Tile{size, names}(new_index)
+    return Tile{size, names, N}(new_index)
 end
 
 # -------------
@@ -159,8 +167,8 @@ A [`TileIterator`](@ref) represents an iterator over a set of [`Tile`](@ref)s.
 
 See also: [`subdivide`](@ref), [`parallelise`](@ref).
 """
-struct TileIterator{tile_size, parent_size, names, S, idxs, col_major}
-    parent::Tile{parent_size, names}
+struct TileIterator{tile_size, parent_size, names, N, S, idxs, col_major}
+    parent::Tile{parent_size, names, N}
     subtile_indices::S
     idx::Int32
 end
@@ -188,9 +196,9 @@ the calling entity.
 - `tile`: The [`Tile`](@ref) to parallelise.
 - `tiling_size`: A `NamedTuple` indicating the size of a subtile along each dimension.
 - `idx`: The identity of the calling entity.
-- `count`: The number of cooperating entities.
+- `idxs`: The number of cooperating entities.
 """
-@inline function parallelise(tile::Tile{size, names}, tiling_size::Tile{tile_sz, names}, idx, idxs, col_major::Bool=true) where {names, size, tile_sz}
+@inline function parallelise(tile::Tile{size, names, N}, tiling_size::Tile{tile_sz, names, N}, idx, idxs, col_major::Bool=true) where {names, size, N, tile_sz}
     # Transpose
     tile = col_major ? tile : transpose(tile)
     tiling_size = col_major ? tiling_size : transpose(tiling_size)
@@ -201,7 +209,7 @@ the calling entity.
     parent = tile
     subtile_indices = CartesianIndices(num_tiles)
 
-    return TileIterator{_size(tiling_size), _size(tile), _names(tile), typeof(subtile_indices), idxs, col_major}(parent, subtile_indices, convert(Int32, idx))
+    return TileIterator{_size(tiling_size), _size(tile), _names(tile), N, typeof(subtile_indices), idxs, col_major}(parent, subtile_indices, convert(Int32, idx))
 end
 
 """
@@ -229,7 +237,7 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
     @inbounds iter[1]
 end
 
-@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, S, idxs, col_major}, state = 1) where {tile_size, parent_size, names, T, S, idxs, col_major}
+@inline function Base.iterate(it::TileIterator{tile_size, parent_size, names, N, S, idxs, col_major}, state = 1) where {tile_size, parent_size, names, N, S, idxs, col_major}
     if idxs > length(it.subtile_indices) && it.idx > length(it.subtile_indices)
         # the number of cooperating entities exceeds the number of subtiles.
         # the short-circuiting check against a static value is crucial for performance,
@@ -242,10 +250,23 @@ end
     end
 
     # Calculate index in number of tiles
-    @inbounds index = Tuple(it.parent.index) .+ Tuple(variadic(it.subtitle_indices[it.idx])) .* Tuple(tile_size) .+ Tuple(constant(it.subtile_indices[state]) .- 1) .* Tuple(tile_size)
+    @inbounds variadic_part = map(x -> variadic(x-1), Tuple(it.subtile_indices[it.idx])) .* Tuple(tile_size)
+
+    # Mask away bits in the variadic part that we know are 0.
+    #
+    # Suppose we parallelise a M x N = 16 x 32 tile in 8 x 4 tiles over 8 warps.
+    # We know that bit 4 up until 63 of M and N are 0. This is
+    # because in a single iteration, all warps handle a 16 x 16 tile,
+    # so bits higher than position 4 will be set by the constant offset.
+
+    mask = map((x, y) -> constant(x*y-1), Tuple(it.subtile_indices[idxs]), Tuple(tile_size))
+
+    @inbounds variadic_part = variadic_part .& mask
+    @inbounds constant_part = map(x -> constant(x-1), Tuple(it.subtile_indices[state])) .* Tuple(tile_size)
+    @inbounds index = Tuple(it.parent.index) .+ variadic_part .+ constant_part
 
     # Create tile
-    tile = Tile{tile_size, names}(NamedTuple{names}(index))
+    tile = Tile{tile_size, names, N}(NamedTuple{names}(index))
 
     # Transpose
     tile = col_major ? tile : transpose(tile)

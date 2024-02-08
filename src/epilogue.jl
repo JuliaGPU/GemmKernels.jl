@@ -3,6 +3,7 @@ module Epilogue
 
 using CUDA
 using GemmKernels
+using GemmKernels: constant, variadic
 using GemmKernels.Tiling
 using LLVMLoopInfo: @loopinfo
 
@@ -28,7 +29,7 @@ struct Default end
         @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
             x = @inbounds Layout.load(conf.shared_d_layout, shmem_d, thread_tile)
             x = transform(x, thread_tile)
-            @inbounds Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
+            @inbounds Layout.store!(conf.global_d_layout, d, x, translate(thread_tile, (M = variadic(block_i), N = variadic(block_j))))
         end
     end
 end
@@ -66,9 +67,9 @@ end
     @loopinfo unroll for warp_tile = parallelise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
         @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
             x = @inbounds Layout.load(conf.shared_d_layout, shmem_d, thread_tile)
-            x = apply_bias(x, ep.bias_pointer, translate_base(thread_tile, (M = block_i, N = block_j)))
+            x = apply_bias(x, ep.bias_pointer, translate(thread_tile, (M = variadic(block_i), N = variadic(block_j))))
             x = transform(x, thread_tile)
-            @inbounds Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
+            @inbounds Layout.store!(conf.global_d_layout, d, x, translate(thread_tile, (M = variadic(block_i), N = variadic(block_j))))
         end
     end
 end

@@ -145,9 +145,7 @@ abstract type UnsafeAlignedColMajor{T} <: LayoutBase{T} end
 @inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = size[1] * size[2]
 
-    linear_base = linearise(tile.base, Base.size(workspace))
-    linear_offset = linearise(tile.offset, Base.size(workspace))
-    linear_idx = linear_base + linear_offset - 1
+    linear_idx = linearise(tile, Base.size(workspace))
 
     @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
     return vloada(Vec{N, T}, pointer(workspace, linear_idx))
@@ -156,9 +154,7 @@ end
 @inline Base.@propagate_inbounds function store!(::Type{<:UnsafeAlignedColMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
     N = size[1] * size[2]
 
-    linear_base = linearise(tile.base, Base.size(workspace))
-    linear_offset = linearise(tile.offset, Base.size(workspace))
-    linear_idx = linear_base + linear_offset - 1
+    linear_idx = linearise(tile, Base.size(workspace))
 
     @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
     vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
@@ -197,9 +193,7 @@ abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
 @inline Base.@propagate_inbounds function load(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = size[1] * size[2]
 
-    linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
-    linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
-    linear_idx = linear_base + linear_offset - 1
+    linear_idx = linearise(transpose(tile), Base.size(workspace))
 
     @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
     return vloada(Vec{N, T}, pointer(workspace, linear_idx))
@@ -208,10 +202,8 @@ end
 @inline Base.@propagate_inbounds function store!(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, values, tile::Tile{size}) where {T, size}
     N = size[1] * size[2]
 
-    linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
-    linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
+    linear_idx = linearise(transpose(tile), Base.size(workspace))
 
-    linear_idx = linear_base + linear_offset - 1
     @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
     vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
 end
@@ -416,18 +408,12 @@ end
 
 @inline Base.@propagate_inbounds function store!(L::Type{VoltaSwizzledOperandA{Float16}}, workspace, value, tile::Tile)
     # TODO: Boundschecking logic.
-    m = variadic(tile.base.M) + constant(tile.offset.M)
-    k = variadic(tile.base.K) + constant(tile.offset.K)
-
-    @inbounds vstorea!(Vec{4, Float16}, workspace, Layout.swizzle(L, m, k), value)
+    @inbounds vstorea!(Vec{4, Float16}, workspace, Layout.swizzle(L, tile.index.M, tile.index.K), value)
 end
 
 @inline Base.@propagate_inbounds function store!(L::Type{VoltaSwizzledOperandB{Float16}}, workspace, value, tile::Tile)
     # TODO: Boundchecking logic.
-    k = variadic(tile.base.K) + constant(tile.offset.K)
-    n = variadic(tile.base.N) + constant(tile.offset.N)
-
-    @inbounds vstorea!(Vec{8, Float16}, workspace, Layout.swizzle(L, k, n), value)
+    @inbounds vstorea!(Vec{8, Float16}, workspace, Layout.swizzle(L, tile.index.K, tile.index.N), value)
 end
 
 end

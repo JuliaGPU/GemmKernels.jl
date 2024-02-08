@@ -10,6 +10,7 @@ GPUCompiler = "61eb1bfa-7361-4325-ad38-22787b887f55"
 LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 LLVMLoopInfo = "8b046642-f1f6-4319-8d3c-209ddc03c586"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Octavian = "6fd5a793-0b7e-452c-907f-f8bfe9c57db4"
 
 [compat]
 CUDA = "3.5, 4, 5"
