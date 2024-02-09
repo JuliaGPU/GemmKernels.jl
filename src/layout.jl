@@ -172,8 +172,7 @@ abstract type Diagonal{T} <: LayoutBase{T} end
 
     # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
     # Only load on the diagonal, i.e. if row and column are equal.
-    # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
-    return ntuple(k -> VecElement{Float16}(tile.index[1] + k - 1 == tile.index[2] ? workspace[tile.index[2] + 1] : 0), Val(8))
+    return ntuple(k -> VecElement{Float16}(convert(Int, tile.index[1] + constant(k-1)) == convert(Int, tile.index[2]) ? workspace[tile.index[2]] : 0), Val(8))
 end
 
 @inline threadblock_condition(layout_a::Type{<:Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
@@ -221,8 +220,8 @@ abstract type InterleavedColMajor{T} <: LayoutBase{T} end
 
     @loopinfo unroll for j = 1 : tile.size[2]
         @loopinfo unroll for i = 1 : tile.size[1]
-            t = translate_offset(tile, (i - 1, j - 1))
-            val = workspace[t.index[1] + 1, t.index[2] + 1]
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
+            val = workspace[t.index[1], t.index[2]]
             @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
@@ -233,9 +232,9 @@ end
 @inline Base.@propagate_inbounds function store!(::Type{<:InterleavedColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @loopinfo unroll for j = 1 : tile.size[2]
         @loopinfo unroll for i = 1 : tile.size[1]
-            t = translate_offset(tile, (i - 1, j - 1))
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
             val = value[(i - 1) * tile.size[2] + j]
-            workspace[t.index[1] + 1, t.index[2] + 1] = val
+            workspace[t.index[1], t.index[2]] = val
         end
     end
 end
@@ -253,8 +252,8 @@ abstract type InterleavedRowMajor{T} <: LayoutBase{T} end
 
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
-            val = workspace[t.index[2] + 1, t.index[1] + 1]
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
+            val = workspace[t.index[2], t.index[1]]
             @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
@@ -265,9 +264,9 @@ end
 @inline Base.@propagate_inbounds function store!(::Type{<:InterleavedRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
             val = value[(i - 1) * tile.size[2] + j]
-            workspace[t.index[2] + 1, t.index[1] + 1] = val
+            workspace[t.index[2], t.index[1]] = val
         end
     end
 end
@@ -290,9 +289,9 @@ end
 
     @loopinfo unroll for j = 1 : tile.size[2]
         @loopinfo unroll for i = 1 : tile.size[1]
-            t = translate_offset(tile, (i - 1, j - 1))
-            val = workspace[t.index[1] + 1, t.index[2] + 1, 1] + im *
-                  workspace[t.index[1] + 1, t.index[2] + 1, 2]
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
+            val = workspace[t.index[1], t.index[2], constant(0)] + im *
+                  workspace[t.index[1], t.index[2], constant(1)]
             @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
@@ -303,10 +302,10 @@ end
 @inline Base.@propagate_inbounds function store!(::Type{<:SplitColMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @loopinfo unroll for j = 1 : tile.size[2]
         @loopinfo unroll for i = 1 : tile.size[1]
-            t = translate_offset(tile, (i - 1, j - 1))
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
             val = value[(i - 1) * tile.size[2] + j]
-            workspace[t.index[1] + 1, t.index[2] + 1, 1] = val.re
-            workspace[t.index[1] + 1, t.index[2] + 1, 2] = val.im
+            workspace[t.index[1], t.index[2], constant(0)] = val.re
+            workspace[t.index[1], t.index[2], constant(1)] = val.im
         end
     end
 end
@@ -328,9 +327,9 @@ end
 
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
-            val = workspace[t.index[2] + 1, t.index[1] + 1, 1] + im *
-                  workspace[t.index[2] + 1, t.index[1] + 1, 2]
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
+            val = workspace[t.index[2], t.index[1], constant(0)] + im *
+                  workspace[t.index[2], t.index[1], constant(1)]
             @immutable x[(i - 1) * tile.size[2] + j] = val
         end
     end
@@ -341,10 +340,10 @@ end
 @inline Base.@propagate_inbounds function store!(::Type{<:SplitRowMajor{T}}, workspace, value, tile::Tile{size}) where {T, size}
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
-            t = translate_offset(tile, (i - 1, j - 1))
+            t = translate(tile, (constant(i - 1), constant(j - 1)))
             val = value[(i - 1) * tile.size[2] + j]
-            workspace[t.index[2] + 1, t.index[1] + 1, 1] = val.re
-            workspace[t.index[2] + 1, t.index[1] + 1, 2] = val.im
+            workspace[t.index[2], t.index[1], constant(0)] = val.re
+            workspace[t.index[2], t.index[1], constant(1)] = val.im
         end
     end
 end

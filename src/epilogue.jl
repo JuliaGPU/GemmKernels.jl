@@ -46,7 +46,7 @@ end
     dev_ptr = reinterpret(Core.LLVMPtr{Float32, AS.Global}, bias_pointer)
 
     # Load bias value for this column
-    col = thread_tile.index.N + 1
+    col = convert(Int, thread_tile.index.N) + 1
     b = unsafe_load(dev_ptr, col)
 
     return ntuple(k -> VecElement{Float32}(x[k].value + b), Val(4))

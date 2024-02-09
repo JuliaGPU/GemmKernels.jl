@@ -235,7 +235,7 @@ struct WMMAComplexOp{M, N, K, CT, AT} end
 # convert_index_func: function used to transpose the index in case of a row-major layout
 for (layout_type, base_layout, wmma_layout_type, convert_index_func) in [
                                         (Layout.SplitColMajor, Layout.UnsafeAlignedColMajor, WMMA.ColMajor, identity),
-                                        (Layout.SplitRowMajor, Layout.UnsafeAlignedRowMajor, WMMA.RowMajor, x -> reverse(Tuple(x))),
+                                        (Layout.SplitRowMajor, Layout.UnsafeAlignedRowMajor, WMMA.RowMajor, transpose),
                                        ]
     @eval begin
         @inline fragtype_a(::Type{WMMAComplexOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}) where {M, N, K, CT, AT} = NTuple{2, fragtype_a(WMMAOp{M, N, K, CT, AT}, $base_layout{CT})}
@@ -244,7 +244,7 @@ for (layout_type, base_layout, wmma_layout_type, convert_index_func) in [
 
         @inline function load_a(::Type{WMMAComplexOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
-            ind = linearise($convert_index_func(tile.index), (size(workspace)[1], size(workspace)[2]))
+            ind = linearise($convert_index_func(tile), (size(workspace)[1], size(workspace)[2]))
 
             return (WMMA.load_a(pointer(workspace, ind), size(workspace)[1], $wmma_layout_type, conf),
                     WMMA.load_a(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], $wmma_layout_type, conf))
@@ -252,7 +252,7 @@ for (layout_type, base_layout, wmma_layout_type, convert_index_func) in [
 
         @inline function load_b(::Type{WMMAComplexOp{M, N, K, CT, AT}}, ::Type{$layout_type{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
-            ind = linearise($convert_index_func(tile.index), (size(workspace)[1], size(workspace)[2]))
+            ind = linearise($convert_index_func(tile), (size(workspace)[1], size(workspace)[2]))
 
             return (WMMA.load_b(pointer(workspace, ind), size(workspace)[1], $wmma_layout_type, conf),
                     WMMA.load_b(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], $wmma_layout_type, conf))
@@ -260,7 +260,7 @@ for (layout_type, base_layout, wmma_layout_type, convert_index_func) in [
 
         @inline function load_c(::Type{WMMAComplexOp{M, N, K, CT, AT}}, ::Type{$layout_type{AT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
-            ind = linearise($convert_index_func(tile.index), (size(workspace)[1], size(workspace)[2]))
+            ind = linearise($convert_index_func(tile), (size(workspace)[1], size(workspace)[2]))
 
             return (WMMA.load_c(pointer(workspace, ind), size(workspace)[1], $wmma_layout_type, conf),
                     WMMA.load_c(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], $wmma_layout_type, conf))
@@ -268,7 +268,7 @@ for (layout_type, base_layout, wmma_layout_type, convert_index_func) in [
 
         @inline function store_d(::Type{WMMAComplexOp{M, N, K, CT, AT}}, ::Type{$layout_type{AT}}, workspace, frag, tile::Tile) where {M, N, K, CT, AT}
             conf = WMMA.Config{M, N, K, AT}
-            ind = linearise($convert_index_func(tile.index), (size(workspace)[1], size(workspace)[2]))
+            ind = linearise($convert_index_func(tile), (size(workspace)[1], size(workspace)[2]))
 
             WMMA.store_d(pointer(workspace, ind), frag[1], size(workspace)[1], $wmma_layout_type, conf)
             WMMA.store_d(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), frag[2], size(workspace)[1], $wmma_layout_type, conf)
@@ -307,7 +307,7 @@ struct WMMADualOp{M, N, K, CT, AT} end
 
 @inline function load_a(::Type{WMMADualOp{M, N, K, CT, AT}}, ::Type{Layout.SplitColMajor{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
     conf = WMMA.Config{M, N, K, AT}
-    ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+    ind = linearise(tile, (size(workspace)[1], size(workspace)[2]))
 
     return (WMMA.load_a(pointer(workspace, ind), size(workspace)[1], WMMA.ColMajor, conf),
             WMMA.load_a(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
@@ -315,7 +315,7 @@ end
 
 @inline function load_b(::Type{WMMADualOp{M, N, K, CT, AT}}, ::Type{Layout.SplitColMajor{CT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
     conf = WMMA.Config{M, N, K, AT}
-    ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+    ind = linearise(tile, (size(workspace)[1], size(workspace)[2]))
 
     return (WMMA.load_b(pointer(workspace, ind), size(workspace)[1], WMMA.ColMajor, conf),
             WMMA.load_b(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
@@ -323,7 +323,7 @@ end
 
 @inline function load_c(::Type{WMMADualOp{M, N, K, CT, AT}}, ::Type{Layout.SplitColMajor{AT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
     conf = WMMA.Config{M, N, K, AT}
-    ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+    ind = linearise(tile, (size(workspace)[1], size(workspace)[2]))
 
     return (WMMA.load_c(pointer(workspace, ind), size(workspace)[1], WMMA.ColMajor, conf),
             WMMA.load_c(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), size(workspace)[1], WMMA.ColMajor, conf))
@@ -331,7 +331,7 @@ end
 
 @inline function store_d(::Type{WMMADualOp{M, N, K, CT, AT}}, ::Type{Layout.SplitColMajor{AT}}, workspace, frag, tile::Tile) where {M, N, K, CT, AT}
     conf = WMMA.Config{M, N, K, AT}
-    ind = linearise(tile.index, (size(workspace)[1], size(workspace)[2]))
+    ind = linearise(tile, (size(workspace)[1], size(workspace)[2]))
 
     WMMA.store_d(pointer(workspace, ind), frag[1], size(workspace)[1], WMMA.ColMajor, conf)
     WMMA.store_d(pointer(workspace, ind + size(workspace)[1] * size(workspace)[2]), frag[2], size(workspace)[1], WMMA.ColMajor, conf)

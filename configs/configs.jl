@@ -448,106 +448,106 @@ end
 function get_configs()
     rv = []
 
-    # # FPU Op
-    # for (A_type, B_type, CD_type) in [
-    #         (Float16, Float16, Float32),
-    #         (Float32, Float32, Float32),
-    #         (Float32, Float32, Float64),
-    #         (Float64, Float64, Float64),
-    #         (Int16, Int16, Int16),
-    #         (Int32, Int32, Int32),
-    #         (Int64, Int64, Int64)],
-    #     transpose_a = [false, true],
-    #     transpose_b = [false, true],
-    #     (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
-    #     (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 64, 32)],
-    #     N in [128, 256, 2048]
+    # FPU Op
+    for (A_type, B_type, CD_type) in [
+            (Float16, Float16, Float32),
+            (Float32, Float32, Float32),
+            (Float32, Float32, Float64),
+            (Float64, Float64, Float64),
+            (Int16, Int16, Int16),
+            (Int32, Int32, Int32),
+            (Int64, Int64, Int64)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
+        (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 64, 32)],
+        N in [128, 256, 2048]
 
-    #     # XXX: Should we do non-square matrices as well?
-    #     M = K = N
+        # XXX: Should we do non-square matrices as well?
+        M = K = N
 
-    #     try
-    #         push!(rv, @get_fpu_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
-    # # FPU Op shapes
-    # for (A_type, B_type, CD_type) in [
-    #         (Float32, Float32, Float32)],
-    #     transpose_a = [false, true],
-    #     transpose_b = [false, true],
-    #     (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
-    #         # First, test some shapes with the default base shape (4, 8, 1).
-    #         map(tup -> (tup..., 4, 8, 1),
-    #         [( 4, 8,  1),
-    #          ( 8, 8,  1),
-    #          ( 4, 16, 1),
-    #          ( 4, 8,  2),
-    #          ( 8, 16, 2)]),
-    #         # Then, test some different combinations of op shape + base shape.
-    #         [(4,  32, 1, 1,  32, 1),
-    #          (4,  32, 1, 2,  16, 1),
-    #          (16, 16, 1, 4,  8,  1),
-    #          (16, 16, 1, 8,  4,  1),
-    #          (32, 4,  1, 16, 2,  1),
-    #          (32, 4,  1, 32, 1,  1)]),
-    #     (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 64, 32)],
-    #     N in [128]
+    # FPU Op shapes
+    for (A_type, B_type, CD_type) in [
+            (Float32, Float32, Float32)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
+            # First, test some shapes with the default base shape (4, 8, 1).
+            map(tup -> (tup..., 4, 8, 1),
+            [( 4, 8,  1),
+             ( 8, 8,  1),
+             ( 4, 16, 1),
+             ( 4, 8,  2),
+             ( 8, 16, 2)]),
+            # Then, test some different combinations of op shape + base shape.
+            [(4,  32, 1, 1,  32, 1),
+             (4,  32, 1, 2,  16, 1),
+             (16, 16, 1, 4,  8,  1),
+             (16, 16, 1, 8,  4,  1),
+             (32, 4,  1, 16, 2,  1),
+             (32, 4,  1, 32, 1,  1)]),
+        (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 64, 32)],
+        N in [128]
 
-    #     # We'll only test square matrices.
-    #     M = K = N
+        # We'll only test square matrices.
+        M = K = N
 
-    #     try
-    #         push!(rv, @get_fpu_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+        try
+            push!(rv, @get_fpu_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
-    # # Tropical GEMM
-    # for (A_type, B_type, CD_type, min_dimension) in [
-    #         (Float32, Float32, Float32, 128)],
-    #     transpose_a = [false, true],
-    #     transpose_b = [false, true],
-    #     (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
-    #     (M, N, K) in min_dimension .* [
-    #         [1, 1, 1],
-    #         [2, 2, 1],
-    #         [1, 1, 2],
-    #         [2, 2, 2]]
+    # Tropical GEMM
+    for (A_type, B_type, CD_type, min_dimension) in [
+            (Float32, Float32, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
+        (M, N, K) in min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 1],
+            [1, 1, 2],
+            [2, 2, 2]]
 
-    #     try
-    #         push!(rv, @get_tropical_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+        try
+            push!(rv, @get_tropical_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
     # WMMA GEMM
-    # for (AB_type, CD_type, min_dimension) in [
-    #     (Float16, Float16, 256),
-    #     (Float16, Float32, 128)],
-    #     transpose_a = [false, true],
-    #     transpose_b = [false, true],
-    #     (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
-    #     (WARPS_M, WARPS_N) in [(4, 2)],
-    #     (OP_M, OP_N, OP_K) in [
-    #         (16, 16, 16),
-    #         (8, 32, 16),
-    #         (32, 8, 16),
-    #     ],
-    #     (M, N, K) in vcat(min_dimension .* [
-    #         [1, 1, 1],
-    #         [2, 2, 1],
-    #         [1, 1, 2],
-    #         [2, 2, 2]], [[2048, 2048, 2048]]),
-    #     zero_c in [false],
-    #     kernel in [Kernel.matmul_pipelined]
+    for (AB_type, CD_type, min_dimension) in [
+        (Float16, Float16, 256),
+        (Float16, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
+        (WARPS_M, WARPS_N) in [(4, 2)],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
+        (M, N, K) in vcat(min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 1],
+            [1, 1, 2],
+            [2, 2, 2]], [[2048, 2048, 2048]]),
+        zero_c in [false],
+        kernel in [Kernel.matmul_pipelined]
 
-    #     push!(rv, @get_wmma_config)
-    # end
+        push!(rv, @get_wmma_config)
+    end
 
     # WMMA GEMM parameters
     for (M, N, K) in [(256, 256, 256)],
@@ -567,88 +567,89 @@ function get_configs()
         end
     end
 
-    # # WMMA GEMM + bias
-    # for (AB_type, CD_type, min_dimension) in [
-    #     (Float16, Float32, 128)],
-    #     transpose_a = [false, true],
-    #     transpose_b = [false, true],
-    #     (OP_M, OP_N, OP_K) in [
-    #         (16, 16, 16),
-    #         (8, 32, 16),
-    #         (32, 8, 16),
-    #     ],
-    #     (M, N, K) in vcat(min_dimension .* [
-    #         [1, 1, 1],
-    #         [2, 2, 2]], [[4096, 4096, 4096]])
+    # WMMA GEMM + bias
+    for (AB_type, CD_type, min_dimension) in [
+        (Float16, Float32, 128)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
+        (M, N, K) in vcat(min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 2]], [[4096, 4096, 4096]])
 
-    #     try
-    #         push!(rv, @get_wmma_bias_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+        try
+            push!(rv, @get_wmma_bias_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
-    # # WMMA Diagonal GEMM
-    # for (AB_type, CD_type, min_dimension) in [
-    #     (Float16, Float32, 128)],
-    #     transpose_b = [false, true],
-    #     (OP_M, OP_N, OP_K) in [
-    #         (16, 16, 16),
-    #         (8, 32, 16),
-    #         (32, 8, 16),
-    #     ],
-    #     (M, N, K) in vcat(min_dimension .* [
-    #         [1, 1, 1],
-    #         [2, 2, 2]], [[4096, 4096, 4096]])
+    # WMMA Diagonal GEMM
+    for (AB_type, CD_type, min_dimension) in [
+        (Float16, Float32, 128)],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
+        (M, N, K) in vcat(min_dimension .* [
+            [1, 1, 1],
+            [2, 2, 2]], [[4096, 4096, 4096]])
 
-    #     try
-    #         push!(rv, @get_wmma_diagonal_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+        try
+            push!(rv, @get_wmma_diagonal_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
-    # # WMMA Complex GEMM
-    # for (AB_type, CD_type) in [(Float16, Float32)],
-    #     transpose_a = [false, true],
-    #     transpose_b = [false, true],
-    #     (OP_M, OP_N, OP_K) in [
-    #         (16, 16, 16),
-    #         (8, 32, 16),
-    #         (32, 8, 16),
-    #     ],
-    #     (M, N, K) in [
-    #         (128, 128, 128),
-    #         (256, 256, 256),
-    #         (2048, 2048, 2048)]
 
-    #     try
-    #         push!(rv, @get_wmma_complex_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+    # WMMA Complex GEMM
+    for (AB_type, CD_type) in [(Float16, Float32)],
+        transpose_a = [false, true],
+        transpose_b = [false, true],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
+        (M, N, K) in [
+            (128, 128, 128),
+            (256, 256, 256),
+            (2048, 2048, 2048)]
 
-    # # WMMA Dual GEMM
-    # for (AB_type, CD_type) in [(Float16, Float32)],
-    #     transpose_a = [false],
-    #     transpose_b = [false],
-    #     (OP_M, OP_N, OP_K) in [
-    #         (16, 16, 16),
-    #         (8, 32, 16),
-    #         (32, 8, 16),
-    #     ],
-    #     (M, N, K) in [
-    #         (128, 128, 128),
-    #         (256, 256, 256),
-    #         (2048, 2048, 2048)]
+        try
+            push!(rv, @get_wmma_complex_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
-    #     try
-    #         push!(rv, @get_wmma_dual_config)
-    #     catch err
-    #         isa(err, GemmKernels.ConfigError) || rethrow()
-    #     end
-    # end
+    # WMMA Dual GEMM
+    for (AB_type, CD_type) in [(Float16, Float32)],
+        transpose_a = [false],
+        transpose_b = [false],
+        (OP_M, OP_N, OP_K) in [
+            (16, 16, 16),
+            (8, 32, 16),
+            (32, 8, 16),
+        ],
+        (M, N, K) in [
+            (128, 128, 128),
+            (256, 256, 256),
+            (2048, 2048, 2048)]
+
+        try
+            push!(rv, @get_wmma_dual_config)
+        catch err
+            isa(err, GemmKernels.ConfigError) || rethrow()
+        end
+    end
 
     rv
 end

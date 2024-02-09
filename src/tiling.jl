@@ -154,6 +154,8 @@ function translate end
     return Tile{size, names, N}(new_index)
 end
 
+@inline translate(tile::Tile{size, names, N}, offset::NTuple{N, BitArrayIndex}) where {size, names, N} = translate(tile, NamedTuple{names}(offset))
+
 # -------------
 # TileIterators
 # -------------

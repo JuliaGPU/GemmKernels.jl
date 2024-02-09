@@ -3,6 +3,8 @@ using GemmKernels: vloada, vstorea!, Vec
 import Base.+, Base.|, Base.*, Base.÷, Base.%, Base.&, Base.⊻, Base.<<, Base.>>, Base.==, Base.<
 import Base.getindex, Base.setindex, Base.setindex!
 
+using GPUArraysCore: AbstractGPUArray
+
 # Struct that represent an index into an array where each bit can be known at
 # compile-time to be 0 or 1, or where the bit is variadic (i.e. not known at
 # compile time).
@@ -172,13 +174,22 @@ end
 end
 
 # Convenience methods to automatically convert to 1-based index.
-Base.@propagate_inbounds Base.getindex(A::AbstractArray, I::BitArrayIndex) = Base.getindex(A, 1 + convert(Int, I))
-Base.@propagate_inbounds Base.getindex(T::Tuple, I::BitArrayIndex) = Base.getindex(T, 1 + convert(Int, I))
-Base.@propagate_inbounds Base.setindex(A::AbstractArray, v, I::BitArrayIndex) = Base.setindex(A, v, 1 + convert(Int, I))
-Base.@propagate_inbounds Base.setindex!(A::AbstractArray, v, I::BitArrayIndex) = Base.setindex!(A, v, 1 + convert(Int, I))
+# NOTE: We add an extra I0 argument to force at least one BitArrayIndex argument,
+# to disambiguate between other overloads in case no indices are passed, e.g. getindex(A).
 
-Base.@propagate_inbounds vloada(v, A::AbstractArray, I::BitArrayIndex) = vloada(v, pointer(A, 1 + convert(Int, I)))
-Base.@propagate_inbounds vstorea!(v, A::AbstractArray, I::BitArrayIndex, x) = vstorea!(v, pointer(A, 1 + convert(Int, I)), x)
+_convert(I0::BitArrayIndex, Is::NTuple{N, BitArrayIndex}) where {N} = map(I -> 1 + convert(Int, I), (I0, Is...))
+
+# Use @eval instead of Union{...} to solve ambiguities. See e.g. https://github.com/JuliaLang/julia/issues/22404
+for AT = (AbstractArray, Tuple)
+    @eval begin
+        Base.@propagate_inbounds Base.getindex(A::$AT, I0::BitArrayIndex, Is::BitArrayIndex...) = Base.getindex(A, _convert(I0, Is)...)
+        Base.@propagate_inbounds Base.setindex(A::$AT, v, I0::BitArrayIndex, Is::BitArrayIndex...) = Base.setindex(A, v, _convert(I0, Is)...)
+        Base.@propagate_inbounds Base.setindex!(A::$AT, v, I0::BitArrayIndex, Is::BitArrayIndex...) = Base.setindex!(A, v, _convert(I0, Is)...)
+
+        Base.@propagate_inbounds vloada(v, A::$AT, I::BitArrayIndex) = vloada(v, pointer(A, _convert(I)...))
+        Base.@propagate_inbounds vstorea!(v, A::$AT, I::BitArrayIndex, x) = vstorea!(v, pointer(A, _convert(I)...))
+    end
+end
 
 # CUDA-specific helpers.
 @inline tid() = variadic(threadIdx().x - 1)
