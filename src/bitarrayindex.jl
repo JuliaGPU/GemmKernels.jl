@@ -186,8 +186,8 @@ for AT = (AbstractArray, Tuple)
         Base.@propagate_inbounds Base.setindex(A::$AT, v, I0::BitArrayIndex, Is::BitArrayIndex...) = Base.setindex(A, v, _convert(I0, Is)...)
         Base.@propagate_inbounds Base.setindex!(A::$AT, v, I0::BitArrayIndex, Is::BitArrayIndex...) = Base.setindex!(A, v, _convert(I0, Is)...)
 
-        Base.@propagate_inbounds vloada(v, A::$AT, I::BitArrayIndex) = vloada(v, pointer(A, _convert(I)...))
-        Base.@propagate_inbounds vstorea!(v, A::$AT, I::BitArrayIndex, x) = vstorea!(v, pointer(A, _convert(I)...))
+        Base.@propagate_inbounds vloada(v, A::$AT, I::BitArrayIndex) = vloada(v, pointer(A, _convert(I, (,))...))
+        Base.@propagate_inbounds vstorea!(v, A::$AT, I::BitArrayIndex, x) = vstorea!(v, pointer(A, _convert(I, (,))...))
     end
 end
 

@@ -681,7 +681,9 @@ function volta_kernel(conf::GemmKernels.Config, A, B, C, D,
     shmem_b = CuDynamicSharedArray(Float16, (conf.block_shape.K * conf.block_shape.N, 2),
                                    length(shmem_a) * sizeof(Float16))
 
-    shmem_d = CuDynamicSharedArray(Float32, 32 * (256 + 2))
+    block_tile = Tile(conf.block_shape)
+
+    shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
 
     # index: (m5|m2|m1|n5|n4|n2|n0)
     acc_frag = LocalArray{Tuple{128}, Float32}(@ntuple 128 i -> zero(Float32))
