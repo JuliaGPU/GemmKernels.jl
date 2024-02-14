@@ -1,9 +1,32 @@
 # List of configurations to use for testing and benchmarking.
 
+module Configs
+
+export Configuration, get_configs, generate_inputs, run_gemm, run_baseline, verify,
+       @get_fpu_config, @get_tropical_config, @get_wmma_config, @get_wmma_bias_config,
+       @get_wmma_diagonal_config, @get_wmma_complex_config, @get_wmma_dual_config,
+       get_configs
+
+## lazy module loading
+
+using CUDA
 using GemmKernels
 using LinearAlgebra
-using ForwardDiff
-using Octavian
+
+struct LazyModule
+    pkg::Base.PkgId
+    LazyModule(name, uuid) = new(Base.PkgId(uuid, name))
+end
+function Base.getproperty(lazy_mod::LazyModule, sym::Symbol)
+    pkg = getfield(lazy_mod, :pkg)
+    mod = get(Base.loaded_modules, pkg, nothing)
+    if mod === nothing
+        error("This functionality requires the $(pkg.name) package, which should be installed and loaded first.")
+    end
+    getfield(mod, sym)
+end
+
+const ForwardDiff = LazyModule("ForwardDiff", Base.UUID("f6369f11-7733-5829-9624-2563aa707210"))
 
 struct Configuration
     name           # Human-readable name of the configuration.
@@ -29,17 +52,24 @@ function get_custom_mul!(element_update)
         N = size(C, 2)
         K = size(A, 2)
 
+        # XXX: this assumes CPU execution
+        Ah = Array(A)
+        Bh = Array(B)
+        Ch = Array(C)
+
         for i in 1:M
             for j in 1:N
-                res = beta * C[i, j]
+                res = beta * Ch[i, j]
 
                 for k in 1:K
-                    res = alpha * element_update(A[i, k], B[k, j], res)
+                    res = alpha * element_update(Ah[i, k], Bh[k, j], res)
                 end
 
-                C[i, j] = res
+                Ch[i, j] = res
             end
         end
+
+        copyto!(C, Ch)
     end
 end
 
@@ -49,24 +79,20 @@ function generate_inputs(cf::Configuration)
     N = cf.config.matmul_shape.N
     K = cf.config.matmul_shape.K
 
-    a_h = rand(cf.a_type, (M, K))
-    b_h = rand(cf.b_type, (K, N))
-    c_h = rand(cf.c_type, (M, N))
+    a = CuArray{cf.a_type}(undef, cf.transpose_a ? (K, M) : (M, K))
+    b = CuArray{cf.b_type}(undef, cf.transpose_b ? (N, K) : (K, N))
+    c = CuArray{cf.c_type}(undef, (M, N))
+    d = CuArray{cf.c_type}(undef, (M, N))
 
-    a_h = cf.transpose_a ? transpose(a_h) : a_h
-    b_h = cf.transpose_b ? transpose(b_h) : b_h
+    function reference_mul!(c, a, b)
+        # mul! determines transpose from the type of the matrix
+        (cf.calc_reference)(c,
+                            cf.transpose_a ? transpose(a) : a,
+                            cf.transpose_b ? transpose(b) : b,
+                            cf.alpha, cf.beta)
+    end
 
-    a = CuArray(a_h)
-    b = CuArray(b_h)
-    c = CuArray(c_h)
-    d = similar(c)
-
-    new_a_h = cf.transpose_a ? transpose(a_h) : a_h
-    new_b_h = cf.transpose_b ? transpose(b_h) : b_h
-
-    (cf.calc_reference)(c_h, new_a_h, new_b_h, cf.alpha, cf.beta)
-    c_ref = CuArray(c_h)
-    c_ref, a, b, c, d
+    return reference_mul!, a, b, c, d
 end
 
 # Run the GEMM.
@@ -114,22 +140,31 @@ function verify_dual(c_ref, d, T)
 end
 
 function fpu_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
-    CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
-    CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+    CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
+    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
 end
 
 function wmma_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
-    CUDA.CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
-    CUDA.CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+    CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
+    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+end
+
+function cublas_mul!(c, a, b, alpha, beta)
+    # minimalistic version of mul!, without ever falling back to GPUCompiler.jl
+    transpose_a = a isa Adjoint || a isa Transpose
+    transpose_b = b isa Adjoint || b isa Transpose
+    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T',
+                    alpha, parent(a), parent(b), beta, c)
+    c
 end
 
 macro get_fpu_config()
     esc(quote let
         baseline_func = Dict(
-                (Float16, Float16, Float32) => fpu_baseline,
-                (Float32, Float32, Float32) => fpu_baseline,
+                (Float16, Float16, Float32) => $fpu_baseline,
+                (Float32, Float32, Float32) => $fpu_baseline,
                 (Float32, Float32, Float64) => nothing,
-                (Float64, Float64, Float64) => fpu_baseline,
+                (Float64, Float64, Float64) => $fpu_baseline,
                 (Int16, Int16, Int16) => nothing,
                 (Int32, Int32, Int32) => nothing,
                 (Int64, Int64, Int64) => nothing,
@@ -163,9 +198,9 @@ macro get_fpu_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      mul!,
+                      $LinearAlgebra.mul!,
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_pipelined,
                       baseline_func)
     end end)
@@ -202,7 +237,7 @@ macro get_tropical_config()
                       transpose_b,
                       get_custom_mul!((a, b, c) -> max(a + b, c)),
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -245,11 +280,11 @@ macro get_wmma_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      Octavian.matmul!,
+                      $LinearAlgebra.mul!,
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       kernel,
-                      wmma_baseline)
+                      $wmma_baseline)
     end end)
 end
 
@@ -287,7 +322,7 @@ macro get_wmma_bias_config()
                       transpose_b,
                       mul!,
                       Epilogue.Bias(pointer(bias)),
-                      (c_h, d, T) -> verify_bias(c_h, d, bias, T),
+                      (c_h, d, T) -> $verify_bias(c_h, d, bias, T),
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -319,6 +354,15 @@ macro get_wmma_diagonal_config()
                                         is_b_col_major = !transpose_b,
                                         )
 
+        # XXX: perform this on the GPU
+        function reference_mul!(C, A, B, alpha, beta)
+            # XXX: alpha/beta ignored, and not used by other configs?
+            Ah = Array(A)
+            Bh = Array(B)
+            Ch = Array(C)
+            mul!(Ch, Diagonal(Ah[1:M,1]), Bh, true, true)
+            copyto!(C, Ch)
+        end
 
         Configuration(name,
                       conf,
@@ -330,9 +374,9 @@ macro get_wmma_diagonal_config()
                       CD_type,
                       transpose_a,
                       transpose_b,
-                      (C, A, B, alpha, beta) -> mul!(C, Diagonal(A[1:M,1]), B, true, true),
+                      reference_mul!,
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_singlestage,
                       nothing)
     end end)
@@ -386,7 +430,7 @@ macro get_wmma_complex_config()
                       transpose_b,
                       mul!,
                       Epilogue.Default(),
-                      verify_default,
+                      $verify_default,
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -439,7 +483,7 @@ macro get_wmma_dual_config()
                       transpose_b,
                       (C, A, B, alpha, beta) -> mul!(dual_conv(C), dual_conv(Complex{Float32}.(A)), dual_conv(Complex{Float32}.(B)), true, true),
                       Epilogue.Default(),
-                      verify_dual,
+                      $verify_dual,
                       Kernel.matmul_pipelined,
                       nothing)
     end end)
@@ -652,3 +696,6 @@ function get_configs()
 
     rv
 end
+
+end
+using .Configs

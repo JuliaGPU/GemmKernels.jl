@@ -2,15 +2,22 @@ using CUDA
 using ForwardDiff
 using GemmKernels
 using LinearAlgebra
+using Random
 
 include("../configs/configs.jl")
 
 @testset "Matrix multiplication" begin
     @testcase "$( cf.name )" for cf in get_configs()
         try
-            c_h, a, b, c, d = generate_inputs(cf)
+            reference_mul!, a, b, c, d = generate_inputs(cf)
+            rand!(a)
+            rand!(b)
+            rand!(c)
+            d .= 0
+
             run_gemm(cf, a, b, c, d)
-            @test verify(cf, c_h, d)
+            reference_mul!(c, a, b)
+            @test verify(cf, c, d)
         catch err
             # Count tests with config errors as "broken".
             if isa(err, GemmKernels.ConfigError)
