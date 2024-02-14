@@ -72,4 +72,4 @@ export CUDA_VISIBLE_DEVICES=$GPU_ID
 echo "+++ :julia: Instantiating project"
 julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
-julia --project tune-wmma.jl "$@"
+julia --project tune.jl "$@"

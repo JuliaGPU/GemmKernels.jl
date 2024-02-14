@@ -17,14 +17,29 @@ if myid() == 1
     pythonplot()
 end
 
-#######
-
-const N_vals = 2 .^ (7:14)
-
-const AB_type = Float16
-const CD_type = Float32
-
-const zero_c = true
+# interface for tuning modules:
+#
+# constants
+# - MEMORY_USAGE: maximum memory usage per worker
+#
+# configurations
+# - generate_configs(): return Dataframe with possible configurations
+# - repr_row(row): pretty-print a row of the Dataframe
+# - select_best(configs): given a Dataframe of configurations, with an added :time column,
+#   return a Dataframe with the best configuration for each combination of parameters
+# - get_config(row): create a Configuration object `cf` from a Dataframe row
+#
+# operations
+# - generate_inputs(cf): allocate inputs
+# - initialize_inputs(cf, inputs...): initialize inputs appropriately
+# - execute(cf, inputs...): execute the configuration, and return the results
+# - execute_reference(cf, inputs...): execute the reference implementation (for validation)
+# - execute_baseline(cf, inputs...): execute the baseline implementation (for benchmarking)
+# - verify(cf, reference, results): verify the results
+#
+# output
+# - plot_results(best_configs): plot the results
+include("wmma.jl")
 
 #######
 
@@ -36,9 +51,7 @@ const BENCH_MAX_SAMPLE_SECONDS = 1
 # multiplied by 5 when the process is still alive, so it shouldn't be too large.
 const BENCH_STALE_AGE = 60
 
-const BENCH_MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
-                           maximum(N_vals)^2 * 2 * sizeof(CD_type) +
-                           128*2^20 # there's always some overhead
+const BENCH_MEMORY_USAGE = MEMORY_USAGE + 128*2^20 # there's always some overhead
 
 const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
 
@@ -61,8 +74,6 @@ const PLOT_BATCH_SIZE = 10
 
 #######
 
-include("../configs/configs.jl")
-
 # Write logging messages to file for persistence.
 timestamp_logger(logger) = TransformerLogger(logger) do log
     merge(log, (; message = "$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS")) $(log.message)"))
@@ -76,102 +87,12 @@ function log_filename()
 end
 FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
-function kernel_string_to_function(str)
-    Dict(
-        "singlestage" => Kernel.matmul_singlestage,
-        "pipelined" => Kernel.matmul_pipelined
-       )[str]
-end
-
-get_label(transpose_a, transpose_b) = "$(transpose_a ? "T" : "N")$(transpose_b ? "T" : "N")"
-
-function generate_configs()
-    all_configs = DataFrame(
-        transpose_a=Bool[],
-        transpose_b=Bool[],
-        N=Int[],
-        BLOCK_M=Int[],
-        BLOCK_N=Int[],
-        BLOCK_K=Int[],
-        WARPS_M=Int[],
-        WARPS_N=Int[],
-        OP_M=Int[],
-        OP_N=Int[],
-        OP_K=Int[],
-        kernel_str=String[],
-        category=String[],
-        time=Float64[]
-    )
-
-    for transpose_a in [false, true],
-        transpose_b in [false, true],
-        N in N_vals,
-        BLOCK_M in 2 .^ (6:9),
-        BLOCK_N in 2 .^ (6:9),
-        BLOCK_K in 2 .^ (5:7),
-        WARPS_M in 2 .^ (0:3),
-        WARPS_N in 2 .^ (0:3),
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
-        kernel_str in ["singlestage", "pipelined"]
-
-        push!(all_configs, Dict(
-            :transpose_a => transpose_a,
-            :transpose_b => transpose_b,
-            :N => N,
-            :BLOCK_M => BLOCK_M,
-            :BLOCK_N => BLOCK_N,
-            :BLOCK_K => BLOCK_K,
-            :WARPS_M => WARPS_M,
-            :WARPS_N => WARPS_N,
-            :OP_M => OP_M,
-            :OP_N => OP_N,
-            :OP_K => OP_K,
-            :kernel_str => kernel_str,
-            :category => "pending",
-            :time => Inf,
-        ))
-    end
-
-    all_configs
-end
-
-function get_config(row)
-    transpose_a = row.transpose_a
-    transpose_b = row.transpose_b
-    M = N = K = row.N
-    BLOCK_M = row.BLOCK_M
-    BLOCK_N = row.BLOCK_N
-    BLOCK_K = row.BLOCK_K
-    WARPS_M = row.WARPS_M
-    WARPS_N = row.WARPS_N
-    OP_M = row.OP_M
-    OP_N = row.OP_N
-    OP_K = row.OP_K
-    kernel = kernel_string_to_function(row.kernel_str)
-
-    @get_wmma_config
-end
-
-function get_inputs_for_plot(input_dict, row)
-    if row.N ∉ keys(input_dict)
-        cf = get_config(row)
-        _, a, b, c, d = generate_inputs(cf)
-        input_dict[row.N] = (a, b, c, d)
-    end
-
-    return input_dict[row.N]
-end
-
 function measure_config(row)
     @info "Measuring configuration $(repr_row(row))..."
     cf = get_config(row)
 
     # allocate inputs
-    reference_mul!, a, b, c, d = try
+    inputs = try
         # this is the only place where we allocate device memory.
         # other allocation failures will be reported as crashes.
         generate_inputs(cf)
@@ -189,7 +110,7 @@ function measure_config(row)
 
     # compile and warm-up
     try
-        run_gemm(cf, a, b, c, d)
+        execute(cf, inputs...)
     catch err
         bt = catch_backtrace()
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
@@ -210,10 +131,7 @@ function measure_config(row)
 
     # initialize inputs and calculate the reference
     c_h = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
-        rand!(a)
-        rand!(b)
-        rand!(c)
-        d .= 0
+        initialize_inputs(cf, inputs...)
     end
 
     # settle down
@@ -223,13 +141,16 @@ function measure_config(row)
     # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
     # only taking the minimum time, etc)
     time = Inf
-    c_h, d_h = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
+    reference_host, results_host = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
         # make sure we're starting with an idle device
         wait_if_throttling()
 
         # keep benchmarking until the time isn't improving anymore
+        results = nothing
         while true
-            new_time = CUDA.@elapsed run_gemm(cf, a, b, c, d)
+            new_time = CUDA.@elapsed begin
+                results = execute(cf, inputs...)
+            end
             if new_time > time
                 break
             end
@@ -241,15 +162,15 @@ function measure_config(row)
             end
         end
 
-        # compute the reference (mutating c, so we need to do this last)
-        reference_mul!(c, a, b)
+        # compute the reference (may mutate inputs, so we need to do this last)
+        reference = execute_reference(cf, inputs...)
 
         # copy results to host, so that we can verify without additional GPU allocations
-        Array(c), Array(d)
+        Array(reference), Array(results)
     end
 
     # verify the results
-    if !verify(cf, c_h, d_h)
+    if !verify(cf, reference_host, results_host)
         @warn "Configuration produced invalid result: $(repr_row(row))"
         return [time], "invalid_result"
     end
@@ -320,177 +241,57 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
     cer = NVML.clock_event_reasons(dev)
 
     while cer.hw_power_brake || cer.sw_power_cap || cer.hw_slow || cer.sw_thermal || cer.hw_thermal
-        @info "Throttling detected. Sleeping for one second..."
         sleep(0.1)
         cer = NVML.clock_event_reasons(dev)
     end
 end
 
 function benchmark_best_configs(configs)
-    best_configs = DataFrame(
-        transpose_a=Bool[],
-        transpose_b=Bool[],
-        N=Int[],
-        BLOCK_M=Int[],
-        BLOCK_N=Int[],
-        BLOCK_K=Int[],
-        WARPS_M=Int[],
-        WARPS_N=Int[],
-        OP_M=Int[],
-        OP_N=Int[],
-        OP_K=Int[],
-        kernel_str=String[],
-        category=String[],
-        time_spent=Float64[],
-        gemmkernels_times=Vector{Any}[],
-        baseline_times=Vector{Any}[],
-        gemmkernels_nvml=Vector{Any}[],
-        baseline_nvml=Vector{Any}[]
-    )
+    configs = select!(df, Not([:category]))
+    best_configs = select_best(configs)
+    best_configs.category .= "pending"
+    best_configs.time_spent .= 0.0
+    best_configs.gemmkernels_times .= Ref([])
+    best_configs.baseline_times .= Ref([])
+    best_configs.gemmkernels_nvml .= Ref([])
+    best_configs.baseline_nvml .= Ref([])
 
-    for transpose_a = [false, true],
-        transpose_b = [false, true],
-        N = N_vals
+    p = Progress(size(best_configs, 1); desc="Benchmarking", showspeed=true)
+    for config_row in eachrow(best_configs)
+        cf = get_config(config_row)
+        inputs = generate_inputs(cf)
 
-        relevant_configs = configs[(@. (configs[!, "transpose_a"] == transpose_a) & (configs[!, "transpose_b"] == transpose_b) & (configs[!, "N"] == N)), :]
-        _, best_config_index = findmin(relevant_configs[!, "time"])
-        best_config = relevant_configs[best_config_index, :]
+        @info "Profiling configuration $(repr_row(config_row))..."
 
-        push!(best_configs, Dict(
-            :transpose_a => transpose_a,
-            :transpose_b => transpose_b,
-            :N => N,
-            :BLOCK_M => best_config["BLOCK_M"],
-            :BLOCK_N => best_config["BLOCK_N"],
-            :BLOCK_K => best_config["BLOCK_K"],
-            :WARPS_M => best_config["WARPS_M"],
-            :WARPS_N => best_config["WARPS_N"],
-            :OP_M => best_config["OP_M"],
-            :OP_N => best_config["OP_N"],
-            :OP_K => best_config["OP_K"],
-            :kernel_str => best_config["kernel_str"],
-            :category => "todo",
-            :time_spent => 0.0,
-            :gemmkernels_times => [],
-            :baseline_times => [],
-            :gemmkernels_nvml => [],
-            :baseline_nvml => [],
-        ))
-    end
+        for baseline in [false, true]
+            for i in 1:PLOT_BATCH_SIZE
+                wait_if_throttling()
 
-    # We will reuse matrix inputs across iterations. This takes about 4 GB of GPU memory for e.g. all matrix sizes for NN.
-    # Group runs of the same transposition together, so we don't have to keep 4 * 4 GB of inputs in memory.
-    for transpose_a in [false, true],
-        transpose_b in [false, true]
+                start_time = time()
 
-        input_dict = Dict()
+                push!(config_row[if baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
 
-        p = ProgressUnknown(desc="Benchmarking")
-
-        # Spread the samples of one configuration over time, to reduce the effect
-        # of time-related noise. Note that this means that the progress bar may
-        # make big jumps.
-        while true
-            (sum(@. (best_configs[!, "category"] == "todo") & (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)) == 0) && break
-
-            for config_row in eachrow(best_configs)
-                if (config_row.category, config_row.transpose_a, config_row.transpose_b) != ("todo", transpose_a, transpose_b)
-                    continue
+                if baseline
+                    prof = CUDA.@profile concurrent=false execute_baseline(cf, inputs...)
+                else
+                    prof = CUDA.@profile concurrent=false execute(cf, inputs...)
                 end
 
-                a, b, c, d = get_inputs_for_plot(input_dict, config_row)
-                cf = get_config(config_row)
+                push!(config_row[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
-                @info "Profiling configuration $(repr_row(config_row))..."
-
-                for baseline in [false, true]
-                    for i in 1:PLOT_BATCH_SIZE
-                        wait_if_throttling()
-
-                        start_time = time()
-
-                        push!(config_row[if baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
-
-                        if baseline
-                            prof = CUDA.@profile concurrent=false run_baseline(cf, a, b, c, d)
-                        else
-                            prof = CUDA.@profile concurrent=false run_gemm(cf, a, b, c, d)
-                        end
-
-                        push!(config_row[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
-
-                        config_row["time_spent"] += (time() - start_time)
-                    end
-                end
-
-                if got_enough_samples(config_row)
-                    config_row["category"] = "done"
-                end
-
-                # Update progress bar.
-                next!(p; showvalues = [
-                    (:transpose_a, transpose_a),
-                    (:transpose_b, transpose_b),
-                    (:N, config_row["N"]),
-                    (:num_samples, length(config_row["gemmkernels_times"])),
-                    (:time_spent_in_config, config_row["time_spent"]),
-                    (:remaining_N, best_configs[(@. (best_configs[!, "category"] == "todo") & (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)), :].N),
-                    (:remaining_configurations, sum(best_configs[!, "category"] .== "todo"))
-                ])
+                config_row["time_spent"] += (time() - start_time)
             end
         end
+
+        if got_enough_samples(config_row)
+            config_row["category"] = "done"
+        end
+
+        # Update progress bar.
+        next!(p)
     end
 
     best_configs
-end
-
-function plot_results(best_configs)
-    markershapes = Dict(
-        "NN" => :circle,
-        "NT" => :dtriangle,
-        "TN" => :diamond,
-        "TT" => :cross
-    )
-
-    p = plot()
-    title!("$AB_type x $AB_type = $CD_type ($(name(device())))")
-    xlabel!("Matrix size [-]")
-    ylabel!("Performance relative to cuBLAS [%]")
-
-    for transpose_a in [false, true],
-        transpose_b in [false, true]
-
-        label = get_label(transpose_a, transpose_b)
-
-        relevant_configs = best_configs[(@. (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)), :]
-
-        ratios = @. 100 * perf_ratio(relevant_configs.gemmkernels_times, relevant_configs.baseline_times)
-        ratios_lo = @. 100 * perf_ratio_lo(relevant_configs.gemmkernels_times, relevant_configs.baseline_times)
-        ratios_hi = @. 100 * perf_ratio_hi(relevant_configs.gemmkernels_times, relevant_configs.baseline_times)
-
-        plot!(p, relevant_configs.N, ratios, ribbon=(ratios .- ratios_lo, ratios_hi .- ratios), label=label, markershape=markershapes[label], xscale=:log2)
-    end
-
-    savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
-end
-
-function repr_row(row)
-    io = IOBuffer()
-
-    # gemm shape
-    print(io, "$(row.N)×$(row.N)")
-    row.transpose_a && print(io, "'")
-    print(io, "*$(row.N)×$(row.N)")
-    row.transpose_b && print(io, "'")
-    print(io, "=$(row.N)×$(row.N)")
-
-    # details
-    print(io, " ($(row.BLOCK_M)×$(row.BLOCK_N)×$(row.BLOCK_K) block")
-    print(io, ", $(row.WARPS_M)×$(row.WARPS_N) warp")
-    print(io, ", $(row.OP_M)×$(row.OP_N)×$(row.OP_K) operator")
-    print(io, ", $(row.kernel_str) kernel)")
-
-    return String(take!(io))
 end
 
 function addworkers(X)
@@ -505,7 +306,7 @@ function addworkers(X)
     ]
 
     procs = addprocs(X; exeflags, env)
-    @everywhere procs include($(joinpath(@__DIR__, "tune-wmma.jl")))
+    @everywhere procs include($(joinpath(@__DIR__, "tune.jl")))
     procs
 end
 
@@ -529,6 +330,8 @@ function main()
         # (1) Generate configurations.
         @info "Generating configurations..."
         configs = generate_configs()
+        configs.category .= "pending"
+        configs.time .= Inf
         @info "Generated $(size(configs, 1)) configurations."
 
         # (2) Filter configurations where we can determine upfront that they are unsupported.
@@ -574,7 +377,7 @@ function main()
             njobs+1
         )
         addworkers(max(1, max_workers-1))
-        @info "Starting WMMA tuning script for device $(name(device())) using $(nworkers()) workers..."
+        @info "Starting tuning script for device $(name(device())) using $(nworkers()) workers..."
     end
 
     results = Channel(Inf)
