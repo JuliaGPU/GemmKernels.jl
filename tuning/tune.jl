@@ -247,7 +247,7 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
 end
 
 function benchmark_best_configs(configs)
-    configs = select!(df, Not([:category]))
+    configs = select(configs, Not([:category]))
     best_configs = select_best(configs)
     best_configs.category .= "pending"
     best_configs.time_spent .= 0.0
