@@ -46,7 +46,7 @@ mutable struct ContractionPlan
 end
 
 export contraction!
-function contraction!(plan::ContractionPlan, α, a, b, β, c, d)
+function contraction!(plan::ContractionPlan, α, a, b, β, c, d; kernel=Kernel.matmul_singlestage)
     unaryOpA = plan.desc.descA.unaryOp
     unaryOpB = plan.desc.descB.unaryOp
     unaryOpC = plan.desc.descC.unaryOp
@@ -62,7 +62,7 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d)
             transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
             transform_global_to_shared_c = Transform.Elementwise(x -> β * unaryOpC(x)),
             transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
-            kernel = Kernel.matmul_singlestage,
+            kernel = kernel,
         )
     else 
         throw(ArgumentError("Unsupported algorithm!"))

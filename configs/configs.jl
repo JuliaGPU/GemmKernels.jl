@@ -181,7 +181,7 @@ function run_gemm(cf::Configuration, a, b, c, d)
 end
 
 function run_tc(cf::ContractionConfiguration, a, b, c, d)
-    Tensors.contraction!(cf.plan, cf.alpha, a, b, cf.beta, c, d)
+    Tensors.contraction!(cf.plan, cf.alpha, a, b, cf.beta, c, d; cf.kernel)
 end
 
 # Run the baseline.
@@ -263,6 +263,8 @@ function tc_baseline(cf, a, b, c, d, alpha, beta, transpose_a, transpose_b)
         compute_type=cf.accumulate_type,
         plan=plan
     )
+
+    nothing
 end
 
 macro get_fpu_config()
@@ -614,15 +616,18 @@ macro get_tc_wmma_config()
 
         # For the sake of simplicity, we pad the extents of the tensors to be a multiple of 512. This
         # allows for a broad range of possible block shapes in the GEMM.
+        padding_multiple = 512
         padded_extents = copy(extents)
         for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
             intersection = intersect(tensorModes[idx1], tensorModes[idx2])
 
-            if prod(extents[intersection]) % 512 == 0
+            if prod(extents[intersection]) % padding_multiple == 0
                 continue
             end
 
-            padded_extents[intersection[1]] = Int64(ceil(extents[intersection[1]] / 512) * 512)
+            extent_to_pad = argmax(extents[intersection] .% padding_multiple)
+
+            padded_extents[intersection[extent_to_pad]] = Int64(ceil(extents[intersection[extent_to_pad]] / padding_multiple) * padding_multiple)
         end
 
         # Casting the extents to tuples.
@@ -647,12 +652,12 @@ macro get_tc_wmma_config()
             b_desc, tensorModes[3],
             c_desc, tensorModes[1],
             c_desc, tensorModes[1];
-            operator = Operator.WMMAOp{OP_M, OP_N, OP_K, compute_type, accumulate_type},
+            operator=Operator.WMMAOp{OP_M, OP_N, OP_K, compute_type, accumulate_type},
             computeType=compute_type,
             accumulateType=accumulate_type,
             blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
-            warpsPerBlock = WARPS_M * WARPS_N,
-            computeWarp = (M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
+            warpsPerBlock=WARPS_M * WARPS_N,
+            computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
         )
 
         conf = plan.algorithmPlan.gemmConf
