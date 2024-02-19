@@ -11,7 +11,7 @@ const zero_c = true
 
 config_path = joinpath(@__DIR__, "../test/benchmark-suite.json")
 fp = open(config_path, "r")
-const jsonData = JSON.parse(read(fp, String))[1:2]
+const jsonData = JSON.parse(read(fp, String))
 
 const MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(data_type) +
                      maximum(N_vals)^2 * 2 * sizeof(data_type)
