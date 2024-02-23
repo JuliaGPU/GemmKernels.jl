@@ -118,9 +118,8 @@ function select_best(configs)
         best_config = relevant_configs[best_config_index, :]
 
         push!(best_configs, Dict(
-            :transpose_a => transpose_a,
-            :transpose_b => transpose_b,
-            :N => N,
+            :parseable_name => parseable_name,
+            :extents => extents,
             :BLOCK_M => best_config["BLOCK_M"],
             :BLOCK_N => best_config["BLOCK_N"],
             :BLOCK_K => best_config["BLOCK_K"],
@@ -130,6 +129,7 @@ function select_best(configs)
             :OP_N => best_config["OP_N"],
             :OP_K => best_config["OP_K"],
             :kernel_str => best_config["kernel_str"],
+            :category => best_config["category"],
             :time => best_config["time"],
         ))
     end
