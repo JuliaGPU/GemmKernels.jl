@@ -3,7 +3,7 @@ module GETTLayout
 using CUDA
 using GemmKernels.Layout
 using GemmKernels.Tiling
-using KernelAbstractions.Extras: @unroll
+using LLVMLoopInfo: @loopinfo
 
 @inline function sloada(::Type{Layout.Vec{NUMEL, T}}, workspace, offset::Int, strideOverExtent::Int) where {NUMEL, T}
     return ntuple(Val(NUMEL)) do i
@@ -35,12 +35,12 @@ abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, stride
 
     offset = 1
 
-    @unroll for i in eachindex(divT1)
+    @loopinfo unroll for i in eachindex(divT1)
         stride_offset = (G1 ÷ divT1[i]) % modT1[i]
         offset += stride_offset * strides1[i]
     end
 
-    @unroll for i in eachindex(divT2)
+    @loopinfo unroll for i in eachindex(divT2)
         stride_offset = (G2 ÷ divT2[i]) % modT2[i]
         offset += stride_offset * strides2[i]
     end
@@ -66,12 +66,12 @@ end
 
     offset = 1
 
-    @unroll for i in eachindex(divT1)
+    @loopinfo unroll for i in eachindex(divT1)
         stride_offset = (G1 ÷ divT1[i]) % modT1[i]
         offset += stride_offset * strides1[i]
     end
 
-    @unroll for i in eachindex(divT2)
+    @loopinfo unroll for i in eachindex(divT2)
         stride_offset = (G2 ÷ divT2[i]) % modT2[i]
         offset += stride_offset * strides2[i]
     end
@@ -95,7 +95,7 @@ function precomputeGETTLayoutConstants(
     isLoadOrStoreStrided::Bool,
     strideOver::Union{Vector{Int}, Nothing} = nothing,
 )
-    # 1. Convert the tensor strides from Tuple{Vector{Int}, Vector{int}}  to two separate 
+    # 1. Convert the tensor strides from Tuple{Vector{Int}, Vector{int}}  to two separate
     # Tuple{Int, Int, ...}.
 
     # → For the A matrix this will contain the tensor strides corresponding to the M stride.
@@ -108,7 +108,7 @@ function precomputeGETTLayoutConstants(
 
 
     # 2. Precompute the divisors used to calculate the tensor stride offsets.
-    # → T1_stride_offset = (M ÷ divT1[i]) % T1_mod[i] 
+    # → T1_stride_offset = (M ÷ divT1[i]) % T1_mod[i]
     divT1 = Vector{Int}(undef, length(dimensionsT1))
     div = 1
     for (idx, stride_idx) in enumerate(dimensionsT1)
@@ -138,7 +138,7 @@ function precomputeGETTLayoutConstants(
     strides1 = Vector{Int}(undef, length(dimensionsT1))
     for (idx, stride_idx) in enumerate(dimensionsT1)
         strides1[idx] = 1
-        for j = 1 : (stride_idx - 1) 
+        for j = 1 : (stride_idx - 1)
             strides1[idx] *= extent[j]
         end
     end
@@ -148,7 +148,7 @@ function precomputeGETTLayoutConstants(
     strides2 = Vector{Int}(undef, length(dimensionsT2))
     for (idx, stride_idx) in enumerate(dimensionsT2)
         strides2[idx] = 1
-        for j = 1 : (stride_idx - 1) 
+        for j = 1 : (stride_idx - 1)
             strides2[idx] *= extent[j]
         end
     end
@@ -157,7 +157,7 @@ function precomputeGETTLayoutConstants(
     # 5. Convert the Bool to an Int.
     isLoadOrStoreStrided = Int(isLoadOrStoreStrided)
 
-    # 5.b If the load or store is strided, then precompute the size of the dimensions to stride 
+    # 5.b If the load or store is strided, then precompute the size of the dimensions to stride
     # over.
     strideOverExtent = 1
     if (isnothing(strideOver) == false && isLoadOrStoreStrided == true)
