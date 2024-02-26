@@ -172,7 +172,7 @@ function measure_config(row)
     # verify the results
     if !verify(cf, reference_host, results_host)
         @warn "Configuration produced invalid result: $(repr_row(row))"
-        return [time], "invalid_result"
+        return time, "invalid_result"
     end
 
     return time, "success"
