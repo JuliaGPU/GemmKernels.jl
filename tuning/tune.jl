@@ -336,7 +336,7 @@ function main()
 
         # (2) Filter configurations where we can determine upfront that they are unsupported.
         @info "Finding configurations that we know are unsupported a-priori..."
-
+        p = Progress(size(configs, 1); desc="Filtering", showspeed=true)
         for config_row in eachrow(configs)
             try
                 cf = get_config(config_row)
@@ -347,6 +347,7 @@ function main()
                     rethrow()
                 end
             end
+            next!(p)
         end
 
         @info "Skipping $(counter(configs[!, "category"])["skipped"]) configurations."
