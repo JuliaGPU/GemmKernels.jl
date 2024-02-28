@@ -7,9 +7,6 @@ const CD_type = Float32
 
 const zero_c = true
 
-const MEMORY_USAGE = maximum(N_vals)^2 * 2 * sizeof(AB_type) +
-                     maximum(N_vals)^2 * 2 * sizeof(CD_type)
-
 
 ## configs
 

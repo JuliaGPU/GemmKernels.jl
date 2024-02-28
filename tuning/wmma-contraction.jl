@@ -13,50 +13,6 @@ config_path = joinpath(@__DIR__, "../test/benchmark-suite.json")
 fp = open(config_path, "r")
 const jsonData = JSON.parse(read(fp, String))
 
-MEMORY_USAGE = 0
-for (parseable_name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData],
-    BLOCK_M in 2 .^ (6:9),
-    BLOCK_N in 2 .^ (6:9),
-    BLOCK_K in 2 .^ (5:7)
-    global MEMORY_USAGE
-    # XXX: duplication with configs.jl
-
-    # parse mode
-    tensorModes = Vector{Vector{Int}}(undef, 0)
-    for tensor in split(parseable_name, "-")
-        tensorMode = Vector{Int}(undef, 0)
-
-        for mode in split(tensor, ".")
-            push!(tensorMode, parse(Int, mode))
-        end
-
-        push!(tensorModes, tensorMode)
-    end
-
-    # pad extents
-    padding_multiple = max(BLOCK_M, BLOCK_N, BLOCK_K)
-    padded_extents = copy(extents)
-    for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
-        intersection = intersect(tensorModes[idx1], tensorModes[idx2])
-
-        if prod(extents[intersection]) % padding_multiple == 0
-            continue
-        end
-
-        extent_to_pad = argmax(extents[intersection] .% padding_multiple)
-
-        padded_extents[intersection[extent_to_pad]] = Int64(ceil(extents[intersection[extent_to_pad]] / padding_multiple) * padding_multiple)
-    end
-    extents = Tuple(extents)
-    padded_extents = Tuple(padded_extents)
-
-    current_size = sizeof(data_type) * prod(padded_extents[tensorModes[2]]) +
-                   sizeof(data_type) * prod(padded_extents[tensorModes[3]]) +
-                   sizeof(data_type) * prod(padded_extents[tensorModes[1]]) +
-                   sizeof(data_type) * prod(padded_extents[tensorModes[1]])
-    MEMORY_USAGE = max(MEMORY_USAGE, current_size)
-end
-
 
 ## configs
 

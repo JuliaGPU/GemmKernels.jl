@@ -6,7 +6,7 @@ using Distributed
 using FileWatching.Pidfile
 using Logging
 using LoggingExtras
-using ProgressMeter: Progress, ProgressUnknown, next!, update!, finish!
+using ProgressMeter: Progress, ProgressUnknown, next!, update!, finish!, @showprogress
 using Serialization
 using Statistics
 using StatsBase: percentile
@@ -18,9 +18,6 @@ if myid() == 1
 end
 
 # interface for tuning modules:
-#
-# constants
-# - MEMORY_USAGE: maximum memory usage per worker
 #
 # configurations
 # - generate_configs(): return Dataframe with possible configurations
@@ -50,10 +47,6 @@ const BENCH_MAX_SAMPLE_SECONDS = 1
 # The time here determines when to ignore a lock. Note that it is automatically
 # multiplied by 5 when the process is still alive, so it shouldn't be too large.
 const BENCH_STALE_AGE = 60
-
-const BENCH_MEMORY_USAGE = MEMORY_USAGE + 128*2^20 # there's always some overhead
-
-const WORKER_MEMORY_USAGE = BENCH_MEMORY_USAGE + 2^30   # includes CUDA context size, etc
 
 const PIDFILE = joinpath(@__DIR__, "tuning.pid")
 
@@ -294,15 +287,15 @@ function benchmark_best_configs(configs)
     best_configs
 end
 
-function addworkers(X)
+function addworkers(X; memory)
     env = [
         "JULIA_NUM_THREADS" => "1",
         "OPENBLAS_NUM_THREADS" => "1",
-        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(BENCH_MEMORY_USAGE),
+        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(memory),
     ]
     exeflags = [
         "--project=$(Base.active_project())",
-        "--heap-size-hint=$BENCH_MEMORY_USAGE"
+        "--heap-size-hint=$memory"
     ]
 
     procs = addprocs(X; exeflags, env)
@@ -336,8 +329,7 @@ function main()
 
         # (2) Filter configurations where we can determine upfront that they are unsupported.
         @info "Finding configurations that we know are unsupported a-priori..."
-        p = Progress(size(configs, 1); desc="Filtering", showspeed=true)
-        for config_row in eachrow(configs)
+        @showprogress desc="Filtering configurations..." for config_row in eachrow(configs)
             try
                 cf = get_config(config_row)
             catch err
@@ -347,7 +339,6 @@ function main()
                     rethrow()
                 end
             end
-            next!(p)
         end
 
         @info "Skipping $(counter(configs[!, "category"])["skipped"]) configurations."
@@ -358,6 +349,7 @@ function main()
     end
 
     # (3) Measure performance of configurations.
+
     jobs = filter(1:size(configs, 1)) do i
         configs[i, :category] in ["pending"; RETRY_CATEGORIES]
     end
@@ -367,17 +359,26 @@ function main()
     p = Progress(njobs; desc="Parameter sweep", showspeed=true)
     @info "Need to perform parameter sweep over $(njobs) configurations."
 
+    max_memory_usage = 0
+    @showprogress desc="Determining memory usage..." for config_row in eachrow(configs)
+        config_row.category in ["pending"; RETRY_CATEGORIES] || continue
+        cf = get_config(config_row)
+        max_memory_usage = max(max_memory_usage, sizeof(cf))
+    end
+    max_memory_usage += 128*2^20                    # there's always some overhead
+    worker_memory_usage = max_memory_usage + 2^30   # includes CUDA context size, etc
+
     if njobs > 0
         # Spawn workers
         cpu_memory = Sys.free_memory()
         gpu_memory = CUDA.available_memory()
         max_workers = min(
-            floor(Int, cpu_memory / WORKER_MEMORY_USAGE),
-            floor(Int, gpu_memory / WORKER_MEMORY_USAGE),
+            floor(Int, cpu_memory / worker_memory_usage),
+            floor(Int, gpu_memory / worker_memory_usage),
             Sys.CPU_THREADS,
             njobs+1
         )
-        addworkers(max(1, max_workers-1))
+        addworkers(max(1, max_workers-1); memory=max_memory_usage)
         @info "Starting tuning script for device $(name(device())) using $(nworkers()) workers..."
     end
 

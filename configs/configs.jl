@@ -47,6 +47,17 @@ struct Configuration
     baseline       # Baseline implementation to compare performance against
 end
 
+function Base.sizeof(conf::Configuration)
+    M = cf.config.matmul_shape.M
+    N = cf.config.matmul_shape.N
+    K = cf.config.matmul_shape.k
+
+    return sizeof(conf.a_type) * M * K +
+           sizeof(conf.b_type) * K * N +
+           sizeof(conf.c_type) * M * N +
+           sizeof(conf.d_type) * M * N
+end
+
 struct ContractionConfiguration
     name             # Human-readable name of the configuration.
     plan             # GemmKernels.Tensors.ContractionPlan instance to use.
@@ -66,6 +77,13 @@ struct ContractionConfiguration
     padded_extents   # The padded extents of the input tensors.
     tensorModes      # The modes of the input tensors.
     accumulate_type  # The type to accumulate into.
+end
+
+function Base.sizeof(conf::ContractionConfiguration)
+    return sizeof(conf.a_type) * prod(conf.padded_extents[conf.tensorModes[2]]) +
+           sizeof(conf.b_type) * prod(conf.padded_extents[conf.tensorModes[3]]) +
+           sizeof(conf.c_type) * prod(conf.padded_extents[conf.tensorModes[1]]) +
+           sizeof(conf.d_type) * prod(conf.padded_extents[conf.tensorModes[1]])
 end
 
 function get_custom_mul!(element_update)
