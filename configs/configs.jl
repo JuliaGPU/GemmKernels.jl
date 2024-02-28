@@ -651,7 +651,7 @@ macro get_tc_wmma_config()
             Epilogue.Default(),
             $verify_default,
             kernel,
-            $tc_baseline, 
+            $tc_baseline,
             extents,
             padded_extents,
             tensorModes,

@@ -377,7 +377,6 @@ function main()
             Sys.CPU_THREADS,
             njobs+1
         )
-        max_workers = 1
         addworkers(max(1, max_workers-1))
         @info "Starting tuning script for device $(name(device())) using $(nworkers()) workers..."
     end
@@ -495,43 +494,43 @@ function main()
         serialize(io, configs)
     end
 
-    # # Kill workers
-    # if njobs > 0
-    #     rmprocs(workers()...; waitfor=30)
-    # end
+    # Kill workers
+    if njobs > 0
+        rmprocs(workers()...; waitfor=30)
+    end
 
-    # # And load again, for good measure.
-    # configs = open(config_path, "r") do io
-    #     deserialize(io)
-    # end
+    # And load again, for good measure.
+    configs = open(config_path, "r") do io
+        deserialize(io)
+    end
 
-    # # (4) Select best configurations, and benchmark.
-    # best_configs_path = joinpath(@__DIR__, "best-configs.bin")
-    # best_configs = nothing
-    # if isfile(best_configs_path)
-    #     try
-    #         @info "Loading best configurations from disk..."
-    #         best_configs = open(best_configs_path, "r") do io
-    #             deserialize(io)
-    #         end
-    #     catch err
-    #         @error "Error while loading best configurations from disk: $(sprint(Base.showerror, err)))"
-    #         mv(best_configs_path, "$(best_configs_path).broken")
-    #     end
-    # end
-    # if best_configs === nothing
-    #     @info "Benchmarking configurations for plot..."
-    #     best_configs = benchmark_best_configs(configs)
+    # (4) Select best configurations, and benchmark.
+    best_configs_path = joinpath(@__DIR__, "best-configs.bin")
+    best_configs = nothing
+    if isfile(best_configs_path)
+        try
+            @info "Loading best configurations from disk..."
+            best_configs = open(best_configs_path, "r") do io
+                deserialize(io)
+            end
+        catch err
+            @error "Error while loading best configurations from disk: $(sprint(Base.showerror, err)))"
+            mv(best_configs_path, "$(best_configs_path).broken")
+        end
+    end
+    if best_configs === nothing
+        @info "Benchmarking configurations for plot..."
+        best_configs = benchmark_best_configs(configs)
 
-    #     open(best_configs_path, "w") do io
-    #         serialize(io, best_configs)
-    #     end
-    # end
+        open(best_configs_path, "w") do io
+            serialize(io, best_configs)
+        end
+    end
 
 
-    # # (5) Plotting results
-    # @info "Plotting results..."
-    # plot_results(best_configs)
+    # (5) Plotting results
+    @info "Plotting results..."
+    plot_results(best_configs)
 end
 
 if !isinteractive() && myid() == 1
