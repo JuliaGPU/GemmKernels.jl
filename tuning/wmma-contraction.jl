@@ -126,7 +126,6 @@ function select_best(configs)
             :OP_N => best_config["OP_N"],
             :OP_K => best_config["OP_K"],
             :kernel_str => best_config["kernel_str"],
-            :category => best_config["category"],
             :time => best_config["time"],
         ))
     end
