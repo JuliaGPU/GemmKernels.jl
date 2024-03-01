@@ -1,8 +1,6 @@
 ## constants
 using JSON
 
-const N_vals = 2 .^ (7:14)
-
 const data_type = Float16
 const compute_type = Float16
 const accumulate_type = Float32
