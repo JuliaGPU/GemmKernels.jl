@@ -14,7 +14,6 @@ using Random
 
 if myid() == 1
     using Plots
-    pythonplot()
 end
 
 # interface for tuning modules:
