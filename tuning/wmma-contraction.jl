@@ -189,6 +189,14 @@ function plot_results(df)
 
     idx = 1:nrow(df)
     names = df.parseable_name
+    names = map(df.parseable_name) do parseable_name
+        for el in jsonData
+            if el["parseableName"] == parseable_name
+                return el["name"]
+            end
+        end
+        error("Unknown parseable name: $parseable_name")
+    end
     ratios = @. 100 * perf_ratio(df.gemmkernels_times, df.baseline_times)
     ratios_lo = @. 100 * perf_ratio_lo(df.gemmkernels_times, df.baseline_times)
     ratios_hi = @. 100 * perf_ratio_hi(df.gemmkernels_times, df.baseline_times)
