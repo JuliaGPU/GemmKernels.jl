@@ -244,10 +244,10 @@ function benchmark_best_configs(configs)
     best_configs = select_best(configs)
     best_configs.category .= "pending"
     best_configs.time_spent .= 0.0
-    best_configs.gemmkernels_times .= Ref([])
-    best_configs.baseline_times .= Ref([])
-    best_configs.gemmkernels_nvml .= Ref([])
-    best_configs.baseline_nvml .= Ref([])
+    best_configs.gemmkernels_times = [[] for _ in 1:size(best_configs, 1)]
+    best_configs.baseline_times = [[] for _ in 1:size(best_configs, 1)]
+    best_configs.gemmkernels_nvml = [[] for _ in 1:size(best_configs, 1)]
+    best_configs.baseline_nvml = [[] for _ in 1:size(best_configs, 1)]
 
     p = Progress(size(best_configs, 1); desc="Benchmarking", showspeed=true)
     for config_row in eachrow(best_configs)
