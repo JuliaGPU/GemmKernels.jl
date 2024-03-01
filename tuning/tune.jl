@@ -309,9 +309,7 @@ function main()
     if isfile(config_path)
         @info "Loading configurations from disk..."
         try
-            configs = open(config_path, "r") do io
-                deserialize(io)
-            end
+            configs = deserialize(config_path)
             @info "Loaded $(size(configs, 1)) configurations."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
@@ -342,9 +340,7 @@ function main()
 
         @info "Skipping $(counter(configs[!, "category"])["skipped"]) configurations."
 
-        open(config_path, "w") do io
-            serialize(io, configs)
-        end
+        serialize(config_path, configs)
     end
 
     # (3) Measure performance of configurations.
@@ -436,9 +432,7 @@ function main()
                     end
 
                     # Save results in case the process crashes.
-                    open(config_path, "w") do io
-                        serialize(io, configs)
-                    end
+                    serialize(config_path, configs)
                 end
 
                 # update the progress bar
@@ -490,9 +484,7 @@ function main()
     end
 
     # Save data for final iteration.
-    open(config_path, "w") do io
-        serialize(io, configs)
-    end
+    serialize(config_path, configs)
 
     # Kill workers
     if njobs > 0
@@ -500,9 +492,7 @@ function main()
     end
 
     # And load again, for good measure.
-    configs = open(config_path, "r") do io
-        deserialize(io)
-    end
+    configs = deserialize(config_path)
 
     # (4) Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")
@@ -510,9 +500,7 @@ function main()
     if isfile(best_configs_path)
         try
             @info "Loading best configurations from disk..."
-            best_configs = open(best_configs_path, "r") do io
-                deserialize(io)
-            end
+            best_configs = deserialize(best_configs_path)
         catch err
             @error "Error while loading best configurations from disk: $(sprint(Base.showerror, err)))"
             mv(best_configs_path, "$(best_configs_path).broken")
@@ -522,9 +510,7 @@ function main()
         @info "Benchmarking configurations for plot..."
         best_configs = benchmark_best_configs(configs)
 
-        open(best_configs_path, "w") do io
-            serialize(io, best_configs)
-        end
+        serialize(best_configs_path, best_configs)
     end
 
 
