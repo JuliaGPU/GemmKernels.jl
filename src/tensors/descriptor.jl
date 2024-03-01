@@ -12,9 +12,9 @@ export ALGO
     ALGO_DEFAULT_PATIENT = -6
 
     ALGO_GETT = -4
-    # Future work: implement transposition kernel. 
+    # Future work: implement transposition kernel.
     ALGO_TGETT = -3
-    # Future work: implement transposition kernel. 
+    # Future work: implement transposition kernel.
     ALGO_TTGT = -2
 
     ALGO_DEFAULT = -1
@@ -28,8 +28,8 @@ mutable struct TensorDescriptor
     dataType::DataType
     unaryOp
 
-    function TensorDescriptor(
-        a; numModes=length(size(a)), extent=size(a), stride=strides(a), dataType=eltype(a), unaryOp=identity)
+    function TensorDescriptor(a; numModes=length(size(a)), extent=size(a), stride=strides(a),
+                              dataType=eltype(a), unaryOp=identity)
         return new(
             numModes,
             collect(Int, extent), collect(Int, stride),
@@ -37,7 +37,8 @@ mutable struct TensorDescriptor
         )
     end
 
-    function TensorDescriptor(newModes::Int, newExtent::Vector{Int}, newStride::Vector{Int}, newDataType::DataType, newUnaryOp)
+    function TensorDescriptor(newModes::Int, newExtent::Vector{Int}, newStride::Vector{Int},
+                              newDataType::DataType, newUnaryOp)
         return new(
             newModes,
             newExtent, newStride,

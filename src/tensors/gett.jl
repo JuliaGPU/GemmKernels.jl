@@ -15,7 +15,8 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     # They will take up the K dimension of the GEMM.
     modesToContract = intersect(modeB, modeA)
 
-    # The modes that are not shared between A and B will be the M and N dimensions of the GEMM, respectively.
+    # The modes that are not shared between A and B will be the M and N dimensions of the
+    # GEMM, respectively.
     modesAM = setdiff(modeA, modesToContract)
     modesBN = setdiff(modeB, modesToContract)
 
@@ -23,20 +24,21 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     modesDN = setdiff(modeD, modesAM)
 
     # If the first M mode of A is equal to the first M mode of D,
-    # or if the first mode of A is not part of the M modes, 
+    # or if the first mode of A is not part of the M modes,
     # we want to inherit the order of modes of D for optimal unit-stride
     # loads ands stores of D.
     if (modesAM[1] == modesDM[1] || findall(x -> x == modesAM[1], modeA)[1] != 1)
         modesAM = modesDM
     end
-    
+
     # The same goes for B.
     if (modesBN[1] == modesDN[1] || findall(x -> x == modesBN[1], modeB)[1] != 1)
         modesBN = modesDN
     end
 
-    # The mode identifiers are either Char or Int. They do not correspond to the actual dimensions of the tensors.
-    # We now find the number of the dimension in the tensor that corresponds to each mode identifier.
+    # The mode identifiers are either Char or Int. They do not correspond to the actual
+    # dimensions of the tensors. We now find the number of the dimension in the tensor that
+    # corresponds to each mode identifier.
 
     dimensionsAM = Vector{Int}(undef, 0)
     for mode in modesAM
@@ -55,8 +57,9 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         append!(dimensionsBK, findall(x -> x == mode, modeB))
     end
 
-    # In what follows, we deterimine whether the loading of the A and B matrices will be strided.
-    # If the loading is strided, we also determine over which dimensions of the tensors the loading will be strided.
+    # In what follows, we deterimine whether the loading of the A and B matrices will be
+    # strided. If the loading is strided, we also determine over which dimensions of the
+    # tensors the loading will be strided.
 
     isLoadStridedA = false
     strideOverA = Vector{Int}(undef, 0)
@@ -64,8 +67,9 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     isLoadStridedB = false
     strideOverB = Vector{Int}(undef, 0)
 
-    # If the first dimension of tensor A does not belong to the M modes, then it belongs to the K modes.
-    # This means we can transpose the matrix to maximize the number of vectorised loads.
+    # If the first dimension of tensor A does not belong to the M modes, then it belongs to
+    # the K modes. This means we can transpose the matrix to maximize the number of
+    # vectorised loads.
     if (1 in dimensionsAM)
         isColMajorA = true
     else
@@ -78,27 +82,29 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         isColMajorB = true
     end
 
-    # Here the order of loading the K dimensions is determined. This must be consistent across
-    # the A and B tensors.
+    # Here the order of loading the K dimensions is determined. This must be consistent
+    # across the A and B tensors.
 
-    # If the load is vectorised over K in A and not in B, we use the order of the K dimensions in A.
+    # If the load is vectorised over K in A and not in B, we use the order of the K
+    # dimensions in A.
     if (isColMajorA == false && isColMajorB == false)
         newPerm = sortperm(dimensionsAK)
         dimensionsAK = dimensionsAK[newPerm]
         dimensionsBK = dimensionsBK[newPerm]
     end
 
-    # If the load is vectorised over K in B and not in A, we use the order of the K dimensions in B.
+    # If the load is vectorised over K in B and not in A, we use the order of the K
+    # dimensions in B.
     if (isColMajorA == true && isColMajorB == true)
         newPerm = sortperm(dimensionsBK)
         dimensionsAK = dimensionsAK[newPerm]
         dimensionsBK = dimensionsBK[newPerm]
     end
 
-    # If both loads over K could be vectorised, we choose the order of dimensions of the tensor
-    # with the largest extent of the first dimension.
-    # Unless the dimensions orders are identical, in which case the orders should not change and
-    # both loads can be vectorised.
+    # If both loads over K could be vectorised, we choose the order of dimensions of the
+    # tensor with the largest extent of the first dimension. Unless the dimensions orders
+    # are identical, in which case the orders should not change and both loads can be
+    # vectorised.
     if (isColMajorA == false && isColMajorB == true)
         if (sortperm(dimensionsAK) == sortperm(dimensionsBK))
             nothing
@@ -119,8 +125,8 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
             isColMajorA = true
             append!(strideOverA, 1 : dimensionsAM[1] - 1)
         end
-    end    
-    
+    end
+
     # We find the dimensions of the C and D tensors that correspond to the M and N modes.
     dimensionsDM = Vector{Int}(undef, 0)
     for dimension in dimensionsAM
@@ -132,12 +138,14 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         append!(dimensionsDN, findall(x -> x == modeB[dimension], modeD))
     end
 
-    # The C load and D store are vectorised if the order of the M dimensions in A and C are 
+    # The C load and D store are vectorised if the order of the M dimensions in A and C are
     # identical and the order of the N dimensions in B and D are identical.
     # This only works if the first dimension of C is part of A.
     isColMajorD = true
 
-    if (dimensionsDM == dimensionsDM[sortperm(dimensionsDM)] && dimensionsDN == dimensionsDN[sortperm(dimensionsDN)] && modeD[1] in modesAM)
+    if dimensionsDM == dimensionsDM[sortperm(dimensionsDM)] &&
+       dimensionsDN == dimensionsDN[sortperm(dimensionsDN)] &&
+       modeD[1] in modesAM
         isStoreStridedD = false
     else
         isStoreStridedD = true
@@ -155,9 +163,18 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         K = prod(desc.descA.extent[dimensionsAK]),
     )
 
-    TensorLayoutA = GETTLayout.createGETTLayout(desc.descA.dataType, desc.descA.extent, (dimensionsAM, dimensionsAK), isColMajorA, isLoadStridedA, strideOverA)
-    TensorLayoutB = GETTLayout.createGETTLayout(desc.descB.dataType, desc.descB.extent, (dimensionsBK, dimensionsBN), isColMajorB, isLoadStridedB, strideOverB)
-    TensorLayoutD = GETTLayout.createGETTLayout(desc.descD.dataType, desc.descD.extent, (dimensionsDM, dimensionsDN), isColMajorD, isStoreStridedD, strideOverD)
+    TensorLayoutA =
+        GETTLayout.createGETTLayout(desc.descA.dataType, desc.descA.extent,
+                                    (dimensionsAM, dimensionsAK),
+                                    isColMajorA, isLoadStridedA, strideOverA)
+    TensorLayoutB =
+        GETTLayout.createGETTLayout(desc.descB.dataType, desc.descB.extent,
+                                    (dimensionsBK, dimensionsBN),
+                                    isColMajorB, isLoadStridedB, strideOverB)
+    TensorLayoutD =
+        GETTLayout.createGETTLayout(desc.descD.dataType, desc.descD.extent,
+                                    (dimensionsDM, dimensionsDN),
+                                    isColMajorD, isStoreStridedD, strideOverD)
 
     return (
         gemmShape,
@@ -169,25 +186,30 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
 end
 
 export setUpGETTKernel
-function setUpGETTKernel(desc::ContractionDescriptor, operator, blockShape, warpsPerBlock, computeWarp)
+function setUpGETTKernel(desc::ContractionDescriptor, operator,
+                         blockShape, warpsPerBlock, computeWarp)
     (
         gemmShape,
-        TensorLayoutA, isColMajorA, 
+        TensorLayoutA, isColMajorA,
         TensorLayoutB, isColMajorB,
         TensorLayoutC,
         TensorLayoutD,
     ) = createGETTContractionPlan(desc)
 
     if (isColMajorA)
-        SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descA.dataType}, 16 ÷ sizeof(desc.descA.dataType)}
+        SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descA.dataType},
+                                      16 ÷ sizeof(desc.descA.dataType)}
     else
-        SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedRowMajor{desc.descA.dataType}, 16 ÷ sizeof(desc.descA.dataType)}
+        SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedRowMajor{desc.descA.dataType},
+                                      16 ÷ sizeof(desc.descA.dataType)}
     end
 
     if (isColMajorB)
-        SharedLayoutB = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
+        SharedLayoutB = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descB.dataType},
+                                      16 ÷ sizeof(desc.descB.dataType)}
     else
-        SharedLayoutB = Layout.Padded{Layout.UnsafeAlignedRowMajor{desc.descB.dataType}, 16 ÷ sizeof(desc.descB.dataType)}
+        SharedLayoutB = Layout.Padded{Layout.UnsafeAlignedRowMajor{desc.descB.dataType},
+                                      16 ÷ sizeof(desc.descB.dataType)}
     end
 
     if (operator == Operator.WMMAOp)

@@ -5,28 +5,37 @@ using GemmKernels.Layout
 using GemmKernels.Tiling
 using LLVMLoopInfo: @loopinfo
 
-@inline function sloada(::Type{Layout.Vec{NUMEL, T}}, workspace, offset::Int, strideOverExtent::Int) where {NUMEL, T}
+@inline function sloada(::Type{Layout.Vec{NUMEL, T}}, workspace, offset::Int,
+                        strideOverExtent::Int) where {NUMEL, T}
     return ntuple(Val(NUMEL)) do i
         @inbounds VecElement{T}(workspace[offset + (i - 1) * strideOverExtent])
     end
 end
 
-@inline function sstorea!(::Type{Layout.Vec{NUMEL, T}}, workspace, val, offset::Int, strideOverExtent::Int) where {NUMEL, T}
+@inline function sstorea!(::Type{Layout.Vec{NUMEL, T}}, workspace, val, offset::Int,
+                          strideOverExtent::Int) where {NUMEL, T}
     for i in 1 : NUMEL
         @inbounds workspace[offset + (i - 1) * strideOverExtent] = val[i].value
     end
 end
 
-abstract type GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.UnsafeAlignedColMajor{T} end
+abstract type GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
+                                 isLoadOrStoreStrided, strideOverExtent
+                                } <: Layout.UnsafeAlignedColMajor{T} end
 
-abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} <: Layout.UnsafeAlignedRowMajor{T} end
+abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
+                                 isLoadOrStoreStrided, strideOverExtent
+                                } <: Layout.UnsafeAlignedRowMajor{T} end
 
 @inline function Layout.load(
         ::Union{
-            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
-            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
+                                    isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
+                                    isLoadOrStoreStrided, strideOverExtent}}
         }, workspace, tile::Tile{size}
-    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent, size}
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2,
+             isLoadOrStoreStrided, strideOverExtent, size}
 
     NUMEL = 16 ÷ sizeof(T)
 
@@ -54,10 +63,13 @@ end
 
 @inline function Layout.store!(
         ::Union{
-            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
-            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
+                                    isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
+                                    isLoadOrStoreStrided, strideOverExtent}}
         }, workspace, value, tile::Tile{size}
-    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent, size}
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2,
+             isLoadOrStoreStrided, strideOverExtent, size}
 
     NUMEL = 16 ÷ sizeof(T)
 
@@ -99,11 +111,11 @@ function precomputeGETTLayoutConstants(
     # Tuple{Int, Int, ...}.
 
     # → For the A matrix this will contain the tensor strides corresponding to the M stride.
-    # e.g. for D[A, B, C] = A[B, D, A] * B[D, C] this will be (1, 3), since B and A belong to the
-    # M stride.
+    # e.g. for D[A, B, C] = A[B, D, A] * B[D, C] this will be (1, 3), since B and A belong
+    # to the M stride.
     dimensionsT1 = Tuple(x for x in dimensions[1])
-    # → analogous, T2_stride will be equal to (2,) for the above example, since D belongs to the
-    # K stride.
+    # → analogous, T2_stride will be equal to (2,) for the above example, since D belongs to
+    # the K stride.
     dimensionsT2 = Tuple(x for x in dimensions[2])
 
 
@@ -157,8 +169,8 @@ function precomputeGETTLayoutConstants(
     # 5. Convert the Bool to an Int.
     isLoadOrStoreStrided = Int(isLoadOrStoreStrided)
 
-    # 5.b If the load or store is strided, then precompute the size of the dimensions to stride
-    # over.
+    # 5.b If the load or store is strided, then precompute the size of the dimensions to
+    # stride over.
     strideOverExtent = 1
     if (isnothing(strideOver) == false && isLoadOrStoreStrided == true)
         for stride_idx in strideOver
@@ -190,9 +202,11 @@ function createGETTLayout(
     ) = precomputeGETTLayoutConstants(extent, dimensions, isLoadOrStoreStrided, strideOver)
 
     if (isColMajor == true)
-        return GETTLayoutColMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}
+        GETTLayoutColMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2,
+                           isLoadOrStoreStrided, strideOverExtent}
     else
-        return GETTLayoutRowMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}
+        GETTLayoutRowMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2,
+                           isLoadOrStoreStrided, strideOverExtent}
     end
 end
 

@@ -8,9 +8,12 @@ mutable struct ContractionPlan
     algorithmPlan::AbstractAlgorithmPlan
     operator
 
-    function ContractionPlan(desc::ContractionDescriptor; algo::ALGO=ALGO_GETT, operator=Operator.WMMAOp, blockShape=nothing, warpsPerBlock=nothing, computeWarp=nothing)
+    function ContractionPlan(desc::ContractionDescriptor; algo::ALGO=ALGO_GETT,
+                             operator=Operator.WMMAOp, blockShape=nothing,
+                             warpsPerBlock=nothing, computeWarp=nothing)
         if (algo == ALGO_GETT)
-            algorithmPlan = setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp)
+            algorithmPlan =
+                setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp)
         end
 
         return new(desc, algo, algorithmPlan, operator)
@@ -37,7 +40,8 @@ mutable struct ContractionPlan
             computeType,
             accumulateType
         )
-        return ContractionPlan(desc; algo=algo, operator=operator, blockShape=blockShape, warpsPerBlock=warpsPerBlock, computeWarp=computeWarp)
+        return ContractionPlan(desc; algo=algo, operator=operator, blockShape=blockShape,
+                                     warpsPerBlock=warpsPerBlock, computeWarp=computeWarp)
     end
 
     function ContractionPlan(plan::ContractionPlan, operator)
@@ -46,7 +50,8 @@ mutable struct ContractionPlan
 end
 
 export contraction!
-function contraction!(plan::ContractionPlan, α, a, b, β, c, d; kernel=Kernel.matmul_singlestage)
+function contraction!(plan::ContractionPlan, α, a, b, β, c, d;
+                      kernel=Kernel.matmul_singlestage)
     unaryOpA = plan.desc.descA.unaryOp
     unaryOpB = plan.desc.descB.unaryOp
     unaryOpC = plan.desc.descC.unaryOp
@@ -64,7 +69,7 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d; kernel=Kernel.m
             transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
             kernel = kernel,
         )
-    else 
+    else
         throw(ArgumentError("Unsupported algorithm!"))
     end
 end
