@@ -174,7 +174,7 @@ end
 
 ## output
 
-function plot_results(best_configs)
+function plot_results(df)
     markershapes = Dict(
         "NN" => :circle,
         "NT" => :dtriangle,
@@ -183,23 +183,33 @@ function plot_results(best_configs)
     )
 
     p = plot()
-    title!("$AB_type x $AB_type = $CD_type ($(name(device())))")
-    xlabel!("Matrix size [-]")
-    ylabel!("Performance relative to cuBLAS [%]")
+    title!("TTCG on $(name(device()))")
+    xlabel!("Tensor contraction")
+    ylabel!("Performance relative to cuTENSOR [%]")
 
-    for transpose_a in [false, true],
-        transpose_b in [false, true]
+    idx = 1:nrow(df)
+    names = df.parseable_name
+    ratios = @. 100 * perf_ratio(df.gemmkernels_times, df.baseline_times)
+    ratios_lo = @. 100 * perf_ratio_lo(df.gemmkernels_times, df.baseline_times)
+    ratios_hi = @. 100 * perf_ratio_hi(df.gemmkernels_times, df.baseline_times)
 
-        label = get_label(transpose_a, transpose_b)
-
-        relevant_configs = best_configs[(@. (best_configs[!, "transpose_a"] == transpose_a) & (best_configs[!, "transpose_b"] == transpose_b)), :]
-
-        ratios = @. 100 * perf_ratio(relevant_configs.gemmkernels_times, relevant_configs.baseline_times)
-        ratios_lo = @. 100 * perf_ratio_lo(relevant_configs.gemmkernels_times, relevant_configs.baseline_times)
-        ratios_hi = @. 100 * perf_ratio_hi(relevant_configs.gemmkernels_times, relevant_configs.baseline_times)
-
-        plot!(p, relevant_configs.N, ratios, ribbon=(ratios .- ratios_lo, ratios_hi .- ratios), label=label, markershape=markershapes[label], xscale=:log2)
+    # determine colors based on a gradient: 100 is white, over 100 becomes green, below 100 becomes red
+    colors = map(ratios) do ratio
+        if ratio > 100
+            # turn green: 25% faster is full grean
+            alpha = clamp((ratio - 100) / 25, 0, 1)
+            return RGBA(0, 1, 0, alpha)
+        else
+            # turn red towards 25% performance
+            alpha = clamp((100 - ratio) / 75, 0, 1)
+            return RGBA(1, 0, 0, alpha)
+        end
     end
+
+    bar!(p, idx, legend=false,
+         xticks=(idx, names), xrotation=45, xtickfont=font(5),
+         ratios, err=(ratios .- ratios_lo, ratios_hi .- ratios),
+         color=colors)
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end
