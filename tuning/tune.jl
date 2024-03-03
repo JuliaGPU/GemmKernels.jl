@@ -404,7 +404,7 @@ function main()
 
                         # recycle our worker
                         rmprocs(worker; waitfor=30)
-                        worker = addworkers(1)[1]
+                        worker = addworkers(1; memory=max_memory_usage)[1]
                     finally
                         delete!(worker_jobs, worker)
                         push!(results, (worker, i))
