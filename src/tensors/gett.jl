@@ -23,16 +23,22 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     modesDM = setdiff(modeD, modesBN)
     modesDN = setdiff(modeD, modesAM)
 
+    # If you want to prioritise vectorised loads and stores of D, you can set this to true.
+    prioritiseD = false
+    if !(modeD[1] in modesAM)
+        prioritiseD = false
+    end
+
     # If the first M mode of A is equal to the first M mode of D,
     # or if the first mode of A is not part of the M modes,
     # we want to inherit the order of modes of D for optimal unit-stride
     # loads ands stores of D.
-    if (modesAM[1] == modesDM[1] || findall(x -> x == modesAM[1], modeA)[1] != 1)
+    if (modesAM[1] == modesDM[1] || findall(x -> x == modesAM[1], modeA)[1] != 1 || prioritiseD) && length(modesAM) != 1
         modesAM = modesDM
     end
 
     # The same goes for B.
-    if (modesBN[1] == modesDN[1] || findall(x -> x == modesBN[1], modeB)[1] != 1)
+    if (modesBN[1] == modesDN[1] || findall(x -> x == modesBN[1], modeB)[1] != 1) && length(modesBN) != 1
         modesBN = modesDN
     end
 
@@ -138,22 +144,48 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         append!(dimensionsDN, findall(x -> x == modeB[dimension], modeD))
     end
 
-    # The C load and D store are vectorised if the order of the M dimensions in A and C are
-    # identical and the order of the N dimensions in B and D are identical.
-    # This only works if the first dimension of C is part of A.
-    isColMajorD = true
+    # We potentially turn the loads of A and B into strided loads if we want to prioritise 
+    # vectorised loads and stores of D.
+    if (prioritiseD)
+        if isLoadStridedA == false
+            if isColMajorA == true
+                append!(strideOverA, 1 : dimensionsAM[1] - 1)
+            else
+                append!(strideOverA, 1 : dimensionsAK[1] - 1)
+            end
 
-    if dimensionsDM == dimensionsDM[sortperm(dimensionsDM)] &&
-       dimensionsDN == dimensionsDN[sortperm(dimensionsDN)] &&
-       modeD[1] in modesAM
-        isStoreStridedD = false
-    else
-        isStoreStridedD = true
+            if length(strideOverA) > 0
+                isLoadStridedA = true
+                isColMajorA = true
+            end
+        end
+
+        if isLoadStridedB == false
+            if isColMajorB == true
+                append!(strideOverB, 1 : dimensionsBK[1] - 1)
+            else
+                append!(strideOverB, 1 : dimensionsBN[1] - 1)
+            end
+
+            if length(strideOverB) > 0
+                isLoadStridedB = true
+                isColMajorB = false
+            end
+        end
     end
 
+
+    # There currently is no support for transposing the D tensor. This could be interesting if the
+    # first mode of D would be part of the N modes.
+    isColMajorD = true
+
+    # D is only vectorised if the first mode of DM is the first mode of D.
     strideOverD = Vector{Int}(undef, 0)
-    if (isStoreStridedD == true)
-        append!(strideOverD, 1 : dimensionsDM[1] - 1)
+    append!(strideOverD, 1 : dimensionsDM[1] - 1)
+    if length(strideOverD) > 0
+        isStoreStridedD = true
+    else
+        isStoreStridedD = false
     end
 
     # Finally, the GEMM shape is determined.
