@@ -2,6 +2,14 @@ using GemmKernels
 using GemmKernels.Layout
 using GemmKernels.Tensors.GETTLayout
 
+OVERRIDE_do_override = false
+OVERRIDE_is_A_col_major = nothing
+OVERRIDE_is_B_col_major = nothing
+OVERRIDE_is_D_col_major = nothing
+OVERRIDE_perm_M = nothing
+OVERRIDE_perm_N = nothing
+OVERRIDE_perm_K = nothing
+
 struct GETTPlan <: AbstractAlgorithmPlan
     gemmConf
 end
@@ -155,6 +163,72 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     if (isStoreStridedD == true)
         append!(strideOverD, 1 : dimensionsDM[1] - 1)
     end
+
+    # ===============================================================
+    # OVERRIDES
+
+    if OVERRIDE_do_override
+        # Col major?
+        isColMajorA = OVERRIDE_is_A_col_major
+        isColMajorB = OVERRIDE_is_B_col_major
+        isColMajorD = OVERRIDE_is_D_col_major
+
+        # perm_M, perm_N, perm_K contains the permutations of the modes,
+        # i.e. the order the modes are accessed in.
+        perm_M = OVERRIDE_perm_M
+        perm_N = OVERRIDE_perm_N
+        perm_K = OVERRIDE_perm_K
+
+        dimensionsAM = Int64[]
+        dimensionsDM = Int64[]
+
+        dimensionsBN = Int64[]
+        dimensionsDN = Int64[]
+
+        dimensionsAK = Int64[]
+        dimensionsBK = Int64[]
+
+        for mode in perm_M
+            append!(dimensionsAM, findfirst(x -> x == mode, modeA))
+            append!(dimensionsDM, findfirst(x -> x == mode, modeD))
+        end
+
+        for mode in perm_N
+            append!(dimensionsBN, findfirst(x -> x == mode, modeB))
+            append!(dimensionsDN, findfirst(x -> x == mode, modeD))
+        end
+
+        for mode in perm_K
+            append!(dimensionsAK, findfirst(x -> x == mode, modeA))
+            append!(dimensionsBK, findfirst(x -> x == mode, modeB))
+        end
+
+        if isColMajorA # first access M
+            strideOverA = collect(1:dimensionsAM[1]-1)
+        else           # first access K
+            strideOverA = collect(1:dimensionsAK[1]-1)
+        end
+
+        isLoadStridedA = !isempty(strideOverA)
+
+        if isColMajorB # first access K
+            strideOverB = collect(1:dimensionsBK[1]-1)
+        else           # first access N
+            strideOverB = collect(1:dimensionsBN[1]-1)
+        end
+
+        isLoadStridedB = !isempty(strideOverB)
+
+        if isColMajorD # first access M
+            strideOverD = collect(1:dimensionsDM[1]-1)
+        else           # first access N
+            strideOverD = collect(1:dimensionsDN[1]-1)
+        end
+
+        isStoreStridedD = !isempty(strideOverD)
+    end
+
+    # ===============================================================
 
     # Finally, the GEMM shape is determined.
     gemmShape = (
