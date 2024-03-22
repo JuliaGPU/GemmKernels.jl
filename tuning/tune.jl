@@ -17,21 +17,23 @@ if myid() == 1
 end
 
 # interface for tuning modules:
+
 #
-# configurations
-# - generate_configs(): return Dataframe with possible configurations
+# The interface uses 3 kinds of objects:
+# - a problem, representing the details of the operation we're performing
+#   (e.g., a 2048x2048x2048 Float32xFloat32xFloat32 WMMA GEMM)
+# - the (input and output) data used when executing the problem
+# - the parameters used to customize the execution (e.g. the operator, block shape, etc)
+#
+# This interface is mostly defined in `configs/configs.jl`. The tuning script layers
+# some additional abstraction on top of this interface for DataFrames I/O:
+# - generate_configs(): return Dataframe with all possible configurations, one per row
 # - repr_row(row): pretty-print a row of the Dataframe
+# - get_problem(row): create a input problem object for this row
+# - get_params(row): create configuration parameters for this row
+# - group_configs(configs): group configurations by problem
 # - select_best(configs): given a Dataframe of configurations, with an added :time column,
 #   return a Dataframe with the best configuration for each combination of parameters
-# - get_config(row): create a Configuration object `cf` from a Dataframe row
-#
-# operations
-# - generate_inputs(cf): allocate inputs
-# - initialize_inputs(cf, inputs...): initialize inputs appropriately
-# - execute(cf, inputs...): execute the configuration, and return the results
-# - execute_reference(cf, inputs...): execute the reference implementation (for validation)
-# - execute_baseline(cf, inputs...): execute the baseline implementation (for benchmarking)
-# - verify(cf, reference, results): verify the results
 #
 # output
 # - plot_results(best_configs): plot the results
@@ -40,7 +42,8 @@ include("wmma-contraction.jl")
 #######
 
 # Stop sampling when a configuration is really slow
-const BENCH_MAX_SAMPLE_SECONDS = 1
+# If unset, we will stop measuring if we're 2x slower than the baseline,
+#const BENCH_MAX_TIME = 1
 
 # After a certain time, a measurement is considered stale (i.e., because of a crash).
 # The time here determines when to ignore a lock. Note that it is automatically
@@ -48,6 +51,9 @@ const BENCH_MAX_SAMPLE_SECONDS = 1
 const BENCH_STALE_AGE = 60
 
 const PIDFILE = joinpath(@__DIR__, "tuning.pid")
+
+# Whether we stop after beating the baseline, or continue until we've tested every config.
+const EXHAUSTIVE = true
 
 # Retry configurations with these categories.
 const RETRY_CATEGORIES = ["oom", "crashed"]
@@ -79,113 +85,144 @@ function log_filename()
 end
 FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
-function measure_config(row)
+function measure_config(row, max_time, reference_result)
     @info "Measuring configuration $(repr_row(row))..."
-    cf = get_config(row)
 
-    # allocate inputs
-    inputs = try
+    # allocate data
+    problem = get_problem(row)
+    data = try
         # this is the only place where we allocate device memory.
         # other allocation failures will be reported as crashes.
-        generate_inputs(cf)
+        allocate_data(problem)
     catch err
         bt = catch_backtrace()
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
         if isa(err, OutOfGPUMemoryError)
             @info "Not enough memory for configuration $(repr_row(row))\n" * log
-            return Inf, "oom"
+            return (;), "oom"
         else
             rethrow()
         end
     end
 
-    # compile and warm-up
     try
-        execute(cf, inputs...)
-    catch err
-        bt = catch_backtrace()
-        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+        # compile and warm-up
+        params = get_params(row)
+        args = nothing
+        try
+            args = prepare(problem; params...)
+            execute(problem, data...; args...)
+        catch err
+            bt = catch_backtrace()
+            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
-        # determine the cause of the error
-        if isa(err, GemmKernels.ConfigError)
-            @info "Skipping unsupported configuration $(repr_row(row))\n" * log
-            return Inf, "config_error"
-        end
-        if isa(err, CUDA.InvalidIRError)
-            @info "Failed to compile $(repr_row(row))\n" * log
-            return Inf, "compilation_error"
-        end
-
-        @info "Unknown error processing $(repr_row(row))\n" * log
-        return Inf, "unknown_error"
-    end
-
-    # initialize inputs and calculate the reference
-    c_h = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
-        initialize_inputs(cf, inputs...)
-    end
-
-    # settle down
-    device_synchronize()
-    GC.gc(true)
-
-    # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
-    # only taking the minimum time, etc)
-    time = Inf
-    reference_host, results_host = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
-        # make sure we're starting with an idle device
-        wait_if_throttling()
-
-        # keep benchmarking until the time isn't improving anymore
-        results = nothing
-        while true
-            new_time = CUDA.@elapsed begin
-                results = execute(cf, inputs...)
+            # determine the cause of the error
+            if isa(err, GemmKernels.ConfigError)
+                @info "Skipping unsupported configuration $(repr_row(row))\n" * log
+                return (;), "config_error"
             end
-            if new_time > time
-                break
+            if isa(err, CUDA.InvalidIRError)
+                @info "Failed to compile $(repr_row(row))\n" * log
+                return (;), "compilation_error"
             end
-            time = new_time
+            if isa(err, OutOfGPUMemoryError)
+                # XXX: this shouldn't happen here as we already allocated all memory,
+                #      however it can occur during kernel launches or other CUDA calls
+                #      when very close to the memory limit.
+                @info "Not enough memory for configuration $(repr_row(row))\n" * log
+                return (;), "oom"
+            end
 
-            # if this configuration is really slow, don't even bother running a second time
-            if time > BENCH_MAX_SAMPLE_SECONDS
-                break
-            end
+            @info "Unknown error processing $(repr_row(row))\n" * log
+            return (;), "unknown_error"
         end
 
-        # compute the reference (may mutate inputs, so we need to do this last)
-        reference = execute_reference(cf, inputs...)
+        # initialize data
+        initializing = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
+            @elapsed initialize_data(problem, data...)
+        end
 
-        # copy results to host, so that we can verify without additional GPU allocations
-        Array(reference), Array(results)
+        # settle down
+        device_synchronize()
+        GC.gc(true)
+
+        # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
+        # only taking the minimum time, etc)
+        measurements = Float64[]
+        result, exclusives = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
+            # make sure we're starting with an idle device
+            settling = @elapsed wait_if_throttling()
+
+            # perform time measurements
+            result = nothing
+            measuring = @elapsed while true
+                best_time = minimum(measurements; init=Inf)
+                time = CUDA.@elapsed begin
+                    result = execute(problem, data...; args...)
+                end
+                push!(measurements, time)
+
+                # keep benchmarking until the time isn't improving anymore
+                if time > best_time
+                    break
+                end
+
+                # if this configuration is really slow, bail out
+                if time > max_time
+                    result = nothing
+                    break
+                end
+            end
+
+            # copy results to host, so that we can verify without additional GPU allocations
+            copying = @elapsed begin
+                if result !== nothing
+                    result = Array(result)
+                end
+            end
+
+            return result, (; initializing, settling, measuring, copying)
+        end
+
+        # verify the results
+        if result !== nothing && !verify(problem, reference_result, result)
+            @warn "Configuration produced invalid result: $(repr_row(row))"
+            return (; measurements, exclusives), "invalid_result"
+        end
+
+        if minimum(measurements) > max_time
+            return (; measurements, exclusives), "slow"
+        end
+        return (; measurements, exclusives), "success"
+    finally
+        # clean-up
+        for arr in data
+            CUDA.unsafe_free!(arr)
+        end
+        CUDA.reclaim()
     end
+end
 
-    # verify the results
-    if !verify(cf, reference_host, results_host)
-        @warn "Configuration produced invalid result: $(repr_row(row))"
-        return time, "invalid_result"
+function timescale(time)
+    if time < 1e-6
+        1e9, "ns"
+    elseif time < 1e-3
+        1e6, "μs"
+    elseif time < 1
+        1e3, "ms"
+    else
+        1, "s"
     end
-
-    return time, "success"
 end
 
 function prettytime(time)
     time == Inf && return "Inf"
 
     # timescale
-    time *= 1e9
-    scale, unit = if time < 1e3
-        1, "ns"
-    elseif time < 1e6
-        1e3, "μs"
-    elseif time < 1e9
-        1e6, "ms"
-    else
-        1e9, "s"
-    end
+    scale, unit = timescale(time)
 
-    rnd_time = round(time / scale; sigdigits=3)
+    rnd_time = round(time * scale; sigdigits=3)
     return "$rnd_time $unit"
 end
 
@@ -212,19 +249,6 @@ function got_enough_samples(row)
     row["time_spent"] >= PLOT_NUM_SECONDS
 end
 
-function get_nvml_data(dev=NVML.Device(parent_uuid(device())))
-    Dict(
-         :clock_info => NVML.clock_info(dev),
-         :max_clock_info => NVML.max_clock_info(dev),
-         :clock_event_reasons => NVML.clock_event_reasons(dev),
-         :power_usage => NVML.power_usage(dev),
-         :energy_consumption => NVML.energy_consumption(dev),
-         :temperature => NVML.temperature(dev),
-         :memory_info => NVML.memory_info(dev),
-         :utilization_rates => NVML.utilization_rates(dev),
-    )
-end
-
 function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
     # make sure we're reading accurate data
     # (for when this function is called in a loop)
@@ -243,30 +267,27 @@ function benchmark_best_configs(configs)
     best_configs = select_best(configs)
     best_configs.category .= "pending"
     best_configs.time_spent .= 0.0
-    best_configs.gemmkernels_times = [[] for _ in 1:size(best_configs, 1)]
-    best_configs.baseline_times = [[] for _ in 1:size(best_configs, 1)]
-    best_configs.gemmkernels_nvml = [[] for _ in 1:size(best_configs, 1)]
-    best_configs.baseline_nvml = [[] for _ in 1:size(best_configs, 1)]
+    best_configs.gemmkernels_times = [Float64[] for _ in 1:size(best_configs, 1)]
+    best_configs.baseline_times = [Float64[] for _ in 1:size(best_configs, 1)]
 
     p = Progress(size(best_configs, 1); desc="Benchmarking", showspeed=true)
     for config_row in eachrow(best_configs)
-        cf = get_config(config_row)
-        inputs = generate_inputs(cf)
+        problem = get_problem(config_row)
+        data = allocate_data(problem)
 
         @info "Profiling configuration $(repr_row(config_row))..."
 
+        params = get_params(config_row)
         for baseline in [false, true]
             for i in 1:PLOT_BATCH_SIZE
                 wait_if_throttling()
 
                 start_time = time()
 
-                push!(config_row[if baseline "baseline_nvml" else "gemmkernels_nvml" end], get_nvml_data())
-
                 if baseline
-                    prof = CUDA.@profile concurrent=false execute_baseline(cf, inputs...)
+                    prof = CUDA.@profile concurrent=false execute_baseline(problem, data...)
                 else
-                    prof = CUDA.@profile concurrent=false execute(cf, inputs...)
+                    prof = CUDA.@profile concurrent=false execute(problem, data...; params...)
                 end
 
                 push!(config_row[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
@@ -303,32 +324,40 @@ function addworkers(X; memory)
 end
 
 function main()
+    # get rid of workers from a previous run
+    if length(workers()) > 1
+        rmprocs(workers()...; waitfor=30)
+    end
+
     # (0) Load configurations from disk, or generate them.
     config_path = joinpath(@__DIR__, "configs.bin")
-    configs = nothing
+    all_configs = nothing
     if isfile(config_path)
         @info "Loading configurations from disk..."
         try
-            configs = deserialize(config_path)
-            @info "Loaded $(size(configs, 1)) configurations."
+            all_configs = deserialize(config_path)
+            @info "Loaded $(size(all_configs, 1)) configurations."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
             mv(config_path, "$(config_path).broken")
         end
     end
-    if configs === nothing
+    if all_configs === nothing
         # (1) Generate configurations.
         @info "Generating configurations..."
-        configs = generate_configs()
-        configs.category .= "pending"
-        configs.time .= Inf
-        @info "Generated $(size(configs, 1)) configurations."
+        all_configs = generate_configs()
+        all_configs.category .= "pending"
+        all_configs.time .= Inf
+        all_configs.times .= [Float64[] for _ in 1:size(all_configs, 1)]
+        @info "Generated $(size(all_configs, 1)) configurations."
 
         # (2) Filter configurations where we can determine upfront that they are unsupported.
         @info "Finding configurations that we know are unsupported a-priori..."
-        @showprogress desc="Filtering configurations..." for config_row in eachrow(configs)
+        @showprogress desc="Filtering configurations..." for config_row in eachrow(all_configs)
             try
-                cf = get_config(config_row)
+                problem = get_problem(config_row)
+                params = get_params(config_row)
+                prepare(problem; params...)
             catch err
                 if isa(err, GemmKernels.ConfigError)
                     config_row["category"] = "skipped"
@@ -338,32 +367,66 @@ function main()
             end
         end
 
-        @info "Skipping $(counter(configs[!, "category"])["skipped"]) configurations."
+        @info "Skipping $(counter(all_configs[!, "category"])["skipped"]) configurations."
 
-        serialize(config_path, configs)
+        serialize(config_path, all_configs)
     end
 
-    # (3) Measure performance of configurations.
+    # (3) Process each unique problem.
 
-    jobs = filter(1:size(configs, 1)) do i
-        configs[i, :category] in ["pending"; RETRY_CATEGORIES]
-    end
-    shuffle!(jobs)
+    ngroups = length(group_configs(all_configs))
+    for (group, configs) in enumerate(group_configs(all_configs))
+        problem = get_problem(first(configs))
 
-    njobs = length(jobs)
-    p = Progress(njobs; desc="Parameter sweep", showspeed=true)
-    @info "Need to perform parameter sweep over $(njobs) configurations."
+        # Measure baseline performance of problem.
+        target_time, reference_result = let
+            data = allocate_data(problem)
+            initialize_data(problem, data...)
 
-    max_memory_usage = 0
-    @showprogress desc="Determining memory usage..." for config_row in eachrow(configs)
-        config_row.category in ["pending"; RETRY_CATEGORIES] || continue
-        cf = get_config(config_row)
-        max_memory_usage = max(max_memory_usage, sizeof(cf))
-    end
-    max_memory_usage += 128*2^20                    # there's always some overhead
-    worker_memory_usage = max_memory_usage + 2^30   # includes CUDA context size, etc
+            # warm-up
+            args = prepare_baseline(problem, data...)
+            execute_baseline(problem, data...; args...)
 
-    if njobs > 0
+            # measure baseline
+            wait_if_throttling()
+            time = CUDA.@elapsed(execute_baseline(problem, data...; args...))
+
+            # calculate reference
+            result = Array(calculate_reference(problem, data...))
+
+            for arr in data
+                CUDA.unsafe_free!(arr)
+            end
+            CUDA.reclaim()
+
+            time, result
+        end
+
+        # Find current best time
+        best_time = minimum(configs.time)
+        if !EXHAUSTIVE && best_time < target_time
+            continue
+        end
+
+        # Determine jobs we can still run
+        jobs = filter(1:size(configs, 1)) do i
+            configs[i, :category] in ["pending"; RETRY_CATEGORIES]
+        end
+        if isempty(jobs)
+            continue
+        end
+        shuffle!(jobs)
+        njobs = length(jobs)
+
+        # Determine memory usage
+        max_memory_usage = 0
+        for job in jobs
+            problem = get_problem(configs[job, :])
+            max_memory_usage = max(max_memory_usage, sizeof(problem))
+        end
+        max_memory_usage += 128*2^20                        # there's always some overhead
+        worker_memory_usage = max_memory_usage + 1500*2^20  # CUDA context, etc
+
         # Spawn workers
         cpu_memory = Sys.free_memory()
         gpu_memory = CUDA.available_memory()
@@ -374,125 +437,164 @@ function main()
             njobs+1
         )
         addworkers(max(1, max_workers-1); memory=max_memory_usage)
-        @info "Starting tuning script for device $(name(device())) using $(nworkers()) workers..."
-    end
 
-    results = Channel(Inf)
-    @sync begin
-        # measure configurations on workers
-        worker_jobs = Dict()
-        for worker in workers()
-            errormonitor(@async begin
-                while length(jobs) > 0
-                    i = popfirst!(jobs)
-                    config_row = configs[i, :]
-                    worker_jobs[worker] = (; start_time=time(), i)
-                    try
-                        config_row.time, config_row.category =
-                            remotecall_fetch(measure_config, worker, NamedTuple(config_row))
+        # determine how long each measurement can take
+        max_time = if @isdefined(BENCH_MAX_TIME)
+            BENCH_MAX_TIME
+        else
+            2 * target_time
+        end
 
-                        # keep memory usage under control
-                        remotecall(worker) do
-                            CUDA.reclaim()
-                        end
-                    catch err
-                        config_row.category = "crashed"
+        # keep track of time spent in exclusive sections
+        exclusive_times = Dict{Symbol, Float64}()
 
-                        bt = catch_backtrace()
-                        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                        @error "Unexpected exception on worker $worker: $log"
+        @info "Need to perform parameter sweep over $(njobs) configurations."
+        p = Progress(njobs; desc="$(problem) [$group/$ngroups]", showspeed=true)
+        results = Channel(Inf)
+        sweep_start = time()
+        @sync begin
+            # measure configurations on workers
+            worker_jobs = Dict()
+            for worker in workers()
+                errormonitor(@async begin
+                    while length(jobs) > 0
+                        i = popfirst!(jobs)
+                        config_row = configs[i, :]
+                        worker_jobs[worker] = (; start_time=time(), i)
+                        try
+                            times, config_row.category =
+                                remotecall_fetch(measure_config, worker,
+                                                 NamedTuple(config_row),
+                                                 max_time, reference_result)
 
-                        # recycle our worker
-                        rmprocs(worker; waitfor=30)
-                        worker = addworkers(1; memory=max_memory_usage)[1]
-                    finally
-                        delete!(worker_jobs, worker)
-                        push!(results, (worker, i))
+                            # save all the measurements
+                            if haskey(times, :measurements)
+                                config_row.times = times.measurements
+                                config_row.time = minimum(times.measurements)
+                            end
 
-                        # Consider retrying failed configurations
-                        if config_row.category in RETRY_CATEGORIES
-                            push!(jobs, i)
+                            # save exclusive times
+                            if haskey(times, :exclusives)
+                                for k in keys(times.exclusives)
+                                    v = times.exclusives[k]
+                                    exclusive_times[k] = get(exclusive_times, k, 0.0) + v
+                                end
+                            end
+                        catch err
+                            config_row.category = "crashed"
+
+                            bt = catch_backtrace()
+                            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                            @error "Unexpected exception on worker $worker: $log"
+
+                            # recycle our worker
+                            rmprocs(worker; waitfor=30)
+                            worker = addworkers(1; memory=max_memory_usage)[1]
+                        finally
+                            delete!(worker_jobs, worker)
+                            push!(results, (worker, i))
+
+                            # Consider retrying failed configurations
+                            if config_row.category in RETRY_CATEGORIES
+                                push!(jobs, i)
+                            end
                         end
                     end
+                end)
+            end
+
+            # monitor progress
+            errormonitor(@async begin
+                times = []
+                while !isempty(jobs) || !isempty(worker_jobs) || !isempty(results)
+                    # process results
+                    if isready(results)
+                        while isready(results)
+                            worker, i = take!(results)
+
+                            # Update configuration
+                            config_row = configs[i, :]
+                            best_time = min(best_time, config_row.time)
+                            @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
+                        end
+
+                        # Save results in case the process crashes.
+                        serialize(config_path, all_configs)
+                    end
+                    if !isinf(best_time)
+                        push!(times, best_time)
+                    end
+
+                    # update the progress bar
+                    function showvalues()
+                        vals = []
+
+                        # configuration times
+                        push!(vals, ("target time", prettytime(target_time)))
+                        if !isinf(best_time)
+                            push!(vals, ("best time", prettytime(best_time)))
+                        end
+
+                        push!(vals, ("", ""))
+
+                        # how much time we spent in exclusive sections
+                        if !isempty(exclusive_times)
+                            push!(vals, ("total", prettytime(time() - sweep_start)))
+
+                            for (k, v) in exclusive_times
+                                push!(vals, (k, prettytime(v)))
+                            end
+
+                            push!(vals, ("", ""))
+                        end
+
+                        # job state
+                        category_counters = Dict(counter(configs[!, "category"]))
+                        for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
+                            abs = category_counters[k]
+                            rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
+                            push!(vals, (k, "$(abs) ($(rel)%)"))
+                        end
+
+                        push!(vals, ("", ""))
+
+                        # gpu stats
+                        dev = NVML.Device(parent_uuid(device()))
+                        push!(vals, ("power usage", "$(NVML.power_usage(dev)) W"))
+                        push!(vals, ("temperature", "$(NVML.temperature(dev)) °C"))
+                        meminfo = NVML.memory_info(dev)
+                        push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
+                        utilization = NVML.utilization_rates(dev)
+                        push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
+
+                        vals
+                    end
+                    nfinished = njobs - length(jobs)
+                    update!(p, nfinished; showvalues, valuecolor=:normal)
+
+                    # Check if we're done
+                    if !EXHAUSTIVE && best_time < target_time
+                        break
+                    end
+
+                    sleep(5)
                 end
+
+                empty!(jobs)
+
+                # Kill workers
+                rmprocs(workers()...; waitfor=30)
             end)
         end
 
-        # monitor progress
-        errormonitor(@async begin
-            while !isempty(jobs) || !isempty(results)
-                # process results
-                if isready(results)
-                    while isready(results)
-                        worker, i = take!(results)
-
-                        # Update configuration
-                        config_row = configs[i, :]
-                        @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
-                    end
-
-                    # Save results in case the process crashes.
-                    serialize(config_path, configs)
-                end
-
-                # update the progress bar
-                function showvalues()
-                    vals = []
-
-                    # worker stats
-                    for worker in workers()
-                        job = get(worker_jobs, worker, nothing)
-                        if job === nothing
-                            push!(vals, ("worker $worker", "idle"))
-                        else
-                            config_row = configs[job.i, :]
-                            elapsed = time() - job.start_time
-                            push!(vals, ("worker $worker", "$(prettytime(elapsed)) @ $(repr_row(config_row))"))
-                        end
-                    end
-
-                    push!(vals, ("", ""))
-
-                    # job state
-                    category_counters = Dict(counter(configs[!, "category"]))
-                    for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
-                        abs = category_counters[k]
-                        rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
-                        push!(vals, (k, "$(abs) ($(rel)%)"))
-                    end
-
-                    push!(vals, ("", ""))
-
-                    # gpu stats
-                    dev = NVML.Device(parent_uuid(device()))
-                    push!(vals, ("power usage", "$(NVML.power_usage(dev)) W"))
-                    push!(vals, ("temperature", "$(NVML.temperature(dev)) °C"))
-                    meminfo = NVML.memory_info(dev)
-                    push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
-                    utilization = NVML.utilization_rates(dev)
-                    push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
-
-                    vals
-                end
-                nfinished = njobs - length(jobs)
-                update!(p, nfinished; showvalues)
-
-                sleep(5)
-            end
-            finish!(p)
-        end)
+        return
     end
 
     # Save data for final iteration.
-    serialize(config_path, configs)
-
-    # Kill workers
-    if njobs > 0
-        rmprocs(workers()...; waitfor=30)
-    end
+    serialize(config_path, all_configs)
 
     # And load again, for good measure.
-    configs = deserialize(config_path)
+    all_configs = deserialize(config_path)
 
     # (4) Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")
@@ -508,7 +610,7 @@ function main()
     end
     if best_configs === nothing
         @info "Benchmarking configurations for plot..."
-        best_configs = benchmark_best_configs(configs)
+        best_configs = benchmark_best_configs(all_configs)
 
         serialize(best_configs_path, best_configs)
     end

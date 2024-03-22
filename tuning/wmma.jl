@@ -13,10 +13,13 @@ const zero_c = true
 include("../configs/configs.jl")
 
 function generate_configs()
-    all_configs = DataFrame(
+    configs = DataFrame(
+        # problem
+        N=Int[],
         transpose_a=Bool[],
         transpose_b=Bool[],
-        N=Int[],
+
+        # params
         BLOCK_M=Int[],
         BLOCK_N=Int[],
         BLOCK_K=Int[],
@@ -28,9 +31,9 @@ function generate_configs()
         kernel_str=String[]
     )
 
-    for transpose_a in [false, true],
+    for N in N_vals,
+        transpose_a in [false, true],
         transpose_b in [false, true],
-        N in N_vals,
         BLOCK_M in 2 .^ (6:9),
         BLOCK_N in 2 .^ (6:9),
         BLOCK_K in 2 .^ (5:7),
@@ -43,10 +46,10 @@ function generate_configs()
         ],
         kernel_str in ["singlestage", "pipelined"]
 
-        push!(all_configs, Dict(
+        push!(configs, Dict(
+            :N => N,
             :transpose_a => transpose_a,
             :transpose_b => transpose_b,
-            :N => N,
             :BLOCK_M => BLOCK_M,
             :BLOCK_N => BLOCK_N,
             :BLOCK_K => BLOCK_K,
@@ -59,7 +62,7 @@ function generate_configs()
         ))
     end
 
-    all_configs
+    configs
 end
 
 function repr_row(row)
@@ -81,10 +84,14 @@ function repr_row(row)
     return String(take!(io))
 end
 
-function get_config(row)
+function get_problem(row)
+    M = N = K = row.N
     transpose_a = row.transpose_a
     transpose_b = row.transpose_b
-    M = N = K = row.N
+    WMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b, zero_c)
+end
+
+function get_params(row)
     BLOCK_M = row.BLOCK_M
     BLOCK_N = row.BLOCK_N
     BLOCK_K = row.BLOCK_K
@@ -95,8 +102,10 @@ function get_config(row)
     OP_K = row.OP_K
     kernel = kernel_string_to_function(row.kernel_str)
 
-    @get_wmma_config
+    (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel, zero_c)
 end
+
+group_configs(configs) = groupby(configs, [:N, :transpose_a, :transpose_b])
 
 function kernel_string_to_function(str)
     if str == "singlestage"
@@ -111,9 +120,9 @@ end
 function select_best(configs)
     best_configs = similar(configs, 0)
 
-    for transpose_a = [false, true],
+    for N = N_vals,
+        transpose_a = [false, true],
         transpose_b = [false, true],
-        N = N_vals
 
         relevant_configs = configs[(@. (configs[!, "transpose_a"] == transpose_a) & (configs[!, "transpose_b"] == transpose_b) & (configs[!, "N"] == N)), :]
         _, best_config_index = findmin(relevant_configs[!, "time"])
@@ -138,35 +147,6 @@ function select_best(configs)
 
     return best_configs
 end
-
-
-## operations
-
-# generate_inputs: directly from configs.jl
-
-function initialize_inputs(cf, reference_mul!, a, b, c, d)
-    rand!(a)
-    rand!(b)
-    rand!(c)
-    d .= 0
-end
-
-function execute(cf, reference_mul!, a, b, c, d)
-    run_gemm(cf, a, b, c, d)
-    return d
-end
-
-function execute_baseline(cf, reference_mul!, a, b, c, d)
-    run_baseline(cf, a, b, c, d)
-    return c
-end
-
-function execute_reference(cf, reference_mul!, a, b, c, d)
-    reference_mul!(c, a, b)
-    return c
-end
-
-# verify: directly from configs.jl
 
 
 ## output

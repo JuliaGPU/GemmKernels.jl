@@ -1,4 +1,5 @@
 ## constants
+
 using JSON
 
 const data_type = Float16
@@ -12,14 +13,17 @@ fp = open(config_path, "r")
 const jsonData = JSON.parse(read(fp, String))
 
 
-## configs
+## configurations
 
 include("../configs/configs.jl")
 
 function generate_configs()
-    all_configs = DataFrame(
-        parseable_name=String[],
+    configs = DataFrame(
+        # problem
+        name=String[],
         extents=Vector{Int}[],
+
+        # params
         BLOCK_M=Int[],
         BLOCK_N=Int[],
         BLOCK_K=Int[],
@@ -31,7 +35,7 @@ function generate_configs()
         kernel_str=String[],
     )
 
-    for (parseable_name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData],
+    for (name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData],
         BLOCK_M in 2 .^ (6:9),
         BLOCK_N in 2 .^ (6:9),
         BLOCK_K in 2 .^ (5:7),
@@ -44,8 +48,8 @@ function generate_configs()
         ],
         kernel_str in ["singlestage", "pipelined"]
 
-        push!(all_configs, Dict(
-            :parseable_name => parseable_name,
+        push!(configs, Dict(
+            :name => name,
             :extents => extents,
             :BLOCK_M => BLOCK_M,
             :BLOCK_N => BLOCK_N,
@@ -59,14 +63,14 @@ function generate_configs()
         ))
     end
 
-    all_configs
+    configs
 end
 
 function repr_row(row)
     io = IOBuffer()
 
     # tccg benchmark parseable name
-    print(io, "$(row.parseable_name)")
+    print(io, "$(row.name)")
 
     # details
     print(io, " ($(row.BLOCK_M)×$(row.BLOCK_N)×$(row.BLOCK_K) block")
@@ -77,9 +81,14 @@ function repr_row(row)
     return String(take!(io))
 end
 
-function get_config(row)
-    parseable_name = row.parseable_name
+function get_problem(row)
+    name = row.name
     extents = row.extents
+
+    WMMATensorContraction(; name, extents, data_type, compute_type, accumulate_type, zero_c)
+end
+
+function get_params(row)
     BLOCK_M = row.BLOCK_M
     BLOCK_N = row.BLOCK_N
     BLOCK_K = row.BLOCK_K
@@ -90,8 +99,10 @@ function get_config(row)
     OP_K = row.OP_K
     kernel = kernel_string_to_function(row.kernel_str)
 
-    @get_tc_wmma_config
+    (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel)
 end
+
+group_configs(configs) = groupby(configs, [:name, :extents])
 
 function kernel_string_to_function(str)
     if str == "singlestage"
@@ -130,44 +141,6 @@ function select_best(configs)
 
     return best_configs
 end
-
-
-## operations
-
-# generate_inputs: directly from configs.jl
-
-function initialize_inputs(cf, reference_mul!, a, b, c, d)
-    a_h = rand(cf.a_type, cf.extents[cf.tensorModes[2]])
-    b_h = rand(cf.b_type, cf.extents[cf.tensorModes[3]])
-    c_h = rand(cf.c_type, cf.extents[cf.tensorModes[1]])
-
-    for x in [a, b, c, d]
-        x .= 0
-    end
-
-    a[(1:extent for extent in cf.extents[cf.tensorModes[2]])...] = a_h
-    b[(1:extent for extent in cf.extents[cf.tensorModes[3]])...] = b_h
-    c[(1:extent for extent in cf.extents[cf.tensorModes[1]])...] = c_h
-
-    nothing
-end
-
-function execute(cf, reference_mul!, a, b, c, d)
-    run_tc(cf, a, b, c, d)
-    return d
-end
-
-function execute_baseline(cf, reference_mul!, a, b, c, d)
-    run_baseline(cf, a, b, c, d)
-    return c
-end
-
-function execute_reference(cf, reference_mul!, a, b, c, d)
-    reference_mul!(c, a, b)
-    return c
-end
-
-# verify: directly from configs.jl
 
 
 ## output
@@ -215,7 +188,7 @@ function plot_results(df)
     bar!(p, idx, legend=false,
          xticks=(idx, names), xrotation=45, xtickfont=font(5),
          ratios, err=(ratios .- ratios_lo, ratios_hi .- ratios),
-         color=colors)
+         color=colors, ylims=(0,150))
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end

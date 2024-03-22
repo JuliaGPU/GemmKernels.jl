@@ -24,7 +24,7 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     modesDN = setdiff(modeD, modesAM)
 
     # If you want to prioritise vectorised loads and stores of D, you can set this to true.
-    prioritiseD = false
+    prioritiseD = true
     if !(modeD[1] in modesAM)
         prioritiseD = false
     end
@@ -144,7 +144,7 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         append!(dimensionsDN, findall(x -> x == modeB[dimension], modeD))
     end
 
-    # We potentially turn the loads of A and B into strided loads if we want to prioritise 
+    # We potentially turn the loads of A and B into strided loads if we want to prioritise
     # vectorised loads and stores of D.
     if (prioritiseD)
         if isLoadStridedA == false
