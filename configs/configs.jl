@@ -759,7 +759,8 @@ function WMMATensorContraction(; name, extents, data_type, compute_type, accumul
     )
 end
 
-function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel)
+function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
+                                        is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K)
     @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
     data_type = tc.a_type
 
@@ -788,6 +789,14 @@ function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARP
         warpsPerBlock=WARPS_M * WARPS_N,
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
     )
+
+    GemmKernels.Tensors.OVERRIDE_do_override = true
+    GemmKernels.Tensors.OVERRIDE_is_A_col_major = is_A_col_major
+    GemmKernels.Tensors.OVERRIDE_is_B_col_major = is_B_col_major
+    GemmKernels.Tensors.OVERRIDE_is_D_col_major = is_D_col_major
+    GemmKernels.Tensors.OVERRIDE_perm_M = PERM_M
+    GemmKernels.Tensors.OVERRIDE_perm_N = PERM_N
+    GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
 
     (; plan, kernel)
 end

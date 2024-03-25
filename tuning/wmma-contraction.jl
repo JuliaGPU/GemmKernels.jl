@@ -1,6 +1,8 @@
 ## constants
 
 using JSON
+using Combinatorics
+using ProgressMeter
 
 const data_type = Float16
 const compute_type = Float16
@@ -17,13 +19,22 @@ const jsonData = JSON.parse(read(fp, String))
 
 include("../configs/configs.jl")
 
-function generate_configs()
+function generate_problems()
+    problems = []
+    for el in jsonData
+        push!(problems, WMMATensorContraction(; name=el["parseableName"], extents=el["extents"],
+                                                data_type, compute_type, accumulate_type, zero_c))
+    end
+    problems
+end
+
+function generate_configs(problem)
     configs = DataFrame(
         # problem
         name=String[],
         extents=Vector{Int}[],
 
-        # params
+        # config
         BLOCK_M=Int[],
         BLOCK_N=Int[],
         BLOCK_K=Int[],
@@ -33,10 +44,16 @@ function generate_configs()
         OP_N=Int[],
         OP_K=Int[],
         kernel_str=String[],
+        ## layout
+        is_A_col_major=Bool[],
+        is_B_col_major=Bool[],
+        is_D_col_major=Bool[],
+        PERM_M=Vector{Int}[],
+        PERM_N=Vector{Int}[],
+        PERM_K=Vector{Int}[]
     )
 
-    for (name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData],
-        BLOCK_M in 2 .^ (6:9),
+    for BLOCK_M in 2 .^ (6:9),
         BLOCK_N in 2 .^ (6:9),
         BLOCK_K in 2 .^ (5:7),
         WARPS_M in 2 .^ (0:3),
@@ -46,11 +63,18 @@ function generate_configs()
             (8, 32, 16),
             (32, 8, 16),
         ],
-        kernel_str in ["singlestage", "pipelined"]
+        kernel_str in ["singlestage", "pipelined"],
+        is_A_col_major in [false, true],
+        is_B_col_major in [false, true],
+        is_D_col_major in [false, true],
+        PERM_M in permutations(intersect(problem.tensorModes[1], problem.tensorModes[2])),
+        PERM_N in permutations(intersect(problem.tensorModes[1], problem.tensorModes[3])),
+        PERM_K in permutations(intersect(problem.tensorModes[2], problem.tensorModes[3]))
 
-        push!(configs, Dict(
-            :name => name,
-            :extents => extents,
+        push!(configs, (;
+            :name => problem.name,
+            :extents => [problem.extents...],
+
             :BLOCK_M => BLOCK_M,
             :BLOCK_N => BLOCK_N,
             :BLOCK_K => BLOCK_K,
@@ -60,10 +84,28 @@ function generate_configs()
             :OP_N => OP_N,
             :OP_K => OP_K,
             :kernel_str => kernel_str,
+
+            :is_A_col_major => is_A_col_major,
+            :is_B_col_major => is_B_col_major,
+            :is_D_col_major => is_D_col_major,
+            :PERM_M => PERM_M,
+            :PERM_N => PERM_N,
+            :PERM_K => PERM_K
         ))
     end
 
     configs
+end
+
+function select_configs(configs, problem)
+    # use groupby to return a mutable handle
+    for group in groupby(configs, [:name, :extents])
+        config = first(group)
+        if config.name == problem.name && config.extents == [problem.extents...]
+            return group
+        end
+    end
+    return nothing
 end
 
 function repr_row(row)
@@ -76,19 +118,13 @@ function repr_row(row)
     print(io, " ($(row.BLOCK_M)×$(row.BLOCK_N)×$(row.BLOCK_K) block")
     print(io, ", $(row.WARPS_M)×$(row.WARPS_N) warp")
     print(io, ", $(row.OP_M)×$(row.OP_N)×$(row.OP_K) operator")
+    print(io, ", $(row.PERM_M)×$(row.PERM_N)×$(row.PERM_K) layout")
     print(io, ", $(row.kernel_str) kernel)")
 
     return String(take!(io))
 end
 
-function get_problem(row)
-    name = row.name
-    extents = row.extents
-
-    WMMATensorContraction(; name, extents, data_type, compute_type, accumulate_type, zero_c)
-end
-
-function get_params(row)
+function create_params(row)
     BLOCK_M = row.BLOCK_M
     BLOCK_N = row.BLOCK_N
     BLOCK_K = row.BLOCK_K
@@ -98,11 +134,16 @@ function get_params(row)
     OP_N = row.OP_N
     OP_K = row.OP_K
     kernel = kernel_string_to_function(row.kernel_str)
+    is_A_col_major = row.is_A_col_major
+    is_B_col_major = row.is_B_col_major
+    is_D_col_major = row.is_D_col_major
+    PERM_M = row.PERM_M
+    PERM_N = row.PERM_N
+    PERM_K = row.PERM_K
 
-    (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel)
+    (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
+       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K)
 end
-
-group_configs(configs) = groupby(configs, [:name, :extents])
 
 function kernel_string_to_function(str)
     if str == "singlestage"
@@ -117,14 +158,14 @@ end
 function select_best(configs)
     best_configs = similar(configs, 0)
 
-    for (parseable_name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData]
-        relevant_configs = configs[(@. (configs[!, "parseable_name"] == parseable_name)), :]
+    for (name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData]
+        relevant_configs = configs[(@. (configs[!, "name"] == name)), :]
 
         _, best_config_index = findmin(relevant_configs[!, "time"])
         best_config = relevant_configs[best_config_index, :]
 
         push!(best_configs, Dict(
-            :parseable_name => parseable_name,
+            :name => name,
             :extents => extents,
             :BLOCK_M => best_config["BLOCK_M"],
             :BLOCK_N => best_config["BLOCK_N"],

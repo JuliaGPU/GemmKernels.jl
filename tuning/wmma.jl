@@ -84,14 +84,14 @@ function repr_row(row)
     return String(take!(io))
 end
 
-function get_problem(row)
+function create_problem(row)
     M = N = K = row.N
     transpose_a = row.transpose_a
     transpose_b = row.transpose_b
     WMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b, zero_c)
 end
 
-function get_params(row)
+function create_params(row)
     BLOCK_M = row.BLOCK_M
     BLOCK_N = row.BLOCK_N
     BLOCK_K = row.BLOCK_K

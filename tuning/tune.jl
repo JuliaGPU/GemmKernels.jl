@@ -26,14 +26,16 @@ end
 # - the parameters used to customize the execution (e.g. the operator, block shape, etc)
 #
 # This interface is mostly defined in `configs/configs.jl`. The tuning script layers
-# some additional abstraction on top of this interface for DataFrames I/O:
-# - generate_configs(): return Dataframe with all possible configurations, one per row
-# - repr_row(row): pretty-print a row of the Dataframe
-# - get_problem(row): create a input problem object for this row
-# - get_params(row): create configuration parameters for this row
-# - group_configs(configs): group configurations by problem
-# - select_best(configs): given a Dataframe of configurations, with an added :time column,
-#   return a Dataframe with the best configuration for each combination of parameters
+# some additional abstraction on top of this for the purpose of iteration & serialization:
+# - generate_problems(): return a list of input problems
+# - generate_configs(problem): for this problem, generate configurations to sweep over.
+#   each configuration should also identify the problem it belongs to.
+# - select_configs(configs, problem): from a pre-existing list of configurations, list
+#   those matching a specific problem.
+# - repr_row(config): pretty-print a configuration
+# - create_params(row): create configuration parameters for this row
+# - select_best(configs): given a list of measured configurations (i.e. with an added
+#   :time column), return the best configuration for each problem
 #
 # output
 # - plot_results(best_configs): plot the results
@@ -53,10 +55,10 @@ const BENCH_STALE_AGE = 60
 const PIDFILE = joinpath(@__DIR__, "tuning.pid")
 
 # Whether we stop after beating the baseline, or continue until we've tested every config.
-const EXHAUSTIVE = true
+const EXHAUSTIVE = false
 
 # Retry configurations with these categories.
-const RETRY_CATEGORIES = ["oom", "crashed"]
+const RETRY_STATUSSES = ["oom", "crashed"]
 
 #####
 
@@ -85,11 +87,10 @@ function log_filename()
 end
 FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
-function measure_config(row, max_time, reference_result)
-    @info "Measuring configuration $(repr_row(row))..."
+function measure_config(problem, config, max_time, reference_result)
+    @info "Measuring configuration $(repr_row(config))..."
 
     # allocate data
-    problem = get_problem(row)
     data = try
         # this is the only place where we allocate device memory.
         # other allocation failures will be reported as crashes.
@@ -99,7 +100,7 @@ function measure_config(row, max_time, reference_result)
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
         if isa(err, OutOfGPUMemoryError)
-            @info "Not enough memory for configuration $(repr_row(row))\n" * log
+            @info "Not enough memory for configuration $(repr_row(config))\n" * log
             return (;), "oom"
         else
             rethrow()
@@ -108,7 +109,7 @@ function measure_config(row, max_time, reference_result)
 
     try
         # compile and warm-up
-        params = get_params(row)
+        params = create_params(config)
         args = nothing
         try
             args = prepare(problem; params...)
@@ -119,22 +120,22 @@ function measure_config(row, max_time, reference_result)
 
             # determine the cause of the error
             if isa(err, GemmKernels.ConfigError)
-                @info "Skipping unsupported configuration $(repr_row(row))\n" * log
+                @info "Skipping unsupported configuration $(repr_row(config))\n" * log
                 return (;), "config_error"
             end
             if isa(err, CUDA.InvalidIRError)
-                @info "Failed to compile $(repr_row(row))\n" * log
+                @info "Failed to compile $(repr_row(config))\n" * log
                 return (;), "compilation_error"
             end
             if isa(err, OutOfGPUMemoryError)
                 # XXX: this shouldn't happen here as we already allocated all memory,
                 #      however it can occur during kernel launches or other CUDA calls
                 #      when very close to the memory limit.
-                @info "Not enough memory for configuration $(repr_row(row))\n" * log
+                @info "Not enough memory for configuration $(repr_row(config))\n" * log
                 return (;), "oom"
             end
 
-            @info "Unknown error processing $(repr_row(row))\n" * log
+            @info "Unknown error processing $(repr_row(config))\n" * log
             return (;), "unknown_error"
         end
 
@@ -187,7 +188,7 @@ function measure_config(row, max_time, reference_result)
 
         # verify the results
         if result !== nothing && !verify(problem, reference_result, result)
-            @warn "Configuration produced invalid result: $(repr_row(row))"
+            @warn "Configuration produced invalid result: $(repr_row(config))"
             return (; measurements, exclusives), "invalid_result"
         end
 
@@ -240,13 +241,13 @@ function get_uncertainty(gk, bl)
     uncertainty, lo_uncertainty, hi_uncertainty
 end
 
-function got_enough_samples(row)
-    gk, bl = row["gemmkernels_times"], row["baseline_times"]
+function got_enough_samples(config)
+    gk, bl = config["gemmkernels_times"], config["baseline_times"]
 
     (length(gk) < PLOT_MIN_NUM_SAMPLES) && return false
     (length(bl) < PLOT_MIN_NUM_SAMPLES) && return false
 
-    row["time_spent"] >= PLOT_NUM_SECONDS
+    config["time_spent"] >= PLOT_NUM_SECONDS
 end
 
 function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
@@ -263,21 +264,21 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
 end
 
 function benchmark_best_configs(configs)
-    configs = select(configs, Not([:category]))
+    configs = select(configs, Not([:status]))
     best_configs = select_best(configs)
-    best_configs.category .= "pending"
+    best_configs.status .= "pending"
     best_configs.time_spent .= 0.0
     best_configs.gemmkernels_times = [Float64[] for _ in 1:size(best_configs, 1)]
     best_configs.baseline_times = [Float64[] for _ in 1:size(best_configs, 1)]
 
     p = Progress(size(best_configs, 1); desc="Benchmarking", showspeed=true)
-    for config_row in eachrow(best_configs)
-        problem = get_problem(config_row)
+    for config in eachrow(best_configs)
+        problem = create_problem(config)
         data = allocate_data(problem)
 
-        @info "Profiling configuration $(repr_row(config_row))..."
+        @info "Profiling configuration $(repr_row(config))..."
 
-        params = get_params(config_row)
+        params = create_params(config)
         for baseline in [false, true]
             for i in 1:PLOT_BATCH_SIZE
                 wait_if_throttling()
@@ -290,14 +291,14 @@ function benchmark_best_configs(configs)
                     prof = CUDA.@profile concurrent=false execute(problem, data...; params...)
                 end
 
-                push!(config_row[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
+                push!(config[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
 
-                config_row["time_spent"] += (time() - start_time)
+                config["time_spent"] += (time() - start_time)
             end
         end
 
-        if got_enough_samples(config_row)
-            config_row["category"] = "done"
+        if got_enough_samples(config)
+            config.status = "done"
         end
 
         # Update progress bar.
@@ -323,13 +324,31 @@ function addworkers(X; memory)
     procs
 end
 
+function merge_configs(all_configs, configs; on)
+    if all_configs === nothing
+        return configs
+    end
+
+    # merge in results from previous runs
+    configs = leftjoin(configs, all_configs; on, makeunique=true)
+    configs.time = coalesce.(configs.time_1, configs.time)
+    configs.status = coalesce.(configs.status_1, configs.status)
+    configs = select(configs, Not([:time_1, :status_1]))
+
+    # find the configs that are new, and merge them back
+    other_configs = antijoin(all_configs, configs; on)
+    all_configs = vcat(configs, other_configs)
+
+    all_configs
+end
+
 function main()
     # get rid of workers from a previous run
     if length(workers()) > 1
         rmprocs(workers()...; waitfor=30)
     end
 
-    # (0) Load configurations from disk, or generate them.
+    # (0) Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.bin")
     all_configs = nothing
     if isfile(config_path)
@@ -342,41 +361,37 @@ function main()
             mv(config_path, "$(config_path).broken")
         end
     end
-    if all_configs === nothing
-        # (1) Generate configurations.
-        @info "Generating configurations..."
-        all_configs = generate_configs()
-        all_configs.category .= "pending"
-        all_configs.time .= Inf
-        all_configs.times .= [Float64[] for _ in 1:size(all_configs, 1)]
-        @info "Generated $(size(all_configs, 1)) configurations."
 
-        # (2) Filter configurations where we can determine upfront that they are unsupported.
-        @info "Finding configurations that we know are unsupported a-priori..."
-        @showprogress desc="Filtering configurations..." for config_row in eachrow(all_configs)
+    # (1) Process each unique problem.
+    problems = generate_problems()
+    for (problem_idx, problem) in enumerate(problems)
+        # generate this problem's configurations
+        configs = generate_configs(problem)
+        config_keys = names(configs)
+        configs.status .= "new"
+        configs.time .= Inf
+        all_configs = merge_configs(all_configs, configs; on=config_keys)
+        configs = select_configs(all_configs, problem)
+
+        # Filter configurations where we can determine upfront that they are unsupported.
+        @showprogress desc="Filtering configurations..." for config in eachrow(configs)
+            if config.status != "new"
+                continue
+            end
+
             try
-                problem = get_problem(config_row)
-                params = get_params(config_row)
+                params = create_params(config)
                 prepare(problem; params...)
+                config.status = "pending"
             catch err
                 if isa(err, GemmKernels.ConfigError)
-                    config_row["category"] = "skipped"
+                    config.status = "skipped"
                 else
                     rethrow()
                 end
             end
         end
-
-        @info "Skipping $(counter(all_configs[!, "category"])["skipped"]) configurations."
-
         serialize(config_path, all_configs)
-    end
-
-    # (3) Process each unique problem.
-
-    ngroups = length(group_configs(all_configs))
-    for (group, configs) in enumerate(group_configs(all_configs))
-        problem = get_problem(first(configs))
 
         # Measure baseline performance of problem.
         target_time, reference_result = let
@@ -410,7 +425,7 @@ function main()
 
         # Determine jobs we can still run
         jobs = filter(1:size(configs, 1)) do i
-            configs[i, :category] in ["pending"; RETRY_CATEGORIES]
+            configs[i, :status] in ["pending"; RETRY_STATUSSES]
         end
         if isempty(jobs)
             continue
@@ -419,12 +434,7 @@ function main()
         njobs = length(jobs)
 
         # Determine memory usage
-        max_memory_usage = 0
-        for job in jobs
-            problem = get_problem(configs[job, :])
-            max_memory_usage = max(max_memory_usage, sizeof(problem))
-        end
-        max_memory_usage += 128*2^20                        # there's always some overhead
+        max_memory_usage = sizeof(problem) + 128*2^20       # there's always some overhead
         worker_memory_usage = max_memory_usage + 1500*2^20  # CUDA context, etc
 
         # Spawn workers
@@ -449,7 +459,7 @@ function main()
         exclusive_times = Dict{Symbol, Float64}()
 
         @info "Need to perform parameter sweep over $(njobs) configurations."
-        p = Progress(njobs; desc="$(problem) [$group/$ngroups]", showspeed=true)
+        p = Progress(njobs; desc="$(problem) [$problem_idx/$(length(problems))]", showspeed=true)
         results = Channel(Inf)
         sweep_start = time()
         @sync begin
@@ -457,23 +467,22 @@ function main()
             worker_jobs = Dict()
             for worker in workers()
                 errormonitor(@async begin
-                    while length(jobs) > 0
+                    while !isempty(jobs)
                         i = popfirst!(jobs)
-                        config_row = configs[i, :]
+                        config = configs[i, :]
                         worker_jobs[worker] = (; start_time=time(), i)
                         try
-                            times, config_row.category =
+                            times, config.status =
                                 remotecall_fetch(measure_config, worker,
-                                                 NamedTuple(config_row),
+                                                 problem, NamedTuple(config),
                                                  max_time, reference_result)
 
-                            # save all the measurements
+                            # save the best measurement
                             if haskey(times, :measurements)
-                                config_row.times = times.measurements
-                                config_row.time = minimum(times.measurements)
+                                config.time = minimum(times.measurements)
                             end
 
-                            # save exclusive times
+                            # keep track of time spend in exclusive sections
                             if haskey(times, :exclusives)
                                 for k in keys(times.exclusives)
                                     v = times.exclusives[k]
@@ -481,7 +490,7 @@ function main()
                                 end
                             end
                         catch err
-                            config_row.category = "crashed"
+                            config.status = "crashed"
 
                             bt = catch_backtrace()
                             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
@@ -495,7 +504,7 @@ function main()
                             push!(results, (worker, i))
 
                             # Consider retrying failed configurations
-                            if config_row.category in RETRY_CATEGORIES
+                            if config.status in RETRY_STATUSSES
                                 push!(jobs, i)
                             end
                         end
@@ -513,9 +522,9 @@ function main()
                             worker, i = take!(results)
 
                             # Update configuration
-                            config_row = configs[i, :]
-                            best_time = min(best_time, config_row.time)
-                            @info "Result from worker $worker for $(repr_row(config_row)): $(config_row.category) -- $(prettytime(config_row.time))"
+                            config = configs[i, :]
+                            best_time = min(best_time, config.time)
+                            @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time))"
                         end
 
                         # Save results in case the process crashes.
@@ -549,7 +558,7 @@ function main()
                         end
 
                         # job state
-                        category_counters = Dict(counter(configs[!, "category"]))
+                        category_counters = Dict(counter(configs[!, "status"]))
                         for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
                             abs = category_counters[k]
                             rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
@@ -586,12 +595,8 @@ function main()
                 rmprocs(workers()...; waitfor=30)
             end)
         end
-
         return
     end
-
-    # Save data for final iteration.
-    serialize(config_path, all_configs)
 
     # And load again, for good measure.
     all_configs = deserialize(config_path)
