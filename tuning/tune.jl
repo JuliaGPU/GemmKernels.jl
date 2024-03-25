@@ -361,6 +361,13 @@ function main()
             mv(config_path, "$(config_path).broken")
         end
     end
+    function checkpoint()
+        relevant_configs = filter(all_configs) do row
+            # skip configurations we didn't process
+            !in(row.status, ["pending", "skipped"])
+        end
+        serialize(config_path, relevant_configs)
+    end
 
     # (1) Process each unique problem.
     problems = generate_problems()
@@ -387,11 +394,15 @@ function main()
                 if isa(err, GemmKernels.ConfigError)
                     config.status = "skipped"
                 else
+                    bt = catch_backtrace()
+                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                    @error "Unexpected error preparing $problem: $log" config
+
                     rethrow()
                 end
             end
         end
-        serialize(config_path, all_configs)
+        checkpoint()
 
         # Measure baseline performance of problem.
         target_time, reference_result = let
@@ -417,189 +428,180 @@ function main()
             time, result
         end
 
-        # Find current best time
+        # See if there's anything we need to do
         best_time = minimum(configs.time)
-        if !EXHAUSTIVE && best_time < target_time
-            continue
-        end
-
-        # Determine jobs we can still run
         jobs = filter(1:size(configs, 1)) do i
             configs[i, :status] in ["pending"; RETRY_STATUSSES]
         end
-        if isempty(jobs)
-            continue
-        end
-        shuffle!(jobs)
-        njobs = length(jobs)
+        if !isempty(jobs) && (EXHAUSTIVE || best_time > target_time)
+            shuffle!(jobs)
+            njobs = length(jobs)
 
-        # Determine memory usage
-        max_memory_usage = sizeof(problem) + 128*2^20       # there's always some overhead
-        worker_memory_usage = max_memory_usage + 1500*2^20  # CUDA context, etc
+            # Determine memory usage
+            max_memory_usage = sizeof(problem) + 128*2^20       # there's always some overhead
+            worker_memory_usage = max_memory_usage + 1500*2^20  # CUDA context, etc
 
-        # Spawn workers
-        cpu_memory = Sys.free_memory()
-        gpu_memory = CUDA.available_memory()
-        max_workers = min(
-            floor(Int, cpu_memory / worker_memory_usage),
-            floor(Int, gpu_memory / worker_memory_usage),
-            Sys.CPU_THREADS,
-            njobs+1
-        )
-        addworkers(max(1, max_workers-1); memory=max_memory_usage)
+            # Spawn workers
+            cpu_memory = Sys.free_memory()
+            gpu_memory = CUDA.available_memory()
+            max_workers = min(
+                floor(Int, cpu_memory / worker_memory_usage),
+                floor(Int, gpu_memory / worker_memory_usage),
+                Sys.CPU_THREADS,
+                njobs+1
+            )
+            addworkers(max(1, max_workers-1); memory=max_memory_usage)
 
-        # determine how long each measurement can take
-        max_time = if @isdefined(BENCH_MAX_TIME)
-            BENCH_MAX_TIME
-        else
-            2 * target_time
-        end
-
-        # keep track of time spent in exclusive sections
-        exclusive_times = Dict{Symbol, Float64}()
-
-        @info "Need to perform parameter sweep over $(njobs) configurations."
-        p = Progress(njobs; desc="$(problem) [$problem_idx/$(length(problems))]", showspeed=true)
-        results = Channel(Inf)
-        sweep_start = time()
-        @sync begin
-            # measure configurations on workers
-            worker_jobs = Dict()
-            for worker in workers()
-                errormonitor(@async begin
-                    while !isempty(jobs)
-                        i = popfirst!(jobs)
-                        config = configs[i, :]
-                        worker_jobs[worker] = (; start_time=time(), i)
-                        try
-                            times, config.status =
-                                remotecall_fetch(measure_config, worker,
-                                                 problem, NamedTuple(config),
-                                                 max_time, reference_result)
-
-                            # save the best measurement
-                            if haskey(times, :measurements)
-                                config.time = minimum(times.measurements)
-                            end
-
-                            # keep track of time spend in exclusive sections
-                            if haskey(times, :exclusives)
-                                for k in keys(times.exclusives)
-                                    v = times.exclusives[k]
-                                    exclusive_times[k] = get(exclusive_times, k, 0.0) + v
-                                end
-                            end
-                        catch err
-                            config.status = "crashed"
-
-                            bt = catch_backtrace()
-                            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                            @error "Unexpected exception on worker $worker: $log"
-
-                            # recycle our worker
-                            rmprocs(worker; waitfor=30)
-                            worker = addworkers(1; memory=max_memory_usage)[1]
-                        finally
-                            delete!(worker_jobs, worker)
-                            push!(results, (worker, i))
-
-                            # Consider retrying failed configurations
-                            if config.status in RETRY_STATUSSES
-                                push!(jobs, i)
-                            end
-                        end
-                    end
-                end)
+            # Determine how long each measurement can take
+            max_time = if @isdefined(BENCH_MAX_TIME)
+                BENCH_MAX_TIME
+            else
+                2 * target_time
             end
 
-            # monitor progress
-            errormonitor(@async begin
-                times = []
-                while !isempty(jobs) || !isempty(worker_jobs) || !isempty(results)
-                    # process results
-                    if isready(results)
-                        while isready(results)
-                            worker, i = take!(results)
-
-                            # Update configuration
+            # Process jobs!
+            p = Progress(njobs; desc="$(problem) [$problem_idx/$(length(problems))]", showspeed=true)
+            exclusive_times = Dict{Symbol, Float64}()
+            results = Channel(Inf)
+            sweep_start = time()
+            @sync begin
+                # Measuring tasks
+                worker_jobs = Dict()
+                for worker in workers()
+                    errormonitor(@async begin
+                        while !isempty(jobs)
+                            i = popfirst!(jobs)
                             config = configs[i, :]
-                            best_time = min(best_time, config.time)
-                            @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time))"
+                            worker_jobs[worker] = (; start_time=time(), i)
+                            try
+                                times, config.status =
+                                    remotecall_fetch(measure_config, worker,
+                                                    problem, NamedTuple(config),
+                                                    max_time, reference_result)
+
+                                # save the best measurement
+                                if haskey(times, :measurements)
+                                    config.time = minimum(times.measurements)
+                                end
+
+                                # keep track of time spend in exclusive sections
+                                if haskey(times, :exclusives)
+                                    for k in keys(times.exclusives)
+                                        v = times.exclusives[k]
+                                        exclusive_times[k] = get(exclusive_times, k, 0.0) + v
+                                    end
+                                end
+                            catch err
+                                config.status = "crashed"
+
+                                bt = catch_backtrace()
+                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                                @error "Unexpected exception on worker $worker: $log"
+
+                                # recycle our worker
+                                rmprocs(worker; waitfor=30)
+                                worker = addworkers(1; memory=max_memory_usage)[1]
+                            finally
+                                delete!(worker_jobs, worker)
+                                push!(results, (worker, i))
+
+                                # Consider retrying failed configurations
+                                if config.status in RETRY_STATUSSES
+                                    push!(jobs, i)
+                                end
+                            end
                         end
+                    end)
+                end
 
-                        # Save results in case the process crashes.
-                        serialize(config_path, all_configs)
-                    end
-                    if !isinf(best_time)
-                        push!(times, best_time)
-                    end
+                # Result processing task
+                errormonitor(@async begin
+                    times = []
+                    while !isempty(jobs) || !isempty(worker_jobs) || !isempty(results)
+                        # process results
+                        if isready(results)
+                            while isready(results)
+                                worker, i = take!(results)
 
-                    # update the progress bar
-                    function showvalues()
-                        vals = []
-
-                        # configuration times
-                        push!(vals, ("target time", prettytime(target_time)))
+                                # Update configuration
+                                config = configs[i, :]
+                                best_time = min(best_time, config.time)
+                                @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time))"
+                            end
+                            checkpoint()
+                        end
                         if !isinf(best_time)
-                            push!(vals, ("best time", prettytime(best_time)))
+                            push!(times, best_time)
                         end
 
-                        push!(vals, ("", ""))
+                        # update the progress bar
+                        function showvalues()
+                            vals = []
 
-                        # how much time we spent in exclusive sections
-                        if !isempty(exclusive_times)
-                            push!(vals, ("total", prettytime(time() - sweep_start)))
+                            push!(vals, ("workers", "$(length(workers()))"))
 
-                            for (k, v) in exclusive_times
-                                push!(vals, (k, prettytime(v)))
+                            push!(vals, ("", ""))
+
+                            # configuration times
+                            push!(vals, ("target time", prettytime(target_time)))
+                            if !isinf(best_time)
+                                push!(vals, ("best time", prettytime(best_time)))
                             end
 
                             push!(vals, ("", ""))
+
+                            # how much time we spent in exclusive sections
+                            if !isempty(exclusive_times)
+                                push!(vals, ("total", prettytime(time() - sweep_start)))
+
+                                for (k, v) in exclusive_times
+                                    push!(vals, (k, prettytime(v)))
+                                end
+
+                                push!(vals, ("", ""))
+                            end
+
+                            # job state
+                            category_counters = Dict(counter(configs[!, "status"]))
+                            for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
+                                abs = category_counters[k]
+                                rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
+                                push!(vals, (k, "$(abs) ($(rel)%)"))
+                            end
+
+                            push!(vals, ("", ""))
+
+                            # gpu stats
+                            dev = NVML.Device(parent_uuid(device()))
+                            push!(vals, ("power usage", "$(NVML.power_usage(dev)) W"))
+                            push!(vals, ("temperature", "$(NVML.temperature(dev)) °C"))
+                            meminfo = NVML.memory_info(dev)
+                            push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
+                            utilization = NVML.utilization_rates(dev)
+                            push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
+
+                            vals
+                        end
+                        nfinished = njobs - length(jobs)
+                        update!(p, nfinished; showvalues, valuecolor=:normal)
+
+                        # Check if we're done
+                        if !EXHAUSTIVE && best_time < target_time
+                            break
                         end
 
-                        # job state
-                        category_counters = Dict(counter(configs[!, "status"]))
-                        for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
-                            abs = category_counters[k]
-                            rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
-                            push!(vals, (k, "$(abs) ($(rel)%)"))
-                        end
-
-                        push!(vals, ("", ""))
-
-                        # gpu stats
-                        dev = NVML.Device(parent_uuid(device()))
-                        push!(vals, ("power usage", "$(NVML.power_usage(dev)) W"))
-                        push!(vals, ("temperature", "$(NVML.temperature(dev)) °C"))
-                        meminfo = NVML.memory_info(dev)
-                        push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
-                        utilization = NVML.utilization_rates(dev)
-                        push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
-
-                        vals
-                    end
-                    nfinished = njobs - length(jobs)
-                    update!(p, nfinished; showvalues, valuecolor=:normal)
-
-                    # Check if we're done
-                    if !EXHAUSTIVE && best_time < target_time
-                        break
+                        sleep(5)
                     end
 
-                    sleep(5)
-                end
+                    empty!(jobs)
 
-                empty!(jobs)
-
-                # Kill workers
-                rmprocs(workers()...; waitfor=30)
-            end)
+                    # Kill workers
+                    rmprocs(workers()...; waitfor=30)
+                end)
+            end
         end
-        return
+        checkpoint()
     end
-
-    # And load again, for good measure.
-    all_configs = deserialize(config_path)
 
     # (4) Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")
