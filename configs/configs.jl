@@ -777,6 +777,14 @@ function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARP
         length(c_extent), collect(Int, c_extent), collect(Int, cumprod((1, c_extent...))[1:end-1]), data_type, identity
     )
 
+    GemmKernels.Tensors.OVERRIDE_do_override = true
+    GemmKernels.Tensors.OVERRIDE_is_A_col_major = is_A_col_major
+    GemmKernels.Tensors.OVERRIDE_is_B_col_major = is_B_col_major
+    GemmKernels.Tensors.OVERRIDE_is_D_col_major = is_D_col_major
+    GemmKernels.Tensors.OVERRIDE_perm_M = PERM_M
+    GemmKernels.Tensors.OVERRIDE_perm_N = PERM_N
+    GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
+
     plan = Tensors.ContractionPlan(
         a_desc, tc.tensorModes[2],
         b_desc, tc.tensorModes[3],
@@ -789,14 +797,6 @@ function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARP
         warpsPerBlock=WARPS_M * WARPS_N,
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
     )
-
-    GemmKernels.Tensors.OVERRIDE_do_override = true
-    GemmKernels.Tensors.OVERRIDE_is_A_col_major = is_A_col_major
-    GemmKernels.Tensors.OVERRIDE_is_B_col_major = is_B_col_major
-    GemmKernels.Tensors.OVERRIDE_is_D_col_major = is_D_col_major
-    GemmKernels.Tensors.OVERRIDE_perm_M = PERM_M
-    GemmKernels.Tensors.OVERRIDE_perm_N = PERM_N
-    GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
 
     (; plan, kernel)
 end
