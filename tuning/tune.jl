@@ -11,6 +11,7 @@ using Serialization
 using Statistics
 using StatsBase: percentile
 using Random
+using Profile
 
 if myid() == 1
     using Plots
@@ -112,8 +113,10 @@ function measure_config(problem, config, max_time, reference_result)
         params = create_params(config)
         args = nothing
         try
-            args = prepare(problem; params...)
+            args = prepare(problem, data...; params...)
             execute(problem, data...; args...)
+            synchronize()
+            # XXX: prevent this from actually executing? it may influence the measurements below
         catch err
             bt = catch_backtrace()
             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
@@ -141,7 +144,7 @@ function measure_config(problem, config, max_time, reference_result)
 
         # initialize data
         initializing = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
-            @elapsed initialize_data(problem, data...)
+            @elapsed CUDA.@sync initialize_data(problem, data...; params...)
         end
 
         # settle down
@@ -160,7 +163,11 @@ function measure_config(problem, config, max_time, reference_result)
             measuring = @elapsed while true
                 best_time = minimum(measurements; init=Inf)
                 time = CUDA.@elapsed begin
-                    result = execute(problem, data...; args...)
+                    new_result = execute(problem, data...; args...)
+                    if result === nothing
+                        # only store the result once, as we don't re-initialize the output
+                        result = new_result
+                    end
                 end
                 push!(measurements, time)
 
@@ -372,6 +379,8 @@ function main()
     # (1) Process each unique problem.
     problems = generate_problems()
     for (problem_idx, problem) in enumerate(problems)
+        data = allocate_data(problem)
+
         # generate this problem's configurations
         configs = generate_configs(problem)
         config_keys = names(configs)
@@ -388,7 +397,7 @@ function main()
 
             try
                 params = create_params(config)
-                prepare(problem; params...)
+                prepare(problem, data...; params...)
                 config.status = "pending"
             catch err
                 if isa(err, GemmKernels.ConfigError)
@@ -406,10 +415,8 @@ function main()
 
         # Measure baseline performance of problem.
         target_time, reference_result = let
-            data = allocate_data(problem)
-            initialize_data(problem, data...)
-
             # warm-up
+            initialize_data(problem, data...)
             args = prepare_baseline(problem, data...)
             execute_baseline(problem, data...; args...)
 
@@ -420,16 +427,18 @@ function main()
             # calculate reference
             result = Array(calculate_reference(problem, data...))
 
-            for arr in data
-                CUDA.unsafe_free!(arr)
-            end
-            CUDA.reclaim()
-
             time, result
         end
 
+        # Get rid of the data
+        for arr in data
+            CUDA.unsafe_free!(arr)
+        end
+        CUDA.reclaim()
+        data = nothing
+
         # See if there's anything we need to do
-        best_time = minimum(configs.time)
+        best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         jobs = filter(1:size(configs, 1)) do i
             configs[i, :status] in ["pending"; RETRY_STATUSSES]
         end
@@ -450,7 +459,8 @@ function main()
                 Sys.CPU_THREADS,
                 njobs+1
             )
-            addworkers(max(1, max_workers-1); memory=max_memory_usage)
+            total_workers = max(1, max_workers-1)
+            addworkers(total_workers; memory=max_memory_usage)
 
             # Determine how long each measurement can take
             max_time = if @isdefined(BENCH_MAX_TIME)
@@ -516,7 +526,6 @@ function main()
 
                 # Result processing task
                 errormonitor(@async begin
-                    times = []
                     while !isempty(jobs) || !isempty(worker_jobs) || !isempty(results)
                         # process results
                         if isready(results)
@@ -525,20 +534,19 @@ function main()
 
                                 # Update configuration
                                 config = configs[i, :]
-                                best_time = min(best_time, config.time)
+                                if config.status == "success"
+                                    best_time = min(best_time, config.time)
+                                end
                                 @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time))"
                             end
                             checkpoint()
-                        end
-                        if !isinf(best_time)
-                            push!(times, best_time)
                         end
 
                         # update the progress bar
                         function showvalues()
                             vals = []
 
-                            push!(vals, ("workers", "$(length(workers()))"))
+                            push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
 

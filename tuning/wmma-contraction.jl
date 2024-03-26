@@ -66,10 +66,10 @@ function generate_configs(problem)
         kernel_str in ["singlestage", "pipelined"],
         is_A_col_major in [false, true],
         is_B_col_major in [false, true],
-        is_D_col_major in [false, true],
-        PERM_M in permutations(intersect(problem.tensorModes[1], problem.tensorModes[2])),
-        PERM_N in permutations(intersect(problem.tensorModes[1], problem.tensorModes[3])),
-        PERM_K in permutations(intersect(problem.tensorModes[2], problem.tensorModes[3]))
+        is_D_col_major in [#=false,=# true],    # XXX: this gives invalid results
+        PERM_M in permutations(intersect(problem.modes[1], problem.modes[2])),
+        PERM_N in permutations(intersect(problem.modes[1], problem.modes[3])),
+        PERM_K in permutations(intersect(problem.modes[2], problem.modes[3]))
 
         push!(configs, (;
             :name => problem.name,

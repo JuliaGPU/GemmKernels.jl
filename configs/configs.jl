@@ -169,6 +169,8 @@ function prepare_baseline(gemm::MatrixMultiplication{FPU}, a, b, c, d)
         error("No baseline function available for $gemm")
     end
 
+    copyto!(d, c)
+
     CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
     return ()
 end
@@ -176,7 +178,7 @@ end
 function execute_baseline(gemm::MatrixMultiplication{FPU}, a, b, c, d)
     CUBLAS.gemmEx!(gemm.transpose_a ? 'T' : 'N',
                    gemm.transpose_b ? 'T' : 'N',
-                   gemm.alpha, a, b, gemm.beta, c)
+                   gemm.alpha, a, b, gemm.beta, d)
 end
 
 function prepare(gemm::MatrixMultiplication{FPU}; BLOCK_M, BLOCK_N, BLOCK_K, OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB)
@@ -293,13 +295,14 @@ Base.show(io::IO, gemm::MatrixMultiplication{WMMA}) =
 
 function prepare_baseline(gemm::MatrixMultiplication{WMMA}, a, b, c, d)
     CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
+    copyto!(d, c)
     return ()
 end
 
 function execute_baseline(gemm::MatrixMultiplication{WMMA}, a, b, c, d)
     CUBLAS.gemmEx!(gemm.transpose_a ? 'T' : 'N',
                    gemm.transpose_b ? 'T' : 'N',
-                   gemm.alpha, a, b, gemm.beta, c)
+                   gemm.alpha, a, b, gemm.beta, d)
 end
 
 function prepare(gemm::MatrixMultiplication{WMMA}; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, zero_c, kernel)
@@ -594,9 +597,8 @@ export TensorContraction, WMMATensorContraction
 
 struct TensorContraction{K} <: AbstractProblem
     name             # A parseable name for the configuration.
-    tensorModes      # The modes of the input tensors.
+    modes            # The modes of the input tensors.
     extents          # The extents of the input tensors.
-    padded_extents   # The padded extents of the input tensors.
 
     alpha            # Value of alpha
     beta             # Value of beta
@@ -610,31 +612,60 @@ end
 
 Base.show(io::IO, tc::TensorContraction) = print(io, "TC $(tc.name)")
 
+function pad_extents(extents, modes, multiple=512)
+    padded_extents = [extents...]
+    for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
+        intersection = intersect(modes[idx1], modes[idx2])
+
+        if prod(extents[intersection]) % multiple == 0
+            continue
+        end
+
+        extent_to_pad = argmax(extents[intersection] .% multiple)
+
+        padded_extents[intersection[extent_to_pad]] =
+            Int64(ceil(extents[intersection[extent_to_pad]] / multiple) *
+            multiple)
+    end
+    return Tuple(padded_extents)
+end
+
+function padded_view(x::AbstractArray, dims)
+    # first, get a contiguous view with the destination size
+    y = view(x, 1:prod(dims))
+
+    # then, reshape into ND
+    return reshape(y, dims)
+end
+
 function Base.sizeof(tc::TensorContraction)
-    return sizeof(tc.a_type) * prod(tc.padded_extents[tc.tensorModes[2]]) +
-           sizeof(tc.b_type) * prod(tc.padded_extents[tc.tensorModes[3]]) +
-           sizeof(tc.c_type) * prod(tc.padded_extents[tc.tensorModes[1]]) +
-           sizeof(tc.d_type) * prod(tc.padded_extents[tc.tensorModes[1]])
+    padded_extents = pad_extents(tc.extents, tc.modes)
+    return sizeof(tc.a_type) * prod(padded_extents[tc.modes[2]]) +
+           sizeof(tc.b_type) * prod(padded_extents[tc.modes[3]]) +
+           sizeof(tc.c_type) * prod(padded_extents[tc.modes[1]]) +
+           sizeof(tc.d_type) * prod(padded_extents[tc.modes[1]])
 end
 
 function allocate_data(tc::TensorContraction)
-    a = CuArray{tc.a_type}(undef, tc.padded_extents[tc.tensorModes[2]])
-    b = CuArray{tc.b_type}(undef, tc.padded_extents[tc.tensorModes[3]])
-    c = CuArray{tc.c_type}(undef, tc.padded_extents[tc.tensorModes[1]])
-    d = CuArray{tc.d_type}(undef, tc.padded_extents[tc.tensorModes[1]])
+    padded_extents = pad_extents(tc.extents, tc.modes)
+    a = CuArray{tc.a_type}(undef, padded_extents[tc.modes[2]])
+    b = CuArray{tc.b_type}(undef, padded_extents[tc.modes[3]])
+    c = CuArray{tc.c_type}(undef, padded_extents[tc.modes[1]])
+    d = CuArray{tc.d_type}(undef, padded_extents[tc.modes[1]])
 
     return a, b, c, d
 end
 
 # fill a tensor with a pattern
-function pattern!(a::CuArray{T}, start=1, increment=1) where T
+function pattern!(a::AbstractArray{T}, start=1, increment=1) where T
     function pattern_kernel(start, increment)
-        val = start
         i = threadIdx().x + (blockIdx().x - 1)*blockDim().x
+        stride = blockDim().x * gridDim().x
+        val = start + (i-1) * increment
         while i <= length(a)
             a[i] = val
-            val += increment
-            i += blockDim().x * gridDim().x
+            i += stride
+            val += increment * stride
         end
         return
     end
@@ -649,69 +680,118 @@ function pattern!(a::CuArray{T}, start=1, increment=1) where T
     kernel(start, increment; threads, blocks)
 end
 
-function initialize_data(tc::TensorContraction, a, b, c, d)
-    pattern!(a, 1, 3)
-    pattern!(a, 2, 5)
-    pattern!(a, 3, 7)
-    d .= 0
-    synchronize()
+function initialize_data(tc::TensorContraction, a, b, c, d; kwargs...)
+    if isempty(kwargs)
+        # initialize data
+        rng = CUDA.RNG(0)
+        rand!(rng, a)
+        rand!(rng, b)
+        rand!(rng, c)
+        fill!(d, 0)
+    else
+        # use the params to get appropriately padded tensors
+        padding_multiple = max(kwargs[:BLOCK_M], kwargs[:BLOCK_N], kwargs[:BLOCK_K])
+        padded_extents = pad_extents(tc.extents, tc.modes, padding_multiple)
+        padded_a = padded_view(a, padded_extents[tc.modes[2]])
+        padded_b = padded_view(b, padded_extents[tc.modes[3]])
+        padded_c = padded_view(c, padded_extents[tc.modes[1]])
+        padded_d = padded_view(d, padded_extents[tc.modes[1]])
+
+        # set the padding to 0
+        fill!(padded_a, 0)
+        fill!(padded_b, 0)
+        fill!(padded_c, 0)
+
+        # initialize the actual data
+        data_a = view(padded_a, ntuple(i->1:tc.extents[tc.modes[2]][i], ndims(a))...)
+        data_b = view(padded_b, ntuple(i->1:tc.extents[tc.modes[3]][i], ndims(b))...)
+        data_c = view(padded_c, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(c))...)
+        data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
+        initialize_data(tc, data_a, data_b, data_c, data_d)
+    end
 end
 
 function calculate_reference(tc::TensorContraction, a, b, c, d)
-    copy!(d, c)
+    # use unpadded buffers
+    let a = padded_view(a, tc.extents[tc.modes[2]]),
+        b = padded_view(b, tc.extents[tc.modes[3]]),
+        c = padded_view(c, tc.extents[tc.modes[1]]),
+        d = padded_view(d, tc.extents[tc.modes[1]])
 
-    plan = cuTENSOR.plan_contraction(
-        a, tc.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        b, tc.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        d, tc.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        cuTENSOR.CUTENSOR_OP_IDENTITY,
-        algo=cuTENSOR.CUTENSOR_ALGO_GETT,
-        compute_type=tc.accumulate_type
-    )
+        # re-initialize the data; this is needed as we don't use the full buffer
+        initialize_data(tc, a, b, c, d)
 
-    cuTENSOR.contract!(
-        tc.alpha,
-        a, tc.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        b, tc.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        tc.beta,
-        d, tc.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        cuTENSOR.CUTENSOR_OP_IDENTITY;
-        compute_type=tc.accumulate_type,
-        plan
-    )
+        copy!(d, c)
 
-    return d
+        plan = cuTENSOR.plan_contraction(
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY,
+            algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+            compute_type=tc.accumulate_type
+        )
+
+        cuTENSOR.contract!(
+            tc.alpha,
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            tc.beta,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY;
+            compute_type=tc.accumulate_type,
+            plan
+        )
+
+        return d
+    end
 end
 
 function prepare_baseline(tc::TensorContraction, a, b, c, d)
-    plan = cuTENSOR.plan_contraction(
-        a, tc.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        b, tc.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        c, tc.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        cuTENSOR.CUTENSOR_OP_IDENTITY,
-        algo=cuTENSOR.CUTENSOR_ALGO_GETT,
-        compute_type=tc.accumulate_type
-    )
+    # use unpadded buffers
+    let a = padded_view(a, tc.extents[tc.modes[2]]),
+        b = padded_view(b, tc.extents[tc.modes[3]]),
+        c = padded_view(c, tc.extents[tc.modes[1]]),
+        d = padded_view(d, tc.extents[tc.modes[1]])
 
-    (; plan)
+        copy!(d, c)
+
+        plan = cuTENSOR.plan_contraction(
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY,
+            algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+            compute_type=tc.accumulate_type
+        )
+
+        (; plan)
+    end
 end
 
 function execute_baseline(tc::TensorContraction, a, b, c, d; plan)
-    cuTENSOR.contract!(
-        tc.alpha,
-        a, tc.tensorModes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        b, tc.tensorModes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        tc.beta,
-        c, tc.tensorModes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
-        cuTENSOR.CUTENSOR_OP_IDENTITY;
-        compute_type=tc.accumulate_type,
-        plan
-    )
+    # use unpadded buffers
+    let a = padded_view(a, tc.extents[tc.modes[2]]),
+        b = padded_view(b, tc.extents[tc.modes[3]]),
+        c = padded_view(c, tc.extents[tc.modes[1]]),
+        d = padded_view(d, tc.extents[tc.modes[1]])
+
+        cuTENSOR.contract!(
+            tc.alpha,
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            tc.beta,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY;
+            compute_type=tc.accumulate_type,
+            plan
+        )
+    end
 end
 
 function WMMATensorContraction(; name, extents, data_type, compute_type, accumulate_type, zero_c)
     # Parsing the name into a 3D vector of the modes of each tensor.
-    tensorModes = Vector{Vector{Int}}(undef, 0)
+    modes = Vector{Vector{Int}}(undef, 0)
     for tensor in split(name, "-")
         tensorMode = Vector{Int}(undef, 0)
 
@@ -719,34 +799,13 @@ function WMMATensorContraction(; name, extents, data_type, compute_type, accumul
             push!(tensorMode, parse(Int, mode))
         end
 
-        push!(tensorModes, tensorMode)
+        push!(modes, tensorMode)
     end
-
-    # For the sake of simplicity, we pad the extents of the tensors to be a multiple of 512.
-    # This allows for a broad range of possible block shapes in the GEMM.
-    padding_multiple = 512
-    padded_extents = copy(extents)
-    for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
-        intersection = intersect(tensorModes[idx1], tensorModes[idx2])
-
-        if prod(extents[intersection]) % padding_multiple == 0
-            continue
-        end
-
-        extent_to_pad = argmax(extents[intersection] .% padding_multiple)
-
-        padded_extents[intersection[extent_to_pad]] = Int64(ceil(extents[intersection[extent_to_pad]] / padding_multiple) * padding_multiple)
-    end
-
-    # Casting the extents to tuples.
-    extents = Tuple(extents)
-    padded_extents = Tuple(padded_extents)
 
     TensorContraction{WMMA}(
         name,
-        tensorModes,
-        extents,
-        padded_extents,
+        modes,
+        Tuple(extents),
 
         convert(compute_type, 2),
         convert(compute_type, zero_c ? 0 : 3),
@@ -759,20 +818,36 @@ function WMMATensorContraction(; name, extents, data_type, compute_type, accumul
     )
 end
 
-function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
-                                        is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K)
+function prepare(tc::TensorContraction, a, b, c, d;
+                                        BLOCK_M, BLOCK_N, BLOCK_K,
+                                        WARPS_M, WARPS_N,
+                                        OP_M, OP_N, OP_K,
+                                        kernel,
+                                        is_A_col_major, is_B_col_major, is_D_col_major,
+                                        PERM_M, PERM_N, PERM_K)
     @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
     data_type = tc.a_type
 
-    a_extent = tc.padded_extents[tc.tensorModes[2]]
+    # get padded tensors
+    padding_multiple = max(BLOCK_M, BLOCK_N, BLOCK_K)
+    padded_extents = pad_extents(tc.extents, tc.modes, padding_multiple)
+    padded_a = padded_view(a, padded_extents[tc.modes[2]])
+    padded_b = padded_view(b, padded_extents[tc.modes[3]])
+    padded_c = padded_view(c, padded_extents[tc.modes[1]])
+    padded_d = padded_view(d, padded_extents[tc.modes[1]])
+
+    # get underlying output data to return to the caller
+    data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
+
+    a_extent = padded_extents[tc.modes[2]]
     a_desc = Tensors.TensorDescriptor(
         length(a_extent), collect(Int, a_extent), collect(Int, cumprod((1, a_extent...))[1:end-1]), data_type, identity
     )
-    b_extent = tc.padded_extents[tc.tensorModes[3]]
+    b_extent = padded_extents[tc.modes[3]]
     b_desc = Tensors.TensorDescriptor(
         length(b_extent), collect(Int, b_extent), collect(Int, cumprod((1, b_extent...))[1:end-1]), data_type, identity
     )
-    c_extent = tc.padded_extents[tc.tensorModes[1]]
+    c_extent = padded_extents[tc.modes[1]]
     c_desc = Tensors.TensorDescriptor(
         length(c_extent), collect(Int, c_extent), collect(Int, cumprod((1, c_extent...))[1:end-1]), data_type, identity
     )
@@ -786,10 +861,10 @@ function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARP
     GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
 
     plan = Tensors.ContractionPlan(
-        a_desc, tc.tensorModes[2],
-        b_desc, tc.tensorModes[3],
-        c_desc, tc.tensorModes[1],
-        c_desc, tc.tensorModes[1];
+        a_desc, tc.modes[2],
+        b_desc, tc.modes[3],
+        c_desc, tc.modes[1],
+        c_desc, tc.modes[1];
         operator=Operator.WMMAOp{OP_M, OP_N, OP_K, tc.compute_type, tc.accumulate_type},
         computeType=tc.compute_type,
         accumulateType=tc.accumulate_type,
@@ -798,12 +873,14 @@ function prepare(tc::TensorContraction; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARP
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
     )
 
-    (; plan, kernel)
+    (; plan, kernel, padded_a, padded_b, padded_c, padded_d, data_d)
 end
 
-function execute(tc::TensorContraction, a, b, c, d; plan, kernel)
-    Tensors.contraction!(plan, tc.alpha, a, b, tc.beta, c, d; kernel)
-    return d
+function execute(tc::TensorContraction, a, b, c, d; plan, kernel,
+                                        padded_a, padded_b, padded_c, padded_d, data_d)
+    Tensors.contraction!(plan, tc.alpha, padded_a, padded_b, tc.beta, padded_c, padded_d;
+                         kernel)
+    return data_d
 end
 
 
