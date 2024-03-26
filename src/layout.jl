@@ -170,7 +170,7 @@ end
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
-            @inbounds val = value[(i - 1) * tile.size[2] + j]
+            @inbounds val = values[(i - 1) * tile.size[2] + j]
             if checkbounds(Bool, workspace, t.index[2] + 1, t.index[1] + 1)
                 @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = val
             end
