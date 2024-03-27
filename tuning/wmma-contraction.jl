@@ -66,7 +66,7 @@ function generate_configs(problem)
         kernel_str in ["singlestage", "pipelined"],
         is_A_col_major in [false, true],
         is_B_col_major in [false, true],
-        is_D_col_major in [#=false,=# true],    # XXX: this gives invalid results
+        is_D_col_major in [#=false,=# true], # XXX: causes illegal memory accesses
         PERM_M in permutations(intersect(problem.modes[1], problem.modes[2])),
         PERM_N in permutations(intersect(problem.modes[1], problem.modes[3])),
         PERM_K in permutations(intersect(problem.modes[2], problem.modes[3]))
@@ -119,6 +119,13 @@ function repr_row(row)
     print(io, ", $(row.WARPS_M)×$(row.WARPS_N) warp")
     print(io, ", $(row.OP_M)×$(row.OP_N)×$(row.OP_K) operator")
     print(io, ", $(row.PERM_M)×$(row.PERM_N)×$(row.PERM_K) layout")
+    if row.is_A_col_major || row.is_B_col_major || row.is_D_col_major
+        print(io, ", ")
+        row.is_A_col_major && print(io, "A ")
+        row.is_B_col_major && print(io, "B ")
+        row.is_D_col_major && print(io, "D ")
+        print(io, "col-major")
+    end
     print(io, ", $(row.kernel_str) kernel)")
 
     return String(take!(io))
@@ -233,5 +240,3 @@ function plot_results(df)
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end
-
-get_label(transpose_a, transpose_b) = "$(transpose_a ? "T" : "N")$(transpose_b ? "T" : "N")"
