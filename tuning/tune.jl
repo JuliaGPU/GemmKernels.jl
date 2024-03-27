@@ -151,17 +151,28 @@ function measure_config(problem, config, max_time, reference_result)
         device_synchronize()
         GC.gc(true)
 
-        # benchmark, but be quick about it (using `CUDA.@elapsed` instead of `CUDA.@profile`,
-        # only taking the minimum time, etc)
+        # take time measurements
         measurements = Float64[]
         result, exclusives = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
             # make sure we're starting with an idle device
             settling = @elapsed wait_if_throttling()
 
-            # perform time measurements
+            # perform an initial measurement
+            measuring = @elapsed begin
+                time = CUDA.@elapsed execute(problem, data...; args...)
+            end
+            push!(measurements, time)
+            if time > max_time
+                return nothing, (; settling, measuring)
+            end
+
+            # initialize the data to get a result to validate
+            initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
+
+            # perform more measurements
             result = nothing
-            measuring = @elapsed while true
-                best_time = minimum(measurements; init=Inf)
+            measuring += @elapsed while true
+                best_time = minimum(measurements)
                 time = CUDA.@elapsed begin
                     new_result = execute(problem, data...; args...)
                     if result === nothing
@@ -173,12 +184,6 @@ function measure_config(problem, config, max_time, reference_result)
 
                 # keep benchmarking until the time isn't improving anymore
                 if time > best_time
-                    break
-                end
-
-                # if this configuration is really slow, bail out
-                if time > max_time
-                    result = nothing
                     break
                 end
             end
