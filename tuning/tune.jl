@@ -44,10 +44,6 @@ include("wmma-contraction.jl")
 
 #######
 
-# Stop sampling when a configuration is really slow
-# If unset, we will stop measuring if we're 2x slower than the baseline,
-#const BENCH_MAX_TIME = 1
-
 # After a certain time, a measurement is considered stale (i.e., because of a crash).
 # The time here determines when to ignore a lock. Note that it is automatically
 # multiplied by 5 when the process is still alive, so it shouldn't be too large.
@@ -88,7 +84,7 @@ function log_filename()
 end
 FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
-function measure_config(problem, config, max_time, reference_result)
+function measure_config(problem, config, best_time, reference_result)
     @info "Measuring configuration $(repr_row(config))..."
 
     # allocate data
@@ -152,12 +148,13 @@ function measure_config(problem, config, max_time, reference_result)
         GC.gc(true)
 
         # take time measurements
+        max_time = 2 * best_time
         measurements = Float64[]
         result, exclusives = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
             # make sure we're starting with an idle device
             settling = @elapsed wait_if_throttling()
 
-            # perform an initial measurement
+            # first measurement: check if the configuration is even worth measuring
             measuring = @elapsed begin
                 time = CUDA.@elapsed execute(problem, data...; args...)
             end
@@ -166,32 +163,23 @@ function measure_config(problem, config, max_time, reference_result)
                 return nothing, (; settling, measuring)
             end
 
-            # initialize the data to get a result to validate
+            # second measurement: fetch results to verify (outside of the pidlock)
             initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
-
-            # perform more measurements
-            result = nothing
-            measuring += @elapsed while true
-                best_time = minimum(measurements)
+            measuring += @elapsed begin
                 time = CUDA.@elapsed begin
-                    new_result = execute(problem, data...; args...)
-                    if result === nothing
-                        # only store the result once, as we don't re-initialize the output
-                        result = new_result
-                    end
+                    result = execute(problem, data...; args...)
                 end
                 push!(measurements, time)
-
-                # keep benchmarking until the time isn't improving anymore
-                if time > best_time
-                    break
-                end
+            end
+            copying = @elapsed begin
+                result = Array(result)
             end
 
-            # copy results to host, so that we can verify without additional GPU allocations
-            copying = @elapsed begin
-                if result !== nothing
-                    result = Array(result)
+            # subsequent measurements: keep going until time doesn't improve
+            measuring += @elapsed begin
+                while last(measurements) < minimum(measurements[1:end-1])
+                    time = CUDA.@elapsed execute(problem, data...; args...)
+                    push!(measurements, time)
                 end
             end
 
@@ -355,11 +343,6 @@ function merge_configs(all_configs, configs; on)
 end
 
 function main()
-    # get rid of workers from a previous run
-    if length(workers()) > 1
-        rmprocs(workers()...; waitfor=30)
-    end
-
     # (0) Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.bin")
     all_configs = nothing
@@ -378,7 +361,9 @@ function main()
             # skip configurations we didn't process
             !in(row.status, ["pending", "skipped"])
         end
-        serialize(config_path, relevant_configs)
+        temp_path = "$(config_path).$(getpid)"
+        serialize(temp_path, relevant_configs)
+        mv(temp_path, config_path; force=true)
     end
 
     # (1) Process each unique problem.
@@ -467,13 +452,6 @@ function main()
             total_workers = max(1, max_workers-1)
             addworkers(total_workers; memory=max_memory_usage)
 
-            # Determine how long each measurement can take
-            max_time = if @isdefined(BENCH_MAX_TIME)
-                BENCH_MAX_TIME
-            else
-                2 * target_time
-            end
-
             # Process jobs!
             p = Progress(njobs; desc="$(problem) [$problem_idx/$(length(problems))]", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
@@ -491,8 +469,8 @@ function main()
                             try
                                 times, config.status =
                                     remotecall_fetch(measure_config, worker,
-                                                    problem, NamedTuple(config),
-                                                    max_time, reference_result)
+                                                     problem, NamedTuple(config),
+                                                     best_time, reference_result)
 
                                 # save the best measurement
                                 if haskey(times, :measurements)
@@ -514,7 +492,7 @@ function main()
                                 @error "Unexpected exception on worker $worker: $log"
 
                                 # recycle our worker
-                                rmprocs(worker; waitfor=30)
+                                rmprocs(worker)
                                 worker = addworkers(1; memory=max_memory_usage)[1]
                             finally
                                 delete!(worker_jobs, worker)
@@ -526,6 +504,11 @@ function main()
                                 end
                             end
                         end
+
+                        # reclaim memory
+                        GC.gc(true)
+                        CUDA.reclaim()
+                        CUDA.device_reset!()
                     end)
                 end
 
@@ -609,7 +592,7 @@ function main()
                     empty!(jobs)
 
                     # Kill workers
-                    rmprocs(workers()...; waitfor=30)
+                    rmprocs(workers()...)
                 end)
             end
         end
