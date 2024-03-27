@@ -287,7 +287,7 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         TensorLayoutA, isColMajorA,
         TensorLayoutB, isColMajorB,
         TensorLayoutD,
-        TensorLayoutD,
+        TensorLayoutD, isColMajorD
     )
 end
 
@@ -299,7 +299,7 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
         TensorLayoutA, isColMajorA,
         TensorLayoutB, isColMajorB,
         TensorLayoutC,
-        TensorLayoutD,
+        TensorLayoutD, isColMajorD
     ) = createGETTContractionPlan(desc)
 
     if (isColMajorA)
@@ -341,11 +341,12 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
 
         shared_a_layout = SharedLayoutA,
         shared_b_layout = SharedLayoutB,
-        shared_c_layout = Layout.UnsafeAlignedColMajor{desc.accumulateType},
-        shared_d_layout = Layout.UnsafeAlignedColMajor{desc.accumulateType},
+        shared_c_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
+        shared_d_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
 
         is_a_col_major = isColMajorA,
         is_b_col_major = isColMajorB,
+        is_cd_col_major = isColMajorD,
     )
 
     return GETTPlan(gemmConf)
