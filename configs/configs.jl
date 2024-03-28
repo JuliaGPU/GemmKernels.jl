@@ -612,7 +612,7 @@ end
 
 Base.show(io::IO, tc::TensorContraction) = print(io, "TC $(tc.name)")
 
-function pad_extents(extents, modes, multiple=512)
+function old_pad_extents(extents, modes, multiple=512)
     padded_extents = [extents...]
     for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
         intersection = intersect(modes[idx1], modes[idx2])
@@ -628,6 +628,77 @@ function pad_extents(extents, modes, multiple=512)
             multiple)
     end
     return Tuple(padded_extents)
+end
+
+# Exponent of 2 in the prime factorisation of n.
+function number_of_two_factors_in_prime_fact(n::Integer)
+    rv = 0
+
+    while n % 2 == 0
+        rv += 1
+        n /= 2
+    end
+
+    rv
+end
+
+# Increase number to introduce an extra factor of 2 in the prime factorisation.
+function increment_to_increase_power_of_two_in_fact(n::Integer)
+    round_to_multiple_of = 2 ^ (number_of_two_factors_in_prime_fact(n) + 1)
+    Int(ceil(n / round_to_multiple_of) * round_to_multiple_of)
+end
+
+# Sequence that increases the exponent of power of two starting from given number, and continuing until the point where we have at least a multiple of multiple_to_stop_at.
+function sequence_increasing_power_two(start::Integer, multiple_to_stop_at::Int)
+    sequence = [start]
+
+    while sequence[end] % multiple_to_stop_at != 0
+        push!(sequence, increment_to_increase_power_of_two_in_fact(sequence[end]))
+    end
+
+    sequence
+end
+
+# Pad (extents_1, extents_2, ...) to (extents_1 + padding_1, extents_2 + padding_2, ...)
+# such that (extents_1 + padding_1) * (extents_2 + padding_2) * ... is a multiple of multiple.
+function find_minimal_padding(extents, multiple)
+    # For now, let's do a "smart" brute force search. I think we can do this
+    # iteratively, by increasing a particular extent to the next multiple of
+    # the smallest power of two that does not divide the extent. e.g. a
+    # dimension 72 (which is a multiple of 8, but not 16), will be padded to
+    # the next multiple of 16, i.e. 96. In each iteration, we choose the extent
+    # that requires the least amount of padding. I'm not convinced yet of the
+    # optimality of that approach, though, and since the search space is small,
+    # anyway, we'll just exhaustively search all options, albeit in a smart
+    # way.
+
+    # It only makes sense to increase the extent to a value that increases the
+    # power of 2 in the prime factorisation of the extent. We also only need to
+    # do this up to the smallest power of two that ensures that the product is
+    # a multiple regardless of the choice of the padding for the other
+    # dimensions. E.g. to pad (72, 72) to a multiple of 512, we only need to
+    # consider increasing the padding up to multiples of 2^6, since 72 is a
+    # multiple of 2^3, so whatever we choose for the padding of the second
+    # dimension, it will be a multiple of 2^3, so we need at most 6 other
+    # 2-factors for the first dimension to get a multiple of 512=2^9.
+
+    res = collect(Iterators.filter(x -> prod(x) % multiple == 0, Iterators.product(Configs.sequence_increasing_power_two.(extents, multiple)...)));
+    _, idx = findmin(prod, res)
+    res[idx]
+end
+
+function pad_extents(extents, modes, multiples)
+    padded_extents = [extents...]
+
+    for (idx1, idx2, multiple) in [(1, 2, multiples.M), (3, 2, multiples.K), (1, 3, multiples.N)]
+        # Set of dimensions that contribute to e.g. M
+        intersection = intersect(modes[idx1], modes[idx2])
+
+        # Pad those dimensions
+        padded_extents[intersection] .= find_minimal_padding(padded_extents[intersection], multiple)
+    end
+
+    Tuple(padded_extents)
 end
 
 function padded_view(x::AbstractArray, dims)
@@ -691,7 +762,7 @@ function initialize_data(tc::TensorContraction, a, b, c, d; kwargs...)
     else
         # use the params to get appropriately padded tensors
         padding_multiple = max(kwargs[:BLOCK_M], kwargs[:BLOCK_N], kwargs[:BLOCK_K])
-        padded_extents = pad_extents(tc.extents, tc.modes, padding_multiple)
+        padded_extents = pad_extents(tc.extents, tc.modes, (M = kwargs[:BLOCK_M], N = kwargs[:BLOCK_N], K = kwargs[:BLOCK_K]))
         padded_a = padded_view(a, padded_extents[tc.modes[2]])
         padded_b = padded_view(b, padded_extents[tc.modes[3]])
         padded_c = padded_view(c, padded_extents[tc.modes[1]])
@@ -829,8 +900,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
     data_type = tc.a_type
 
     # get padded tensors
-    padding_multiple = max(BLOCK_M, BLOCK_N, BLOCK_K)
-    padded_extents = pad_extents(tc.extents, tc.modes, padding_multiple)
+    padded_extents = pad_extents(tc.extents, tc.modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
     padded_a = padded_view(a, padded_extents[tc.modes[2]])
     padded_b = padded_view(b, padded_extents[tc.modes[3]])
     padded_c = padded_view(c, padded_extents[tc.modes[1]])
