@@ -754,10 +754,11 @@ end
 function initialize_data(tc::TensorContraction, a, b, c, d; kwargs...)
     if isempty(kwargs)
         # initialize data
-        rng = CUDA.RNG(0)
-        rand!(rng, a)
-        rand!(rng, b)
-        rand!(rng, c)
+        # XXX: using the CUDA RNG here results in verification errors on Volta GPUs
+        rng = MersenneTwister(0)
+        copyto!(a, rand(rng, eltype(a), size(a)))
+        copyto!(b, rand(rng, eltype(b), size(b)))
+        copyto!(c, rand(rng, eltype(c), size(c)))
         fill!(d, 0)
     else
         # use the params to get appropriately padded tensors
