@@ -12,6 +12,7 @@ using Statistics
 using StatsBase: percentile
 using Random
 using Profile
+using Adapt
 
 if myid() == 1
     using Plots
@@ -232,7 +233,9 @@ function measure_config(problem, config, best_time, reference_result)
                 push!(measurements, time)
             end
             copying = @elapsed begin
-                result = Array(result)
+                # NOTE: we adapt, since the result may be a non-contiguous view,
+                #       and copying those allocates GPU memory.
+                result = adapt(Array, result)
             end
 
             # subsequent measurements: keep going until time doesn't improve
@@ -469,6 +472,7 @@ function main()
         for arr in data
             CUDA.unsafe_free!(arr)
         end
+        GC.gc(true)
         CUDA.reclaim()
         data = nothing
 
@@ -480,8 +484,11 @@ function main()
             njobs = length(jobs)
 
             # Determine memory usage
-            max_memory_usage = sizeof(problem) + 128*2^20       # there's always some overhead
-            worker_memory_usage = max_memory_usage + 1500*2^20  # CUDA context, etc
+            println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
+            max_memory_usage = sizeof(problem) + 32*2^20        # allow minimal unaccounted allocations
+            worker_memory_usage = max_memory_usage + 2000*2^20  # overhead from CUDA context, etc
+            # TODO: how come the context grows so large?
+            println(" - allowed worker memory use: $(Base.format_bytes(worker_memory_usage))")
 
             # Spawn workers
             cpu_memory = Sys.free_memory()
@@ -492,8 +499,9 @@ function main()
                 Sys.CPU_THREADS,
                 njobs+1
             )
-            total_workers = max(1, max_workers-1)
+            total_workers = max(1, max_workers-nworkers())
             addworkers(total_workers; memory=max_memory_usage)
+            @assert nworkers() == total_workers
 
             # Process jobs!
             p = Progress(njobs; desc="Measuring configurations", showspeed=true)
@@ -505,6 +513,13 @@ function main()
                 worker_jobs = Dict()
                 for worker in workers()
                     errormonitor(@async begin
+                        worker_pid = remotecall_fetch(getpid, worker)
+                        function recycle_worker()
+                            rmprocs(worker)
+                            worker = addworkers(1; memory=max_memory_usage)[1]
+                            worker_pid = remotecall_fetch(getpid, worker)
+                        end
+
                         while !isempty(jobs)
                             i = popfirst!(jobs)
                             config = configs[i, :]
@@ -533,10 +548,7 @@ function main()
                                 bt = catch_backtrace()
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
                                 @error "Unexpected exception on worker $worker: $log"
-
-                                # recycle our worker
-                                rmprocs(worker)
-                                worker = addworkers(1; memory=max_memory_usage)[1]
+                                recycle_worker()
                             finally
                                 delete!(worker_jobs, worker)
                                 push!(results, (worker, i))
@@ -546,14 +558,24 @@ function main()
                                     push!(jobs, i)
                                 end
                             end
-                        end
 
-                        # reclaim memory
-                        remotecall(worker) do
-                            GC.gc(true)
-                            CUDA.reclaim()
-                            CUDA.device_reset!()
-                            # XXX: just exit here?
+                            # make sure our worker doesn't overshoot its memory budget.
+                            # XXX: why does this happen? does the CUDA context grow
+                            #      because of compiling so many kernels?
+                            try
+                                dev = NVML.Device(parent_uuid(device()))
+                                procs = NVML.compute_processes(dev)
+                                if haskey(procs, worker_pid)
+                                    info = procs[worker_pid]
+                                    if info.used_gpu_memory !== missing && info.used_gpu_memory > worker_memory_usage
+                                        @warn "Worker $worker exceeded memory budget: $(Base.format_bytes(info.used_gpu_memory))"
+                                        recycle_worker()
+                                    end
+                                end
+                            catch err
+                                isa(err, NVML.NVMLError) || rethrow()
+                                err.code in [NVML.ERROR_NOT_SUPPORTED, NVML.ERROR_NO_PERMISSION] || rethrow()
+                            end
                         end
                     end)
                 end
@@ -645,6 +667,14 @@ function main()
                     # Kill workers
                     rmprocs(workers()...)
                 end)
+            end
+
+            println(" - final time: $(prettytime(best_time))")
+
+            # ensure no workers are left
+            if workers() != [myid()]
+                rmprocs(workers()...)
+                @assert workers() == [myid()]
             end
         end
         checkpoint()
