@@ -377,6 +377,9 @@ function main()
             push!(measurements, time)
         end
 
+        for arr in data
+            CUDA.unsafe_free!(arr)
+        end
         push!(baseline_performances, minimum(measurements))
         serialize(joinpath(reference_results, "$(problem_idx).bin"), result)
     end
