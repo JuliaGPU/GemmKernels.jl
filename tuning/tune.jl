@@ -212,7 +212,7 @@ function measure_config(problem, config, best_time, reference_result)
 
             # first measurement: check if the configuration is even worth measuring
             measuring = @elapsed begin
-                time = CUDA.@elapsed execute(problem, data...; args...)
+                time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
             end
             push!(measurements, time)
             if time > max_time
@@ -222,7 +222,7 @@ function measure_config(problem, config, best_time, reference_result)
             # second measurement: fetch results to verify (outside of the pidlock)
             initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
             measuring += @elapsed begin
-                time = CUDA.@elapsed begin
+                time = CUDA.@elapsed blocking=true begin
                     result = execute(problem, data...; args...)
                 end
                 push!(measurements, time)
@@ -233,8 +233,8 @@ function measure_config(problem, config, best_time, reference_result)
 
             # subsequent measurements: keep going until time doesn't improve
             measuring += @elapsed begin
-                while last(measurements) < minimum(measurements[1:end-1])
-                    time = CUDA.@elapsed execute(problem, data...; args...)
+                while need_more_measurements(measurements)
+                    time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
                     push!(measurements, time)
                 end
             end
@@ -333,6 +333,16 @@ function benchmark_configs(all_configs)
     return best_configs
 end
 
+function need_more_measurements(times)
+    if length(times) < 3
+        return true
+    end
+
+    # check that the last two measurements didn't improve the minimum
+    best_time = minimum(times)
+    return times[end-1] < best_time || times[end] < best_time
+end
+
 function main()
     #
     # Phase 1: Gather baseline performance and results
@@ -357,8 +367,9 @@ function main()
 
         # measure
         measurements = []
-        while isempty(measurements) || last(measurements) < minimum(measurements)
-            time = CUDA.@elapsed(execute_baseline(problem, data...; args...))
+        while need_more_measurements(measurements)
+            prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
+            time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
             push!(measurements, time)
         end
 
