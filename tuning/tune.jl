@@ -513,11 +513,9 @@ function main()
                 worker_jobs = Dict()
                 for worker in workers()
                     errormonitor(@async begin
-                        worker_pid = remotecall_fetch(getpid, worker)
                         function recycle_worker()
                             rmprocs(worker)
                             worker = addworkers(1; memory=max_memory_usage)[1]
-                            worker_pid = remotecall_fetch(getpid, worker)
                         end
 
                         while !isempty(jobs)
@@ -563,13 +561,22 @@ function main()
                             # XXX: why does this happen? does the CUDA context grow
                             #      because of compiling so many kernels?
                             try
-                                dev = NVML.Device(parent_uuid(device()))
-                                procs = NVML.compute_processes(dev)
-                                if haskey(procs, worker_pid)
-                                    info = procs[worker_pid]
-                                    if info.used_gpu_memory !== missing && info.used_gpu_memory > worker_memory_usage
-                                        @warn "Worker $worker exceeded memory budget: $(Base.format_bytes(info.used_gpu_memory))"
-                                        recycle_worker()
+                                worker_pid = try
+                                    remotecall_fetch(getpid, worker)
+                                catch
+                                    # this can happen when the worker is exiting
+                                    nothing
+                                end
+
+                                if worker_pid !== nothing
+                                    dev = NVML.Device(parent_uuid(device()))
+                                    procs = NVML.compute_processes(dev)
+                                    if haskey(procs, worker_pid)
+                                        info = procs[worker_pid]
+                                        if info.used_gpu_memory !== missing && info.used_gpu_memory > worker_memory_usage
+                                            @warn "Worker $worker exceeded memory budget: $(Base.format_bytes(info.used_gpu_memory))"
+                                            recycle_worker()
+                                        end
                                     end
                                 end
                             catch err
