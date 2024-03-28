@@ -162,38 +162,10 @@ function kernel_string_to_function(str)
     end
 end
 
-function select_best(configs)
-    best_configs = similar(configs, 0)
-
-    for (name, extents) in [(el["parseableName"], el["extents"]) for el in jsonData]
-        relevant_configs = configs[(@. (configs[!, "name"] == name)), :]
-
-        _, best_config_index = findmin(relevant_configs[!, "time"])
-        best_config = relevant_configs[best_config_index, :]
-
-        push!(best_configs, Dict(
-            :name => name,
-            :extents => extents,
-            :BLOCK_M => best_config["BLOCK_M"],
-            :BLOCK_N => best_config["BLOCK_N"],
-            :BLOCK_K => best_config["BLOCK_K"],
-            :WARPS_M => best_config["WARPS_M"],
-            :WARPS_N => best_config["WARPS_N"],
-            :OP_M => best_config["OP_M"],
-            :OP_N => best_config["OP_N"],
-            :OP_K => best_config["OP_K"],
-            :kernel_str => best_config["kernel_str"],
-            :time => best_config["time"],
-        ))
-    end
-
-    return best_configs
-end
-
 
 ## output
 
-function plot_results(df)
+function plot_best_configs(df)
     markershapes = Dict(
         "NN" => :circle,
         "NT" => :dtriangle,
@@ -207,8 +179,7 @@ function plot_results(df)
     ylabel!("Performance relative to cuTENSOR [%]")
 
     idx = 1:nrow(df)
-    names = df.parseable_name
-    names = map(df.parseable_name) do parseable_name
+    names = map(df.name) do parseable_name
         for el in jsonData
             if el["parseableName"] == parseable_name
                 return el["name"]

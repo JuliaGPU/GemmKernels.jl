@@ -105,7 +105,18 @@ function create_params(row)
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel, zero_c)
 end
 
-group_configs(configs) = groupby(configs, [:N, :transpose_a, :transpose_b])
+function select_configs(configs, problem)
+    # use groupby to return a mutable handle
+    for group in groupby(configs, [:N, :transpose_a, :transpose_b])
+        config = first(group)
+        if config.N == problem.N &&
+           config.transpose_a == problem.transpose_a &&
+           config.transpose_b == problem.transpose_b
+            return group
+        end
+    end
+    return nothing
+end
 
 function kernel_string_to_function(str)
     if str == "singlestage"
@@ -117,41 +128,10 @@ function kernel_string_to_function(str)
     end
 end
 
-function select_best(configs)
-    best_configs = similar(configs, 0)
-
-    for N = N_vals,
-        transpose_a = [false, true],
-        transpose_b = [false, true],
-
-        relevant_configs = configs[(@. (configs[!, "transpose_a"] == transpose_a) & (configs[!, "transpose_b"] == transpose_b) & (configs[!, "N"] == N)), :]
-        _, best_config_index = findmin(relevant_configs[!, "time"])
-        best_config = relevant_configs[best_config_index, :]
-
-        push!(best_configs, Dict(
-            :transpose_a => transpose_a,
-            :transpose_b => transpose_b,
-            :N => N,
-            :BLOCK_M => best_config["BLOCK_M"],
-            :BLOCK_N => best_config["BLOCK_N"],
-            :BLOCK_K => best_config["BLOCK_K"],
-            :WARPS_M => best_config["WARPS_M"],
-            :WARPS_N => best_config["WARPS_N"],
-            :OP_M => best_config["OP_M"],
-            :OP_N => best_config["OP_N"],
-            :OP_K => best_config["OP_K"],
-            :kernel_str => best_config["kernel_str"],
-            :time => best_config["time"],
-        ))
-    end
-
-    return best_configs
-end
-
 
 ## output
 
-function plot_results(best_configs)
+function plot_best_configs(best_configs)
     markershapes = Dict(
         "NN" => :circle,
         "NT" => :dtriangle,

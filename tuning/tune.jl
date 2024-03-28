@@ -17,8 +17,10 @@ if myid() == 1
     using Plots
 end
 
-# interface for tuning modules:
 
+############################################################################################
+
+# interface for tuning modules:
 #
 # The interface uses 3 kinds of objects:
 # - a problem, representing the details of the operation we're performing
@@ -35,21 +37,19 @@ end
 #   those matching a specific problem.
 # - repr_row(config): pretty-print a configuration
 # - create_params(row): create configuration parameters for this row
-# - select_best(configs): given a list of measured configurations (i.e. with an added
-#   :time column), return the best configuration for each problem
 #
 # output
-# - plot_results(best_configs): plot the results
-include("wmma-contraction.jl")
+# - plot_best_configs(best_configs): plot the results
+isinteractive() || include("wmma-contraction.jl")
 
-#######
+############################################################################################
+
+const PIDFILE = joinpath(@__DIR__, "tuning.pid")
 
 # After a certain time, a measurement is considered stale (i.e., because of a crash).
 # The time here determines when to ignore a lock. Note that it is automatically
 # multiplied by 5 when the process is still alive, so it shouldn't be too large.
-const BENCH_STALE_AGE = 60
-
-const PIDFILE = joinpath(@__DIR__, "tuning.pid")
+const PIDFILE_STALE_AGE = 60
 
 # Whether we stop after beating the baseline, or continue until we've tested every config.
 const EXHAUSTIVE = false
@@ -57,32 +57,88 @@ const EXHAUSTIVE = false
 # Retry configurations with these categories.
 const RETRY_STATUSSES = ["oom", "crashed"]
 
-#####
+# When benchmarking the best configurations, how many candidates to consider.
+const BENCHMARK_CANDIDATES = 3
 
-# Stop gathering samples for plot if we have spent this much time...
-# 60 seconds/configuration * 32 configurations = 32 minutes for plot.
-const PLOT_NUM_SECONDS = 60
+# When benchmarking the best configurations, how many samples to take.
+const BENCHMARK_SAMPLES = 5
 
-# ... but have at least 100 samples.
-const PLOT_MIN_NUM_SAMPLES = 100
+############################################################################################
 
-# Group samples in batches of 10 samples each.
-const PLOT_BATCH_SIZE = 10
-
-#######
-
-# Write logging messages to file for persistence.
-timestamp_logger(logger) = TransformerLogger(logger) do log
-    merge(log, (; message = "$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS")) $(log.message)"))
-end
-function log_filename()
-    path = joinpath(@__DIR__, "tuning.log")
-    if myid() != 1
-        path = "$(path).$(myid())"
+function timescale(time)
+    if time < 1e-6
+        1e9, "ns"
+    elseif time < 1e-3
+        1e6, "μs"
+    elseif time < 1
+        1e3, "ms"
+    else
+        1, "s"
     end
-    path
 end
-FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
+
+function prettytime(time)
+    time == Inf && return "Inf"
+
+    # timescale
+    scale, unit = timescale(time)
+
+    rnd_time = round(time * scale; sigdigits=3)
+    return "$rnd_time $unit"
+end
+
+perf_ratio(gemmkernels, baseline) = percentile(baseline, 0) / percentile(gemmkernels, 0)
+perf_ratio_lo(gemmkernels, baseline) = percentile(baseline, 0) / percentile(gemmkernels, 75)
+perf_ratio_hi(gemmkernels, baseline) = percentile(baseline, 75) / percentile(gemmkernels, 0)
+
+function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
+    # make sure we're reading accurate data
+    # (for when this function is called in a loop)
+    sleep(0.01)
+
+    cer = NVML.clock_event_reasons(dev)
+
+    while cer.hw_power_brake || cer.sw_power_cap || cer.hw_slow || cer.sw_thermal || cer.hw_thermal
+        sleep(0.1)
+        cer = NVML.clock_event_reasons(dev)
+    end
+end
+
+function addworkers(X; memory)
+    env = [
+        "JULIA_NUM_THREADS" => "1",
+        "OPENBLAS_NUM_THREADS" => "1",
+        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(memory),
+    ]
+    exeflags = [
+        "--project=$(Base.active_project())",
+        "--heap-size-hint=$memory"
+    ]
+
+    procs = addprocs(X; exeflags, env)
+    @everywhere procs include($(joinpath(@__DIR__, "tune.jl")))
+    procs
+end
+
+function merge_configs(all_configs, configs; on)
+    if all_configs === nothing
+        return configs
+    end
+
+    # merge in results from previous runs
+    configs = leftjoin(configs, all_configs; on, makeunique=true)
+    configs.time = coalesce.(configs.time_1, configs.time)
+    configs.status = coalesce.(configs.status_1, configs.status)
+    configs = select(configs, Not([:time_1, :status_1]))
+
+    # find the configs that are new, and merge them back
+    other_configs = antijoin(all_configs, configs; on)
+    all_configs = vcat(configs, other_configs)
+
+    all_configs
+end
+
+############################################################################################
 
 function measure_config(problem, config, best_time, reference_result)
     @info "Measuring configuration $(repr_row(config))..."
@@ -139,7 +195,7 @@ function measure_config(problem, config, best_time, reference_result)
         end
 
         # initialize data
-        initializing = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
+        initializing = mkpidlock(PIDFILE; stale_age=PIDFILE_STALE_AGE) do
             @elapsed CUDA.@sync initialize_data(problem, data...; params...)
         end
 
@@ -150,7 +206,7 @@ function measure_config(problem, config, best_time, reference_result)
         # take time measurements
         max_time = 2 * best_time
         measurements = Float64[]
-        result, exclusives = mkpidlock(PIDFILE; stale_age=BENCH_STALE_AGE) do
+        result, exclusives = mkpidlock(PIDFILE; stale_age=PIDFILE_STALE_AGE) do
             # make sure we're starting with an idle device
             settling = @elapsed wait_if_throttling()
 
@@ -205,145 +261,121 @@ function measure_config(problem, config, best_time, reference_result)
     end
 end
 
-function timescale(time)
-    if time < 1e-6
-        1e9, "ns"
-    elseif time < 1e-3
-        1e6, "μs"
-    elseif time < 1
-        1e3, "ms"
-    else
-        1, "s"
+function benchmark_configs(all_configs)
+    # we only care about successful configurations
+    all_configs = all_configs[all_configs[!, "status"] .== "success", :]
+    select!(all_configs, Not(:status))
+
+    problems = generate_problems()
+
+    # gather the best configurations for each problem
+    candidate_configs = similar(all_configs, 0)
+    for problem in problems
+        configs = select_configs(all_configs, problem)
+        append!(candidate_configs, first(sort(configs, :time), BENCHMARK_CANDIDATES))
     end
-end
 
-function prettytime(time)
-    time == Inf && return "Inf"
+    # get rid of the old time measurements
+    select!(all_configs, Not(:time))
+    select!(candidate_configs, Not(:time))
 
-    # timescale
-    scale, unit = timescale(time)
-
-    rnd_time = round(time * scale; sigdigits=3)
-    return "$rnd_time $unit"
-end
-
-perf_ratio(gemmkernels, baseline) = percentile(baseline, 0) / percentile(gemmkernels, 0)
-perf_ratio_lo(gemmkernels, baseline) = percentile(baseline, 0) / percentile(gemmkernels, 75)
-perf_ratio_hi(gemmkernels, baseline) = percentile(baseline, 75) / percentile(gemmkernels, 0)
-
-function get_uncertainty(gk, bl)
-    lo, mid, hi = (perf_ratio_lo(gk, bl), perf_ratio(gk, bl), perf_ratio_hi(gk, bl))
-
-    hi_uncertainty = abs(hi - mid) / mid
-    lo_uncertainty = abs(lo - mid) / mid
-    uncertainty = max(hi_uncertainty, lo_uncertainty)
-
-    uncertainty, lo_uncertainty, hi_uncertainty
-end
-
-function got_enough_samples(config)
-    gk, bl = config["gemmkernels_times"], config["baseline_times"]
-
-    (length(gk) < PLOT_MIN_NUM_SAMPLES) && return false
-    (length(bl) < PLOT_MIN_NUM_SAMPLES) && return false
-
-    config["time_spent"] >= PLOT_NUM_SECONDS
-end
-
-function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
-    # make sure we're reading accurate data
-    # (for when this function is called in a loop)
-    sleep(0.01)
-
-    cer = NVML.clock_event_reasons(dev)
-
-    while cer.hw_power_brake || cer.sw_power_cap || cer.hw_slow || cer.sw_thermal || cer.hw_thermal
-        sleep(0.1)
-        cer = NVML.clock_event_reasons(dev)
-    end
-end
-
-function benchmark_best_configs(configs)
-    configs = select(configs, Not([:status]))
-    best_configs = select_best(configs)
-    best_configs.status .= "pending"
-    best_configs.time_spent .= 0.0
-    best_configs.gemmkernels_times = [Float64[] for _ in 1:size(best_configs, 1)]
-    best_configs.baseline_times = [Float64[] for _ in 1:size(best_configs, 1)]
-
-    p = Progress(size(best_configs, 1); desc="Benchmarking", showspeed=true)
-    for config in eachrow(best_configs)
-        problem = create_problem(config)
+    # benchmark
+    nbenchmarks = size(candidate_configs, 1) + size(problems, 1)
+    p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking", showspeed=true)
+    best_configs = similar(all_configs, 0)
+    best_configs.gemmkernels_times = Vector{Float64}[]
+    best_configs.baseline_times = Vector{Float64}[]
+    for problem in problems
         data = allocate_data(problem)
 
-        @info "Profiling configuration $(repr_row(config))..."
+        # measure baseline
+        baseline_times = []
+        let
+            # warm-up
+            args = prepare_baseline(problem, data...)
+            execute_baseline(problem, data...; args...)
+            wait_if_throttling()
 
-        params = create_params(config)
-        for baseline in [false, true]
-            for i in 1:PLOT_BATCH_SIZE
-                wait_if_throttling()
-
-                start_time = time()
-
-                if baseline
-                    prof = CUDA.@profile concurrent=false execute_baseline(problem, data...)
-                else
-                    prof = CUDA.@profile concurrent=false execute(problem, data...; params...)
-                end
-
-                push!(config[if baseline "baseline_times" else "gemmkernels_times" end], sum(prof.device[!, "stop"] - prof.device[!, "start"]))
-
-                config["time_spent"] += (time() - start_time)
+            for i in 1:BENCHMARK_SAMPLES
+                prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
+                time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                push!(baseline_times, time)
+                next!(p)
             end
         end
 
-        if got_enough_samples(config)
-            config.status = "done"
+        # measure gemmkernels
+        best_config = nothing
+        for config in eachrow(select_configs(candidate_configs, problem))
+            # warm-up
+            params = create_params(config)
+            args = prepare(problem, data...; params...)
+            execute(problem, data...; args...)
+            wait_if_throttling()
+
+            times = []
+            for i in 1:BENCHMARK_SAMPLES
+                prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
+                time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                push!(times, time)
+                next!(p)
+            end
+
+            if best_config === nothing || minimum(times) < minimum(best_config.gemmkernels_times)
+                best_config = (; gemmkernels_times = times, copy(config)...)
+            end
         end
 
-        # Update progress bar.
-        next!(p)
+        best_config = (; baseline_times, best_config...)
+        push!(best_configs, best_config)
     end
 
-    best_configs
-end
-
-function addworkers(X; memory)
-    env = [
-        "JULIA_NUM_THREADS" => "1",
-        "OPENBLAS_NUM_THREADS" => "1",
-        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(memory),
-    ]
-    exeflags = [
-        "--project=$(Base.active_project())",
-        "--heap-size-hint=$memory"
-    ]
-
-    procs = addprocs(X; exeflags, env)
-    @everywhere procs include($(joinpath(@__DIR__, "tune.jl")))
-    procs
-end
-
-function merge_configs(all_configs, configs; on)
-    if all_configs === nothing
-        return configs
-    end
-
-    # merge in results from previous runs
-    configs = leftjoin(configs, all_configs; on, makeunique=true)
-    configs.time = coalesce.(configs.time_1, configs.time)
-    configs.status = coalesce.(configs.status_1, configs.status)
-    configs = select(configs, Not([:time_1, :status_1]))
-
-    # find the configs that are new, and merge them back
-    other_configs = antijoin(all_configs, configs; on)
-    all_configs = vcat(configs, other_configs)
-
-    all_configs
+    return best_configs
 end
 
 function main()
-    # (0) Load previous results from disk
+    #
+    # Phase 1: Gather baseline performance and results
+    #
+
+    baseline_performances = []
+    reference_results = mktempdir()
+
+    # XXX: do this on a worker
+    problems = generate_problems()
+    @showprogress desc="Measuring baselines..." for (problem_idx, problem) in enumerate(problems)
+        data = allocate_data(problem)
+        initialize_data(problem, data...)
+
+        # calculate
+        result = Array(calculate_reference(problem, data...))
+
+        # warm-up
+        args = prepare_baseline(problem, data...)
+        execute_baseline(problem, data...; args...)
+        wait_if_throttling()
+
+        # measure
+        measurements = []
+        while isempty(measurements) || last(measurements) < minimum(measurements)
+            time = CUDA.@elapsed(execute_baseline(problem, data...; args...))
+            push!(measurements, time)
+        end
+
+        push!(baseline_performances, minimum(measurements))
+        serialize(joinpath(reference_results, "$(problem_idx).bin"), result)
+    end
+
+    # reclaim memory
+    GC.gc(true)
+    CUDA.reclaim()
+
+
+    #
+    # Phase 2: Sweep parameters
+    #
+
+    # Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.bin")
     all_configs = nothing
     if isfile(config_path)
@@ -366,10 +398,13 @@ function main()
         mv(temp_path, config_path; force=true)
     end
 
-    # (1) Process each unique problem.
-    problems = generate_problems()
     for (problem_idx, problem) in enumerate(problems)
+        println("Processing $problem [$problem_idx/$(length(problems))]...")
+
         data = allocate_data(problem)
+        target_time = baseline_performances[problem_idx]
+        reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
+        println(" - target time: $(prettytime(target_time))")
 
         # generate this problem's configurations
         configs = generate_configs(problem)
@@ -379,7 +414,15 @@ function main()
         all_configs = merge_configs(all_configs, configs; on=config_keys)
         configs = select_configs(all_configs, problem)
 
+        # See if there's anything we need to do
+        best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
+        println(" - best time so far: $(prettytime(best_time))")
+        if !EXHAUSTIVE && best_time < target_time
+            println("... fast enough already")
+        end
+
         # Filter configurations where we can determine upfront that they are unsupported.
+        # XXX: do this on a worker
         @showprogress desc="Filtering configurations..." for config in eachrow(configs)
             if config.status != "new"
                 continue
@@ -388,6 +431,7 @@ function main()
             try
                 params = create_params(config)
                 prepare(problem, data...; params...)
+                # XXX: lots of failures only happen during `execute()`
                 config.status = "pending"
             catch err
                 if isa(err, GemmKernels.ConfigError)
@@ -403,23 +447,6 @@ function main()
         end
         checkpoint()
 
-        # Measure baseline performance of problem.
-        target_time, reference_result = let
-            # warm-up
-            initialize_data(problem, data...)
-            args = prepare_baseline(problem, data...)
-            execute_baseline(problem, data...; args...)
-
-            # measure baseline
-            wait_if_throttling()
-            time = CUDA.@elapsed(execute_baseline(problem, data...; args...))
-
-            # calculate reference
-            result = Array(calculate_reference(problem, data...))
-
-            time, result
-        end
-
         # Get rid of the data
         for arr in data
             CUDA.unsafe_free!(arr)
@@ -427,12 +454,10 @@ function main()
         CUDA.reclaim()
         data = nothing
 
-        # See if there's anything we need to do
-        best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         jobs = filter(1:size(configs, 1)) do i
             configs[i, :status] in ["pending"; RETRY_STATUSSES]
         end
-        if !isempty(jobs) && (EXHAUSTIVE || best_time > target_time)
+        if !isempty(jobs)
             shuffle!(jobs)
             njobs = length(jobs)
 
@@ -453,7 +478,7 @@ function main()
             addworkers(total_workers; memory=max_memory_usage)
 
             # Process jobs!
-            p = Progress(njobs; desc="$(problem) [$problem_idx/$(length(problems))]", showspeed=true)
+            p = Progress(njobs; desc="Measuring configurations", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             sweep_start = time()
@@ -583,6 +608,13 @@ function main()
 
                         # Check if we're done
                         if !EXHAUSTIVE && best_time < target_time
+                            print(" - stopping after beating target time\n")
+                            break
+                        end
+                        if time() - sweep_start > 90
+                            # XXX: for now, only spend 15 minutes on a single problem
+                            #      so that we can finish the suite within half a day
+                            print(" - stopping after hitting time limit\n")
                             break
                         end
 
@@ -599,7 +631,12 @@ function main()
         checkpoint()
     end
 
-    # (4) Select best configurations, and benchmark.
+
+    #
+    # Phase 3: Process results
+    #
+
+    # Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")
     best_configs = nothing
     if isfile(best_configs_path)
@@ -613,16 +650,29 @@ function main()
     end
     if best_configs === nothing
         @info "Benchmarking configurations for plot..."
-        best_configs = benchmark_best_configs(all_configs)
+        best_configs = benchmark_configs(all_configs)
 
         serialize(best_configs_path, best_configs)
     end
 
 
-    # (5) Plotting results
+    # Plotting results
     @info "Plotting results..."
-    plot_results(best_configs)
+    plot_best_configs(best_configs)
 end
+
+# Write logging messages to file for persistence.
+timestamp_logger(logger) = TransformerLogger(logger) do log
+    merge(log, (; message = "$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS")) $(log.message)"))
+end
+function log_filename()
+    path = joinpath(@__DIR__, "tuning.log")
+    if myid() != 1
+        path = "$(path).$(myid())"
+    end
+    path
+end
+FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
 if !isinteractive() && myid() == 1
     isfile(PIDFILE) && error("Another tuning process is already running. If this is not the case, please remove the file $(PIDFILE).")
