@@ -687,7 +687,7 @@ function find_minimal_padding(extents, multiple)
     res[idx]
 end
 
-function pad_extents(extents, modes, multiples)
+function pad_extents(extents, modes, multiples=(M=512,N=512,K=512))
     padded_extents = [extents...]
 
     for (idx1, idx2, multiple) in [(1, 2, multiples.M), (3, 2, multiples.K), (1, 3, multiples.N)]
