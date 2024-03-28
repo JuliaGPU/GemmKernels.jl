@@ -542,9 +542,12 @@ function main()
                         end
 
                         # reclaim memory
-                        GC.gc(true)
-                        CUDA.reclaim()
-                        CUDA.device_reset!()
+                        remotecall(worker) do
+                            GC.gc(true)
+                            CUDA.reclaim()
+                            CUDA.device_reset!()
+                            # XXX: just exit here?
+                        end
                     end)
                 end
 
