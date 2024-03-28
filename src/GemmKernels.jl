@@ -19,4 +19,6 @@ include("transform.jl")
 # instantiations
 include("matmul.jl")
 
+include("tensors/Tensors.jl")
+
 end
