@@ -54,6 +54,10 @@ const PIDFILE_STALE_AGE = 60
 # Whether we stop after beating the baseline, or continue until we've tested every config.
 const EXHAUSTIVE = false
 
+# The time limit for measuring configurations, in seconds. This will be used to determine
+# a per-problem time limit.
+const TIME_LIMIT = 24*3600
+
 # Retry configurations with these categories.
 const RETRY_STATUSSES = ["oom", "crashed"]
 
@@ -625,9 +629,7 @@ function main()
                             print(" - stopping after beating target time\n")
                             break
                         end
-                        if time() - sweep_start > 90
-                            # XXX: for now, only spend 15 minutes on a single problem
-                            #      so that we can finish the suite within half a day
+                        if (time() - sweep_start) > (TIME_LIMIT / length(problems))
                             print(" - stopping after hitting time limit\n")
                             break
                         end
