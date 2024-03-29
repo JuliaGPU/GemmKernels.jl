@@ -32,6 +32,7 @@ end
 # This interface is mostly defined in `configs/configs.jl`. The tuning script layers
 # some additional abstraction on top of this for the purpose of iteration & serialization:
 # - generate_problems(): return a list of input problems
+# - count_configs(problem): for this problem, count the number of configurations.
 # - generate_configs(problem): for this problem, generate configurations to sweep over.
 #   each configuration should also identify the problem it belongs to.
 # - select_configs(configs, problem): from a pre-existing list of configurations, list
@@ -212,20 +213,21 @@ function measure_config(problem, config, best_time, reference_result)
 
             # first measurement: check if the configuration is even worth measuring
             measuring = @elapsed begin
-                time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+                cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
             end
-            push!(measurements, time)
-            if time > max_time
+            push!(measurements, cur_time)
+            if cur_time > max_time
                 return nothing, (; settling, measuring)
             end
 
             # second measurement: fetch results to verify (outside of the pidlock)
             initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
+            settling += @elapsed wait_if_throttling()
             measuring += @elapsed begin
-                time = CUDA.@elapsed blocking=true begin
+                cur_time = CUDA.@elapsed blocking=true begin
                     result = execute(problem, data...; args...)
                 end
-                push!(measurements, time)
+                push!(measurements, cur_time)
             end
             copying = @elapsed begin
                 # NOTE: we adapt, since the result may be a non-contiguous view,
@@ -236,8 +238,8 @@ function measure_config(problem, config, best_time, reference_result)
             # subsequent measurements: keep going until time doesn't improve
             measuring += @elapsed begin
                 while need_more_measurements(measurements)
-                    time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
-                    push!(measurements, time)
+                    cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+                    push!(measurements, cur_time)
                 end
             end
 
@@ -300,8 +302,8 @@ function benchmark_configs(all_configs)
 
             for i in 1:BENCHMARK_SAMPLES
                 prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-                push!(baseline_times, time)
+                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                push!(baseline_times, cur_time)
                 next!(p)
             end
         end
@@ -318,8 +320,8 @@ function benchmark_configs(all_configs)
             times = []
             for i in 1:BENCHMARK_SAMPLES
                 prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-                time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-                push!(times, time)
+                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                push!(times, cur_time)
                 next!(p)
             end
 
@@ -347,14 +349,21 @@ end
 
 function main()
     #
-    # Phase 1: Gather baseline performance and results
+    # Phase 1: Prepare
     #
 
+    problems = generate_problems()
+
+    # Determine per-problem time limits
+    nconfigs = sum(count_configs, problems)
+    time_limits = []
+    for problem in problems
+        time_limits = push!(time_limits, TIME_LIMIT * count_configs(problem) / nconfigs)
+    end
+
+    # Gather baseline performance and results
     baseline_performances = []
     reference_results = mktempdir()
-
-    # XXX: do this on a worker
-    problems = generate_problems()
     @showprogress desc="Measuring baselines..." for (problem_idx, problem) in enumerate(problems)
         data = allocate_data(problem)
         initialize_data(problem, data...)
@@ -371,8 +380,8 @@ function main()
         measurements = []
         while need_more_measurements(measurements)
             prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-            time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-            push!(measurements, time)
+            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+            push!(measurements, cur_time)
         end
 
         for arr in data
@@ -434,7 +443,7 @@ function main()
         best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         println(" - best time so far: $(prettytime(best_time))")
         if !EXHAUSTIVE && best_time < target_time
-            println("  fast enough already")
+            println("   fast enough already")
             continue
         end
 
@@ -502,10 +511,12 @@ function main()
                 njobs+1
             )
             total_workers = max(1, max_workers-nworkers())
+            println(" - using $total_workers workers")
             addworkers(total_workers; cpu_mem_target, gpu_mem_target)
             @assert nworkers() == total_workers
 
             # Process jobs!
+            println(" - time limit: $(prettytime(time_limits[problem_idx]))")
             p = Progress(njobs; desc="Measuring configurations", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
@@ -679,7 +690,7 @@ function main()
                             print(" - stopping after beating target time\n")
                             break
                         end
-                        if (time() - sweep_start) > (TIME_LIMIT / length(problems))
+                        if (time() - sweep_start) > time_limits[problem_idx]
                             print(" - stopping after hitting time limit\n")
                             break
                         end

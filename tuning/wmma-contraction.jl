@@ -28,6 +28,23 @@ function generate_problems()
     problems
 end
 
+function count_configs(problem)
+    modes = problem.modes
+    length(6:9) *                                           # BLOCK_M
+    length(6:9) *                                           # BLOCK_N
+    length(5:7) *                                           # BLOCK_K
+    length(0:3) *                                           # WARPS_M
+    length(0:3) *                                           # WARPS_N
+    3 *                                                     # (OP_M, OP_N, OP_K)
+    2 *                                                     # kernel_str
+    2 *                                                     # is_A_col_major
+    2 *                                                     # is_B_col_major
+    1 *                                                     # is_D_col_major
+    length(permutations(intersect(modes[1], modes[2]))) *   # PERM_M
+    length(permutations(intersect(modes[1], modes[3]))) *   # PERM_N
+    length(permutations(intersect(modes[2], modes[3])))     # PERM_K
+end
+
 function generate_configs(problem)
     configs = DataFrame(
         # problem
@@ -94,6 +111,7 @@ function generate_configs(problem)
         ))
     end
 
+    @assert nrow(configs) == count_configs(problem)
     configs
 end
 
