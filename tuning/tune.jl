@@ -262,6 +262,7 @@ function measure_config(problem, config, best_time, reference_result)
             CUDA.unsafe_free!(arr)
         end
         CUDA.reclaim()
+        GC.gc(true)
     end
 end
 
@@ -498,8 +499,8 @@ function main()
             gpu_mem_max = gpu_mem_target + 2000*2^20        # overhead from CUDA context, etc
             # TODO: how come the context grows so large?
             cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
-            cpu_mem_max = sizeof(problem) + 2000*2^20       # compilation headroom
-            println(" - allowed worker memory use: $(Base.format_bytes(gpu_mem_max)) GPU memory, $(Base.format_bytes(cpu_mem_max)) CPU memory")
+            cpu_mem_max = sizeof(problem) + 5000*2^20       # compilation headroom
+            println(" - allowed worker memory use: $(Base.format_bytes(cpu_mem_max)) CPU memory and $(Base.format_bytes(gpu_mem_max)) GPU memory")
 
             # Spawn workers
             cpu_memory = Sys.free_memory()
@@ -511,7 +512,7 @@ function main()
                 njobs+1
             )
             total_workers = max(1, max_workers-nworkers())
-            println(" - using $total_workers workers")
+            println(" - using $total_workers workers, restricted by $(Base.format_bytes(cpu_memory)) CPU memory and $(Base.format_bytes(gpu_memory)) GPU memory")
             addworkers(total_workers; cpu_mem_target, gpu_mem_target)
             @assert nworkers() == total_workers
 
@@ -523,6 +524,9 @@ function main()
             sweep_start = time()
             @sync begin
                 # Measuring tasks
+                # NOTE: the job done by this task should be kept minimal, as it determines
+                #       how quickly work can be submtited. we could switch to threads, but
+                #       Distributed isn't threadsafe.
                 worker_jobs = Dict()
                 for worker in workers()
                     errormonitor(@async begin
