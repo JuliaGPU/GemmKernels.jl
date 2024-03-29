@@ -439,8 +439,13 @@ function main()
         best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         println(" - best time so far: $(prettytime(best_time))")
         if !EXHAUSTIVE && best_time < target_time
-            println("... fast enough already")
+            println("  fast enough already")
+            continue
         end
+
+        # Give configurations that ran into an unknown error another change
+        # (note that we don't retry them within a run)
+        configs[configs.status .== "unknown_error", :status] .= "pending"
 
         # Filter configurations where we can determine upfront that they are unsupported.
         # XXX: do this on a worker
@@ -515,15 +520,24 @@ function main()
                 worker_jobs = Dict()
                 for worker in workers()
                     errormonitor(@async begin
-                        function recycle_worker()
-                            rmprocs(worker)
-                            worker = addworkers(1; cpu_mem_target, gpu_mem_target)[1]
-                        end
-
                         while !isempty(jobs)
+                            # ensure we still have a worker
+                            if worker === nothing
+                                try
+                                    worker = addworkers(1; cpu_mem_target, gpu_mem_target)[1]
+                                catch err
+                                    # give up for this problem
+                                    @error "Failed to add worker: $(sprint(Base.showerror, err))"
+                                    break
+                                end
+                            end
+
+                            # get a job
+                            isempty(jobs) && break
                             i = popfirst!(jobs)
                             config = configs[i, :]
                             worker_jobs[worker] = (; start_time=time(), i)
+                            kill_worker = false
                             try
                                 times, config.status =
                                     remotecall_fetch(measure_config, worker,
@@ -542,44 +556,27 @@ function main()
                                         exclusive_times[k] = get(exclusive_times, k, 0.0) + v
                                     end
                                 end
-                            catch err
-                                config.status = "crashed"
 
-                                bt = catch_backtrace()
-                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                                @error "Unexpected exception on worker $worker: $log"
-                                recycle_worker()
-                            finally
-                                delete!(worker_jobs, worker)
-                                push!(results, (worker, i))
-
-                                # Consider retrying failed configurations
-                                if config.status in RETRY_STATUSSES
-                                    push!(jobs, i)
-                                end
-                            end
-
-                            # make sure our worker doesn't overshoot its memory budget.
-                            # XXX: why does this happen? does the CUDA context grow
-                            #      because of compiling so many kernels?
-                            worker_pid, worker_rss = try
-                                remotecall_fetch(worker) do
+                                # make sure our worker doesn't overshoot its memory budget.
+                                worker_pid, worker_rss = remotecall_fetch(worker) do
                                     getpid(), Sys.maxrss()
                                 end
-                            catch
-                                # this can happen when the worker is exiting
-                                nothing, nothing
-                            end
-                            if worker_pid !== nothing
+                                if worker_rss > cpu_mem_max
+                                    # XXX: instead of checking periodically, run under a memory limiter?
+                                    @warn "Worker $worker exceeded CPU memory budget: $(Base.format_bytes(worker_rss))"
+                                    kill_worker = true
+                                end
                                 try
+                                    # XXX: why does this happen? does the CUDA context grow
+                                    #      because of compiling so many kernels?
                                     dev = NVML.Device(parent_uuid(device()))
                                     procs = NVML.compute_processes(dev)
                                     if haskey(procs, worker_pid)
                                         info = procs[worker_pid]
                                         if info.used_gpu_memory !== missing &&
-                                           info.used_gpu_memory > gpu_mem_max
+                                        info.used_gpu_memory > gpu_mem_max
                                             @warn "Worker $worker exceeded GPU memory budget: $(Base.format_bytes(info.used_gpu_memory))"
-                                            recycle_worker()
+                                            kill_worker = true
                                         end
                                     end
                                 catch err
@@ -587,12 +584,25 @@ function main()
                                     err.code in [NVML.ERROR_NOT_SUPPORTED,
                                                  NVML.ERROR_NO_PERMISSION] || rethrow()
                                 end
-                            end
-                            if worker_rss !== nothing
-                                # XXX: instead of checking periodically, run under a memory limiter?
-                                if worker_rss > cpu_mem_max
-                                    @warn "Worker $worker exceeded CPU memory budget: $(Base.format_bytes(worker_rss))"
-                                    recycle_worker()
+                            catch err
+                                config.status = "crashed"
+
+                                bt = catch_backtrace()
+                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                                @error "Unexpected exception on worker $worker: $log"
+                                kill_worker = true
+                            finally
+                                delete!(worker_jobs, worker)
+                                push!(results, (worker, i))
+
+                                if kill_worker
+                                    rmprocs(worker)
+                                    worker = nothing
+                                end
+
+                                # Consider retrying failed configurations
+                                if config.status in RETRY_STATUSSES
+                                    push!(jobs, i)
                                 end
                             end
                         end
@@ -621,7 +631,7 @@ function main()
                         function showvalues()
                             vals = []
 
-                            push!(vals, ("problem", "$(problem)"))
+                            push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
