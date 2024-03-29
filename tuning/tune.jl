@@ -199,11 +199,6 @@ function measure_config(problem, config, best_time, reference_result)
             return (;), "unknown_error"
         end
 
-        # initialize data
-        initializing = mkpidlock(PIDFILE; stale_age=PIDFILE_STALE_AGE) do
-            @elapsed CUDA.@sync initialize_data(problem, data...; params...)
-        end
-
         # settle down
         device_synchronize()
         GC.gc(true)
