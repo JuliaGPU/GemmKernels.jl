@@ -109,15 +109,15 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
     end
 end
 
-function addworkers(X; memory)
+function addworkers(X; gpu_mem_target, cpu_mem_target)
     env = [
         "JULIA_NUM_THREADS" => "1",
         "OPENBLAS_NUM_THREADS" => "1",
-        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(memory),
+        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(gpu_mem_target),
     ]
     exeflags = [
         "--project=$(Base.active_project())",
-        "--heap-size-hint=$memory"
+        "--heap-size-hint=$cpu_mem_target"
     ]
 
     procs = addprocs(X; exeflags, env)
@@ -485,22 +485,24 @@ function main()
 
             # Determine memory usage
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
-            max_memory_usage = sizeof(problem) + 32*2^20        # allow minimal unaccounted allocations
-            worker_memory_usage = max_memory_usage + 2000*2^20  # overhead from CUDA context, etc
+            gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
+            gpu_mem_max = gpu_mem_target + 2000*2^20        # overhead from CUDA context, etc
             # TODO: how come the context grows so large?
-            println(" - allowed worker memory use: $(Base.format_bytes(worker_memory_usage))")
+            cpu_mem_target = sizeof(problem)
+            cpu_mem_max = sizeof(problem) + 2500*2^20       # compilation headroom
+            println(" - allowed worker memory use: $(Base.format_bytes(gpu_mem_max)) GPU memory, $(Base.format_bytes(cpu_mem_max)) CPU memory")
 
             # Spawn workers
             cpu_memory = Sys.free_memory()
             gpu_memory = CUDA.available_memory()
             max_workers = min(
-                floor(Int, cpu_memory / worker_memory_usage),
-                floor(Int, gpu_memory / worker_memory_usage),
+                floor(Int, cpu_memory / cpu_mem_max),
+                floor(Int, gpu_memory / gpu_mem_max),
                 Sys.CPU_THREADS,
                 njobs+1
             )
             total_workers = max(1, max_workers-nworkers())
-            addworkers(total_workers; memory=max_memory_usage)
+            addworkers(total_workers; cpu_mem_target, gpu_mem_target)
             @assert nworkers() == total_workers
 
             # Process jobs!
@@ -515,7 +517,7 @@ function main()
                     errormonitor(@async begin
                         function recycle_worker()
                             rmprocs(worker)
-                            worker = addworkers(1; memory=max_memory_usage)[1]
+                            worker = addworkers(1; cpu_mem_target, gpu_mem_target)[1]
                         end
 
                         while !isempty(jobs)
@@ -560,28 +562,38 @@ function main()
                             # make sure our worker doesn't overshoot its memory budget.
                             # XXX: why does this happen? does the CUDA context grow
                             #      because of compiling so many kernels?
-                            try
-                                worker_pid = try
-                                    remotecall_fetch(getpid, worker)
-                                catch
-                                    # this can happen when the worker is exiting
-                                    nothing
+                            worker_pid, worker_rss = try
+                                remotecall_fetch(worker) do
+                                    getpid(), Sys.maxrss()
                                 end
-
-                                if worker_pid !== nothing
+                            catch
+                                # this can happen when the worker is exiting
+                                nothing, nothing
+                            end
+                            if worker_pid !== nothing
+                                try
                                     dev = NVML.Device(parent_uuid(device()))
                                     procs = NVML.compute_processes(dev)
                                     if haskey(procs, worker_pid)
                                         info = procs[worker_pid]
-                                        if info.used_gpu_memory !== missing && info.used_gpu_memory > worker_memory_usage
-                                            @warn "Worker $worker exceeded memory budget: $(Base.format_bytes(info.used_gpu_memory))"
+                                        if info.used_gpu_memory !== missing &&
+                                           info.used_gpu_memory > gpu_mem_max
+                                            @warn "Worker $worker exceeded GPU memory budget: $(Base.format_bytes(info.used_gpu_memory))"
                                             recycle_worker()
                                         end
                                     end
+                                catch err
+                                    isa(err, NVML.NVMLError) || rethrow()
+                                    err.code in [NVML.ERROR_NOT_SUPPORTED,
+                                                 NVML.ERROR_NO_PERMISSION] || rethrow()
                                 end
-                            catch err
-                                isa(err, NVML.NVMLError) || rethrow()
-                                err.code in [NVML.ERROR_NOT_SUPPORTED, NVML.ERROR_NO_PERMISSION] || rethrow()
+                            end
+                            if worker_rss !== nothing
+                                # XXX: instead of checking periodically, run under a memory limiter?
+                                if worker_rss > cpu_mem_max
+                                    @warn "Worker $worker exceeded CPU memory budget: $(Base.format_bytes(worker_rss))"
+                                    recycle_worker()
+                                end
                             end
                         end
                     end)
@@ -670,19 +682,14 @@ function main()
                     end
 
                     empty!(jobs)
-
-                    # Kill workers
-                    rmprocs(workers()...)
                 end)
             end
 
             println(" - final time: $(prettytime(best_time))")
 
-            # ensure no workers are left
-            if workers() != [myid()]
-                rmprocs(workers()...)
-                @assert workers() == [myid()]
-            end
+            # kill workers
+            rmprocs(workers()...)
+            @assert workers() == [myid()]
         end
         checkpoint()
     end
