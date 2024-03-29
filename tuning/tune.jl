@@ -488,8 +488,8 @@ function main()
             gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
             gpu_mem_max = gpu_mem_target + 2000*2^20        # overhead from CUDA context, etc
             # TODO: how come the context grows so large?
-            cpu_mem_target = sizeof(problem)
-            cpu_mem_max = sizeof(problem) + 2500*2^20       # compilation headroom
+            cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
+            cpu_mem_max = sizeof(problem) + 2000*2^20       # compilation headroom
             println(" - allowed worker memory use: $(Base.format_bytes(gpu_mem_max)) GPU memory, $(Base.format_bytes(cpu_mem_max)) CPU memory")
 
             # Spawn workers
@@ -621,6 +621,7 @@ function main()
                         function showvalues()
                             vals = []
 
+                            push!(vals, ("problem", "$(problem)"))
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
@@ -685,7 +686,7 @@ function main()
                 end)
             end
 
-            println(" - final time: $(prettytime(best_time))")
+            println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time))")
 
             # kill workers
             rmprocs(workers()...)
