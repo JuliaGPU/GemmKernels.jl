@@ -13,6 +13,7 @@ using StatsBase: percentile
 using Random
 using Profile
 using Adapt
+using Scratch
 
 if myid() == 1
     using Plots
@@ -364,7 +365,7 @@ function main()
 
     # Gather baseline performance and results
     baseline_performances = []
-    reference_results = mktempdir()
+    reference_results = get_scratch!(GemmKernels, "reference_results")
     @showprogress desc="Measuring baselines..." for (problem_idx, problem) in enumerate(problems)
         data = allocate_data(problem)
         initialize_data(problem, data...)
