@@ -427,11 +427,6 @@ function main()
     for (problem_idx, problem) in enumerate(problems)
         println("Processing $problem [$problem_idx/$(length(problems))]...")
 
-        data = allocate_data(problem)
-        target_time = baseline_performances[problem_idx]
-        reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
-        println(" - target time: $(prettytime(target_time))")
-
         # generate this problem's configurations
         configs = generate_configs(problem)
         config_keys = names(configs)
@@ -439,6 +434,11 @@ function main()
         configs.time .= Inf
         all_configs = merge_configs(all_configs, configs; on=config_keys)
         configs = select_configs(all_configs, problem)
+
+        data = allocate_data(problem)
+        target_time = baseline_performances[problem_idx]
+        reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
+        println(" - target time: $(prettytime(target_time))")
 
         # See if there's anything we need to do
         best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
