@@ -197,13 +197,13 @@ function plot_best_configs(df)
     ylabel!("Performance relative to cuTENSOR [%]")
 
     idx = 1:nrow(df)
-    names = map(df.name) do parseable_name
-        for el in jsonData
-            if el["parseableName"] == parseable_name
-                return el["name"]
-            end
+    problems = generate_problems()
+    labels = map(eachrow(df)) do row
+        name_idx = findfirst(el -> el["parseableName"] == row.name, jsonData)
+        if name_idx == nothing
+            error("Unknown parseable name: $(row.name)")
         end
-        error("Unknown parseable name: $parseable_name")
+        jsonData[name_idx]["name"]
     end
     ratios = @. 100 * perf_ratio(df.gemmkernels_times, df.baseline_times)
     ratios_lo = @. 100 * perf_ratio_lo(df.gemmkernels_times, df.baseline_times)
@@ -223,9 +223,18 @@ function plot_best_configs(df)
     end
 
     bar!(p, idx, legend=false,
-         xticks=(idx, names), xrotation=45, xtickfont=font(5),
+         xticks=(idx, labels), xrotation=45, xtickfont=font(5),
          ratios, err=(ratios .- ratios_lo, ratios_hi .- ratios),
-         color=colors, ylims=(0,150))
+         color=colors, ylims=(0,150),
+        #  series_annotations=text.(annotations, :top, 6, rotation = 90),
+         # xxx: work around title getting cut off
+         left_margin=1Plots.cm, bottom_margin=1.5Plots.cm)
+
+    # put the coverage percentage in the bar
+    annotations = map(eachrow(df)) do row
+        "   $(round(Int, 100*row.coverage))%"
+    end
+    annotate!(p, idx, 0, text.(annotations, 5, rotation=90, :left))
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end

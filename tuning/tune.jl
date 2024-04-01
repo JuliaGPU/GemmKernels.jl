@@ -736,9 +736,18 @@ function main()
         @info "Benchmarking configurations for plot..."
         best_configs = benchmark_configs(all_configs)
 
+        # Add coverage to best configs
+        best_configs.coverage .= 0.0
+        for problem in problems
+            best_config = select_configs(best_configs, problem)
+            configs = select_configs(all_configs, problem)
+            nconfigs = count_configs(problem)
+            nmeasured = count(configs.status .!= "pending")
+            best_config.coverage .= nmeasured / nconfigs
+        end
+
         serialize(best_configs_path, best_configs)
     end
-
 
     # Plotting results
     @info "Plotting results..."
