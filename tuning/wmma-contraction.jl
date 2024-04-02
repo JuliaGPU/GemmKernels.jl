@@ -197,7 +197,6 @@ function plot_best_configs(df)
     ylabel!("Performance relative to cuTENSOR [%]")
 
     idx = 1:nrow(df)
-    problems = generate_problems()
     labels = map(eachrow(df)) do row
         name_idx = findfirst(el -> el["parseableName"] == row.name, jsonData)
         if name_idx == nothing

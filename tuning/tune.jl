@@ -278,6 +278,7 @@ function benchmark_configs(all_configs)
     candidate_configs = similar(all_configs, 0)
     for problem in problems
         configs = select_configs(all_configs, problem)
+        isempty(configs) && continue
         append!(candidate_configs, first(sort(configs, :time), BENCHMARK_CANDIDATES))
     end
 
@@ -332,8 +333,10 @@ function benchmark_configs(all_configs)
             end
         end
 
-        best_config = (; baseline_times, best_config...)
-        push!(best_configs, best_config)
+        if best_config !== nothing
+            best_config = (; baseline_times, best_config...)
+            push!(best_configs, best_config)
+        end
     end
 
     return best_configs
