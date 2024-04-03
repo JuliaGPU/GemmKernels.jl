@@ -6,7 +6,7 @@ using Distributed
 using FileWatching.Pidfile
 using Logging
 using LoggingExtras
-using ProgressMeter: Progress, ProgressUnknown, next!, update!, finish!, @showprogress
+using ProgressMeter: Progress, next!, update!, finish!, cancel, @showprogress
 using Serialization
 using Statistics
 using StatsBase: percentile
@@ -435,62 +435,71 @@ function main()
     end
 
     for (problem_idx, problem) in enumerate(problems)
-        println("Processing $problem [$problem_idx/$(length(problems))]...")
+        println("\nProcessing $problem [$problem_idx/$(length(problems))]...")
+        configs = select_configs(all_configs, problem)
 
-        # generate this problem's configurations
+        # See if there's anything we need to do
+        best_time = Inf
+        if configs !== nothing
+            best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
+        end
+        target_time = baseline_performances[problem_idx]
+        println(" - target time: $(prettytime(target_time))")
+        if best_time != Inf
+            println(" - best time so far: $(prettytime(best_time))")
+            if !EXHAUSTIVE && best_time < target_time
+                println("   fast enough already")
+                continue
+            end
+        end
+
+        # augment the loaded configurations with new ones
         configs = generate_configs(problem)
         config_keys = names(configs)
-        configs.status .= "pending"
+        configs.status .= "new"
         configs.time .= Inf
         all_configs = merge_configs(all_configs, configs; on=config_keys)
         configs = select_configs(all_configs, problem)
 
-        data = allocate_data(problem)
-        target_time = baseline_performances[problem_idx]
-        reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
-        println(" - target time: $(prettytime(target_time))")
-
-        # See if there's anything we need to do
-        best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
-        println(" - best time so far: $(prettytime(best_time))")
-        if !EXHAUSTIVE && best_time < target_time
-            println("   fast enough already")
-            continue
-        end
-
         # Give configurations that ran into an unknown error another change
         # (note that we don't retry them within a run)
-        configs[configs.status .== "unknown_error", :status] .= "pending"
+        configs[configs.status .== "unknown_error", :status] .= "new"
 
-        # Filter configurations where we can determine upfront that they are unsupported.
-        # XXX: do this on a worker
-        @showprogress desc="Filtering configurations..." for config in eachrow(configs)
-            try
-                params = create_params(config)
-                prepare(problem, data...; params...)
-                # XXX: lots of failures only happen during `execute()`
-                config.status = "pending"
-            catch err
-                if isa(err, GemmKernels.ConfigError)
-                    config.status = "skipped"
-                else
-                    bt = catch_backtrace()
-                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                    @error "Unexpected error preparing $problem: $log" config
+        # Filter new configurations where we can determine upfront that they are unsupported.
+        let data = allocate_data(problem)
+            # XXX: do this on a worker
+            @showprogress desc="Filtering new configurations..." for config in eachrow(configs)
+                if config.status != "new"
+                    continue
+                end
 
-                    rethrow()
+                try
+                    params = create_params(config)
+                    prepare(problem, data...; params...)
+                    # XXX: lots of failures only happen during `execute()`
+                    config.status = "pending"
+                catch err
+                    if isa(err, GemmKernels.ConfigError)
+                        config.status = "skipped"
+                    else
+                        bt = catch_backtrace()
+                        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                        @error "Unexpected error preparing $problem: $log" config
+
+                        rethrow()
+                    end
                 end
             end
+            for arr in data
+                CUDA.unsafe_free!(arr)
+            end
+            GC.gc(true)
+            CUDA.reclaim()
         end
         checkpoint()
-
-        # Get rid of the data
-        for arr in data
-            CUDA.unsafe_free!(arr)
-        end
-        GC.gc(true)
-        CUDA.reclaim()
-        data = nothing
+        initial_count = count(configs.status .!= "pending")
+        total_count = size(configs, 1)
+        println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
 
         jobs = filter(1:size(configs, 1)) do i
             configs[i, :status] in ["pending"; RETRY_STATUSSES]
@@ -502,28 +511,29 @@ function main()
             # Determine memory usage
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
             gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
-            gpu_mem_max = gpu_mem_target + 2000*2^20        # overhead from CUDA context, etc
+            gpu_mem_max = gpu_mem_target + 1500*2^20        # overhead from CUDA context, etc
             # TODO: how come the context grows so large?
             cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
-            cpu_mem_max = sizeof(problem) + 5000*2^20       # compilation headroom
-            println(" - allowed worker memory use: $(Base.format_bytes(cpu_mem_max)) CPU memory and $(Base.format_bytes(gpu_mem_max)) GPU memory")
+            cpu_mem_max = sizeof(problem) + 2000*2^20       # compilation headroom
 
             # Spawn workers
-            cpu_memory = Sys.free_memory()
-            gpu_memory = CUDA.available_memory()
+            memory_margin = 0.9
+            initial_cpu_memory = Sys.free_memory()
+            initial_gpu_memory = CUDA.available_memory()
             max_workers = min(
-                floor(Int, cpu_memory / cpu_mem_max),
-                floor(Int, gpu_memory / gpu_mem_max),
+                floor(Int, initial_cpu_memory * memory_margin / cpu_mem_max),
+                floor(Int, initial_gpu_memory * memory_margin / gpu_mem_max),
                 Sys.CPU_THREADS,
                 njobs+1
             )
+            println(" - using $max_workers workers with $(Base.format_bytes(cpu_mem_max))/$(Base.format_bytes(initial_cpu_memory)) CPU memory, $(Base.format_bytes(gpu_mem_max))/$(Base.format_bytes(initial_gpu_memory)) GPU memory")
             total_workers = max(1, max_workers-nworkers())
-            println(" - using $total_workers workers, restricted by $(Base.format_bytes(cpu_memory)) CPU memory and $(Base.format_bytes(gpu_memory)) GPU memory")
             addworkers(total_workers; cpu_mem_target, gpu_mem_target)
             @assert nworkers() == total_workers
 
             # Process jobs!
             println(" - time limit: $(prettytime(time_limits[problem_idx]))")
+            reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
             p = Progress(njobs; desc="Measuring configurations", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
@@ -534,6 +544,7 @@ function main()
                 #       how quickly work can be submtited. we could switch to threads, but
                 #       Distributed isn't threadsafe.
                 worker_jobs = Dict()
+                worker_memory_usage = Dict()
                 for worker in workers()
                     errormonitor(@async begin
                         while !isempty(jobs)
@@ -573,32 +584,41 @@ function main()
                                     end
                                 end
 
-                                # make sure our worker doesn't overshoot its memory budget.
-                                worker_pid, worker_rss = remotecall_fetch(worker) do
+                                # store memory usage statistics
+                                worker_pid, worker_cpu_mem = remotecall_fetch(worker) do
                                     getpid(), Sys.maxrss()
                                 end
-                                if worker_rss > cpu_mem_max
-                                    # XXX: instead of checking periodically, run under a memory limiter?
-                                    @warn "Worker $worker exceeded CPU memory budget: $(Base.format_bytes(worker_rss))"
-                                    kill_worker = true
-                                end
-                                try
-                                    # XXX: why does this happen? does the CUDA context grow
-                                    #      because of compiling so many kernels?
+                                worker_gpu_mem = try
                                     dev = NVML.Device(parent_uuid(device()))
                                     procs = NVML.compute_processes(dev)
                                     if haskey(procs, worker_pid)
                                         info = procs[worker_pid]
-                                        if info.used_gpu_memory !== missing &&
-                                        info.used_gpu_memory > gpu_mem_max
-                                            @warn "Worker $worker exceeded GPU memory budget: $(Base.format_bytes(info.used_gpu_memory))"
-                                            kill_worker = true
-                                        end
+                                        coalesce(info.used_gpu_memory, 0)
+                                    else
+                                        0
                                     end
                                 catch err
                                     isa(err, NVML.NVMLError) || rethrow()
                                     err.code in [NVML.ERROR_NOT_SUPPORTED,
                                                  NVML.ERROR_NO_PERMISSION] || rethrow()
+                                end
+                                worker_memory_usage[worker] = (; cpu=worker_cpu_mem,
+                                                                 gpu=worker_gpu_mem)
+
+                                # check if we're running close to OOM
+                                current_cpu_memory = Sys.free_memory()
+                                current_gpu_memory = CUDA.available_memory()
+                                cpu_hungry_worker = sort(collect(keys(worker_memory_usage));
+                                                         by=worker->-worker_memory_usage[worker].cpu)[end]
+                                gpu_hungry_worker = sort(collect(keys(worker_memory_usage));
+                                                         by=worker->-worker_memory_usage[worker].gpu)[end]
+                                if current_cpu_memory < (1-memory_margin)*initial_cpu_memory && cpu_hungry_worker == worker
+                                    @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].cpu))"
+                                    kill_worker = true
+                                end
+                                if current_gpu_memory < (1-memory_margin)*initial_gpu_memory && gpu_hungry_worker == worker
+                                    @warn "System running low on on GPU memory ($(Base.format_bytes(current_gpu_memory))/$(Base.format_bytes(initial_gpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].gpu))"
+                                    kill_worker = true
                                 end
                             catch err
                                 config.status = "crashed"
@@ -613,6 +633,7 @@ function main()
 
                                 if kill_worker
                                     rmprocs(worker)
+                                    delete!(worker_memory_usage, worker)
                                     worker = nothing
                                 end
 
@@ -697,22 +718,29 @@ function main()
 
                         # Check if we're done
                         if !EXHAUSTIVE && best_time < target_time
-                            print(" - stopping after beating target time\n")
+                            cancel(p, "stopping after beating target time")
                             break
                         end
                         if (time() - sweep_start) > time_limits[problem_idx]
-                            print(" - stopping after hitting time limit\n")
+                            cancel(p, "stopping after hitting time limit")
                             break
                         end
 
                         sleep(5)
                     end
 
+                    if isempty(jobs)
+                        finish!(p)
+                    end
+
                     empty!(jobs)
                 end)
             end
 
-            println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time))")
+            finish!(p)
+
+            final_count = count(configs.status .!= "pending")
+            println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
 
             # kill workers
             rmprocs(workers()...)
