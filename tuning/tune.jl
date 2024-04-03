@@ -147,124 +147,135 @@ end
 
 ############################################################################################
 
+# NOTE: this assumes that workers are recycled when processing new problems
+cached_data = nothing
+
+function clean_data()
+    global cached_data
+    if cached_data === nothing
+        return
+    end
+
+    for arr in cached_data
+        CUDA.unsafe_free!(arr)
+    end
+    CUDA.reclaim()
+    GC.gc(true)
+    cached_data = nothing
+end
+
 function measure_config(problem, config, best_time, reference_result)
     @info "Measuring configuration $(repr_row(config))..."
 
     # allocate data
-    data = try
-        # this is the only place where we allocate device memory.
-        # other allocation failures will be reported as crashes.
-        allocate_data(problem)
-    catch err
-        bt = catch_backtrace()
-        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-
-        if isa(err, OutOfGPUMemoryError)
-            @info "Not enough memory for configuration $(repr_row(config))\n" * log
-            return (;), "oom"
-        else
-            rethrow()
-        end
-    end
-
-    try
-        # compile and warm-up
-        params = create_params(config)
-        args = nothing
+    global cached_data
+    if cached_data === nothing
         try
-            args = prepare(problem, data...; params...)
-            execute(problem, data...; args...)
-            synchronize()
-            # XXX: prevent this from actually executing? it may influence the measurements below
+            # this is the only place where we allocate device memory.
+            # other allocation failures will be reported as crashes.
+            cached_data = allocate_data(problem)
         catch err
             bt = catch_backtrace()
             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
-            # determine the cause of the error
-            if isa(err, GemmKernels.ConfigError)
-                @info "Skipping unsupported configuration $(repr_row(config))\n" * log
-                return (;), "config_error"
-            end
-            if isa(err, CUDA.InvalidIRError)
-                @info "Failed to compile $(repr_row(config))\n" * log
-                return (;), "compilation_error"
-            end
             if isa(err, OutOfGPUMemoryError)
-                # XXX: this shouldn't happen here as we already allocated all memory,
-                #      however it can occur during kernel launches or other CUDA calls
-                #      when very close to the memory limit.
                 @info "Not enough memory for configuration $(repr_row(config))\n" * log
                 return (;), "oom"
+            else
+                rethrow()
             end
+        end
+    end
+    data = cached_data
 
-            @info "Unknown error processing $(repr_row(config))\n" * log
-            return (;), "unknown_error"
+    # compile and warm-up
+    params = create_params(config)
+    args = nothing
+    try
+        args = prepare(problem, data...; params...)
+        execute(problem, data...; args...)
+        synchronize()
+        # XXX: prevent this from actually executing? it may influence the measurements below
+    catch err
+        bt = catch_backtrace()
+        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+
+        # determine the cause of the error
+        if isa(err, GemmKernels.ConfigError)
+            @info "Skipping unsupported configuration $(repr_row(config))\n" * log
+            return (;), "config_error"
+        end
+        if isa(err, CUDA.InvalidIRError)
+            @info "Failed to compile $(repr_row(config))\n" * log
+            return (;), "compilation_error"
+        end
+        if isa(err, OutOfGPUMemoryError)
+            # XXX: this shouldn't happen here as we already allocated all memory,
+            #      however it can occur during kernel launches or other CUDA calls
+            #      when very close to the memory limit.
+            @info "Not enough memory for configuration $(repr_row(config))\n" * log
+            return (;), "oom"
         end
 
-        # settle down
-        device_synchronize()
-        GC.gc(true)
+        @info "Unknown error processing $(repr_row(config))\n" * log
+        return (;), "unknown_error"
+    end
 
-        # take time measurements
-        max_time = 2 * best_time
-        measurements = Float64[]
-        result, exclusives = mkpidlock(PIDFILE; stale_age=PIDFILE_STALE_AGE) do
-            # make sure we're starting with an idle device
-            settling = @elapsed wait_if_throttling()
+    # settle down
+    device_synchronize()
 
-            # first measurement: check if the configuration is even worth measuring
-            measuring = @elapsed begin
-                cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+    # take time measurements
+    max_time = 2 * best_time
+    measurements = Float64[]
+    result, exclusives = mkpidlock(PIDFILE; stale_age=PIDFILE_STALE_AGE) do
+        # make sure we're starting with an idle device
+        settling = @elapsed wait_if_throttling()
+
+        # first measurement: check if the configuration is even worth measuring
+        measuring = @elapsed begin
+            cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+        end
+        push!(measurements, cur_time)
+        if cur_time > max_time
+            return nothing, (; settling, measuring)
+        end
+
+        # second measurement: fetch results to verify (outside of the pidlock)
+        initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
+        settling += @elapsed wait_if_throttling()
+        measuring += @elapsed begin
+            cur_time = CUDA.@elapsed blocking=true begin
+                result = execute(problem, data...; args...)
             end
             push!(measurements, cur_time)
-            if cur_time > max_time
-                return nothing, (; settling, measuring)
-            end
+        end
+        copying = @elapsed begin
+            # NOTE: we adapt, since the result may be a non-contiguous view,
+            #       and copying those allocates GPU memory.
+            result = adapt(Array, result)
+        end
 
-            # second measurement: fetch results to verify (outside of the pidlock)
-            initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
-            settling += @elapsed wait_if_throttling()
-            measuring += @elapsed begin
-                cur_time = CUDA.@elapsed blocking=true begin
-                    result = execute(problem, data...; args...)
-                end
+        # subsequent measurements: keep going until time doesn't improve
+        measuring += @elapsed begin
+            while need_more_measurements(measurements)
+                cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
                 push!(measurements, cur_time)
             end
-            copying = @elapsed begin
-                # NOTE: we adapt, since the result may be a non-contiguous view,
-                #       and copying those allocates GPU memory.
-                result = adapt(Array, result)
-            end
-
-            # subsequent measurements: keep going until time doesn't improve
-            measuring += @elapsed begin
-                while need_more_measurements(measurements)
-                    cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
-                    push!(measurements, cur_time)
-                end
-            end
-
-            return result, (; initializing, settling, measuring, copying)
         end
 
-        # verify the results
-        if result !== nothing && !verify(problem, reference_result, result)
-            @warn "Configuration produced invalid result: $(repr_row(config))"
-            return (; measurements, exclusives), "invalid_result"
-        end
-
-        if minimum(measurements) > max_time
-            return (; measurements, exclusives), "slow"
-        end
-        return (; measurements, exclusives), "success"
-    finally
-        # clean-up
-        for arr in data
-            CUDA.unsafe_free!(arr)
-        end
-        CUDA.reclaim()
-        GC.gc(true)
+        return result, (; initializing, settling, measuring, copying)
     end
+
+    # verify the results
+    if result !== nothing && !verify(problem, reference_result, result)
+        @warn "Configuration produced invalid result: $(repr_row(config))"
+        return (; measurements, exclusives), "invalid_result"
+    end
+
+    if minimum(measurements) > max_time
+        return (; measurements, exclusives), "slow"
+    end
+    return (; measurements, exclusives), "success"
 end
 
 function benchmark_configs(all_configs)
@@ -527,7 +538,7 @@ function main()
                 njobs+1
             )
             println(" - using $max_workers workers with $(Base.format_bytes(cpu_mem_max))/$(Base.format_bytes(initial_cpu_memory)) CPU memory, $(Base.format_bytes(gpu_mem_max))/$(Base.format_bytes(initial_gpu_memory)) GPU memory")
-            total_workers = max(1, max_workers-nworkers())
+            total_workers = max(1, max_workers-1)
             addworkers(total_workers; cpu_mem_target, gpu_mem_target)
             @assert nworkers() == total_workers
 
@@ -643,6 +654,8 @@ function main()
                                 end
                             end
                         end
+
+                        remotecall_fetch(clean_data, worker)
                     end)
                 end
 
@@ -736,8 +749,6 @@ function main()
                     empty!(jobs)
                 end)
             end
-
-            finish!(p)
 
             final_count = count(configs.status .!= "pending")
             println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
