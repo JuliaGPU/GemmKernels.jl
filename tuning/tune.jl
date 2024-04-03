@@ -414,6 +414,10 @@ function main()
         @info "Loading configurations from disk..."
         try
             all_configs = deserialize(config_path)
+
+            # transitionary measure: remove status=new rows
+            all_configs = all_configs[all_configs[!, "status"] .!= "new", :]
+
             @info "Loaded $(size(all_configs, 1)) configurations."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
@@ -436,7 +440,7 @@ function main()
         # generate this problem's configurations
         configs = generate_configs(problem)
         config_keys = names(configs)
-        configs.status .= "new"
+        configs.status .= "pending"
         configs.time .= Inf
         all_configs = merge_configs(all_configs, configs; on=config_keys)
         configs = select_configs(all_configs, problem)
@@ -461,10 +465,6 @@ function main()
         # Filter configurations where we can determine upfront that they are unsupported.
         # XXX: do this on a worker
         @showprogress desc="Filtering configurations..." for config in eachrow(configs)
-            if config.status != "new"
-                continue
-            end
-
             try
                 params = create_params(config)
                 prepare(problem, data...; params...)
