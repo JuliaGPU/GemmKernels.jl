@@ -655,7 +655,9 @@ function main()
                             end
                         end
 
-                        remotecall_fetch(clean_data, worker)
+                        if worker !== nothing
+                            remotecall_fetch(clean_data, worker)
+                        end
                     end)
                 end
 
