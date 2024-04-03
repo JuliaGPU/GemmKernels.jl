@@ -278,7 +278,7 @@ function benchmark_configs(all_configs)
     candidate_configs = similar(all_configs, 0)
     for problem in problems
         configs = select_configs(all_configs, problem)
-        isempty(configs) && continue
+        configs ===  nothing && continue
         append!(candidate_configs, first(sort(configs, :time), BENCHMARK_CANDIDATES))
     end
 
@@ -293,6 +293,8 @@ function benchmark_configs(all_configs)
     best_configs.gemmkernels_times = Vector{Float64}[]
     best_configs.baseline_times = Vector{Float64}[]
     for problem in problems
+        select_configs(candidate_configs, problem) === nothing && continue
+
         data = allocate_data(problem)
 
         # measure baseline
