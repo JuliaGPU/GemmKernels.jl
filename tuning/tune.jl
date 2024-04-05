@@ -351,17 +351,11 @@ function main()
 
     problems = generate_problems()
 
-    # Determine per-problem time limits
-    nconfigs = sum(count_configs, problems)
-    time_limits = []
-    for problem in problems
-        time_limits = push!(time_limits, SWEEP_TIME_LIMIT * count_configs(problem) / nconfigs)
-    end
-
     # Gather baseline performance and results
-    baseline_performances = []
-    reference_results = get_scratch!(GemmKernels, "reference_results")
-    @showprogress desc="Measuring baselines..." for (problem_idx, problem) in enumerate(problems)
+    baseline_performances = Dict()
+    reference_result_dir = get_scratch!(GemmKernels, "reference_results")
+    reference_results = Dict()
+    @showprogress desc="Measuring baselines..." for problem in problems
         data = allocate_data(problem)
         initialize_data(problem, data...)
 
@@ -384,19 +378,17 @@ function main()
         for arr in data
             CUDA.unsafe_free!(arr)
         end
-        push!(baseline_performances, minimum(measurements))
-        serialize(joinpath(reference_results, "$(problem_idx).bin"), result)
+        baseline_performances[problem] = minimum(measurements)
+
+        path = tempname(reference_result_dir)
+        serialize(path, result)
+        reference_results[problem] = path
     end
 
     # Get the device we're working on
     cuda_dev = device()
     mig = uuid(cuda_dev) != parent_uuid(cuda_dev)
     nvml_dev = NVML.Device(uuid(cuda_dev); mig)
-
-
-    #
-    # Phase 2: Sweep parameters
-    #
 
     # Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.bin")
@@ -422,6 +414,39 @@ function main()
         mv(temp_path, config_path; force=true)
     end
 
+    # Find the best times so far
+    best_times = Dict()
+    for problem in problems
+        configs = select_configs(all_configs, problem)
+        best_time = Inf
+        if configs !== nothing
+            best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
+        end
+        best_times[problem] = best_time
+    end
+
+    # Process problems in order of current ratio, tackling the worst ones first
+    perf_ratio(problem) = baseline_performances[problem] / best_times[problem]
+    sort!(problems, by=perf_ratio)
+
+    # Determine per-problem time limits
+    weights = Dict()
+    for problem in problems
+        # start with the number of problems, and bias it towards problems with a bad ratio
+        bias(x) = 100 * exp(-5 * x)
+        weights[problem] = count_configs(problem) * bias(perf_ratio(problem))
+    end
+    total_weight = sum(values(weights))
+    time_limits = Dict()
+    for problem in problems
+        time_limits[problem] = SWEEP_TIME_LIMIT * weights[problem] / total_weight
+    end
+
+
+    #
+    # Phase 2: Sweep parameters
+    #
+
     for (problem_idx, problem) in enumerate(problems)
         println("\nProcessing $problem [$problem_idx/$(length(problems))]...")
         configs = select_configs(all_configs, problem)
@@ -431,7 +456,7 @@ function main()
         if configs !== nothing
             best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         end
-        target_time = baseline_performances[problem_idx]
+        target_time = baseline_performances[problem]
         println(" - target time: $(prettytime(target_time))")
         if best_time != Inf
             println(" - best time so far: $(prettytime(best_time))")
@@ -524,8 +549,8 @@ function main()
             @assert nworkers() == total_workers
 
             # Process jobs!
-            println(" - time limit: $(prettytime(time_limits[problem_idx]))")
-            reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
+            println(" - time limit: $(prettytime(time_limits[problem]))")
+            reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
             p = Progress(njobs; desc="Measuring configurations", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
@@ -554,7 +579,7 @@ function main()
                     end
 
                     # time limit
-                    if (time() - sweep_start) > time_limits[problem_idx]
+                    if (time() - sweep_start) > time_limits[problem]
                         return false
                     end
 
@@ -599,6 +624,7 @@ function main()
                                         fetch(output)
                                     catch e
                                         isa(e, InterruptException) && return nothing
+                                        rethrow()
                                     end
                                     timer = Timer(timeout) do t
                                         isready(output) || Base.throwto(waiter, InterruptException())
@@ -613,7 +639,7 @@ function main()
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
                                     error("Time-out preparing configuration")
                                 )
-                                if status !== "success"
+                                if status != "success"
                                     config.status = status
                                     continue
                                 end
@@ -680,15 +706,15 @@ function main()
                                                     NVML.ERROR_NO_PERMISSION] || rethrow()
                                     end
                                     memory_usage[worker] = (; cpu=worker_cpu_mem,
-                                                                     gpu=worker_gpu_mem)
+                                                              gpu=worker_gpu_mem)
 
                                     # check if we're running close to OOM
                                     current_cpu_memory = Sys.free_memory()
                                     current_gpu_memory = NVML.memory_info(nvml_dev).free
                                     cpu_hungry_worker = sort(collect(keys(memory_usage));
-                                                            by=worker->-memory_usage[worker].cpu)[end]
+                                                            by=worker->memory_usage[worker].cpu)[end]
                                     gpu_hungry_worker = sort(collect(keys(memory_usage));
-                                                            by=worker->-memory_usage[worker].gpu)[end]
+                                                            by=worker->memory_usage[worker].gpu)[end]
                                     if current_cpu_memory < (1-memory_margin)*initial_cpu_memory && cpu_hungry_worker == worker
                                         @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(memory_usage[worker].cpu))"
                                         kill_worker = true
