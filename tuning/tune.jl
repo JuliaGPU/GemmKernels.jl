@@ -353,6 +353,8 @@ function main()
 
     # Gather baseline performance and results
     baseline_performances = Dict()
+    baseline_data = Dict()
+
     reference_result_dir = get_scratch!(GemmKernels, "reference_results")
     reference_results = Dict()
     @showprogress desc="Measuring baselines..." for problem in problems
@@ -375,6 +377,12 @@ function main()
             push!(measurements, cur_time)
         end
 
+        prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
+        baseline_data["$problem"] = Dict(
+            "times" => measurements,
+            "kernels" => prof.device.name,
+        )
+
         for arr in data
             CUDA.unsafe_free!(arr)
         end
@@ -384,6 +392,8 @@ function main()
         serialize(path, result)
         reference_results[problem] = path
     end
+
+    serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
 
     # Get the device we're working on
     cuda_dev = device()
