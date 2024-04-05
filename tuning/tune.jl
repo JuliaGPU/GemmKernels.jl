@@ -3,7 +3,6 @@ using DataFrames
 using DataStructures: counter
 using Dates
 using Distributed
-using FileWatching.Pidfile
 using Logging
 using LoggingExtras
 using ProgressMeter: Progress, next!, update!, finish!, cancel, @showprogress
@@ -47,19 +46,15 @@ isinteractive() || include("wmma-contraction.jl")
 
 ############################################################################################
 
-const PIDFILE = joinpath(@__DIR__, "tuning.pid")
-
-# After a certain time, a measurement is considered stale (i.e., because of a crash).
-# The time here determines when to ignore a lock. Note that it is automatically
-# multiplied by 5 when the process is still alive, so it shouldn't be too large.
-const PIDFILE_STALE_AGE = 60
-
 # Whether we stop after beating the baseline, or continue until we've tested every config.
 const EXHAUSTIVE = false
 
-# The time limit for measuring configurations, in seconds. This will be used to determine
-# a per-problem time limit.
-const TIME_LIMIT = 24*3600
+# The time limit for the entire sweep, in seconds.
+# This will be used to determine a per-problem time limit.
+const SWEEP_TIME_LIMIT = 24*3600
+
+# The time limit for each single step (preparation, measurement, verification), in seconds.
+const CONFIG_TIME_LIMIT = 60
 
 # Retry configurations with these categories.
 const RETRY_STATUSSES = ["oom", "crashed"]
@@ -147,55 +142,45 @@ end
 
 ############################################################################################
 
-# NOTE: this assumes that workers are recycled when processing new problems
+const prepared_state = Ref{Any}(nothing)
 cached_data = nothing
 
-function clean_data()
-    global cached_data
-    if cached_data === nothing
-        return
-    end
+# allocate data and compile kernels
+function prepare_config(problem, config)
+    @info "Processing configuration $(repr_row(config))..."
+    state = prepared_state[]
 
-    for arr in cached_data
-        CUDA.unsafe_free!(arr)
-    end
-    CUDA.reclaim()
-    GC.gc(true)
-    cached_data = nothing
-end
-
-function measure_config(problem, config, best_time, reference_result)
-    @info "Measuring configuration $(repr_row(config))..."
-
-    # allocate data
-    global cached_data
-    if cached_data === nothing
+    # (re)allocate data
+    data = if state === nothing
         try
             # this is the only place where we allocate device memory.
             # other allocation failures will be reported as crashes.
-            cached_data = allocate_data(problem)
+            allocate_data(problem)
         catch err
             bt = catch_backtrace()
             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
 
             if isa(err, OutOfGPUMemoryError)
                 @info "Not enough memory for configuration $(repr_row(config))\n" * log
-                return (;), "oom"
+                return "oom"
             else
                 rethrow()
             end
         end
+    else
+        state.data
     end
-    data = cached_data
+    prepared_state[] = (; data)
 
     # compile and warm-up
     params = create_params(config)
-    args = nothing
     try
         args = prepare(problem, data...; params...)
         execute(problem, data...; args...)
         synchronize()
         # XXX: prevent this from actually executing? it may influence the measurements below
+
+        prepared_state[] = (; data, params, args)
     catch err
         bt = catch_backtrace()
         log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
@@ -203,79 +188,73 @@ function measure_config(problem, config, best_time, reference_result)
         # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
             @info "Skipping unsupported configuration $(repr_row(config))\n" * log
-            return (;), "config_error"
+            return "config_error"
         end
         if isa(err, CUDA.InvalidIRError)
             @info "Failed to compile $(repr_row(config))\n" * log
-            return (;), "compilation_error"
+            return "compilation_error"
         end
         if isa(err, OutOfGPUMemoryError)
             # XXX: this shouldn't happen here as we already allocated all memory,
             #      however it can occur during kernel launches or other CUDA calls
             #      when very close to the memory limit.
             @info "Not enough memory for configuration $(repr_row(config))\n" * log
-            return (;), "oom"
+            return "oom"
         end
 
         @info "Unknown error processing $(repr_row(config))\n" * log
-        return (;), "unknown_error"
+        return "unknown_error"
     end
 
     # settle down
     device_synchronize()
 
-    # take time measurements
-    max_time = 2 * best_time
-    measurements = Float64[]
-    result, exclusives = mkpidlock(PIDFILE; stale_age=PIDFILE_STALE_AGE) do
-        # make sure we're starting with an idle device
-        settling = @elapsed wait_if_throttling()
+    return "success"
+end
 
-        # first measurement: check if the configuration is even worth measuring
-        measuring = @elapsed begin
-            cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+# take time measurements
+function measure_config(problem, config, max_time)
+    state = prepared_state[]
+    @assert state !== nothing
+    (; data, args, params) = state
+
+    # make sure we're starting with an idle device
+    settling = @elapsed wait_if_throttling()
+
+    # first measurement: check if the configuration is even worth measuring
+    measurements = Float64[]
+    measuring = @elapsed begin
+        cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+    end
+    push!(measurements, cur_time)
+    if cur_time > max_time
+        return measurements, nothing, (; settling, measuring)
+    end
+
+    # second measurement: fetch results to verify
+    initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
+    settling += @elapsed wait_if_throttling()
+    measuring += @elapsed begin
+        cur_time = CUDA.@elapsed blocking=true begin
+            result = execute(problem, data...; args...)
         end
         push!(measurements, cur_time)
-        if cur_time > max_time
-            return nothing, (; settling, measuring)
-        end
+    end
+    copying = @elapsed begin
+        # NOTE: we adapt, since the result may be a non-contiguous view,
+        #       and copying those allocates GPU memory.
+        result = adapt(Array, result)
+    end
 
-        # second measurement: fetch results to verify (outside of the pidlock)
-        initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
-        settling += @elapsed wait_if_throttling()
-        measuring += @elapsed begin
-            cur_time = CUDA.@elapsed blocking=true begin
-                result = execute(problem, data...; args...)
-            end
+    # subsequent measurements: keep going until time doesn't improve
+    measuring += @elapsed begin
+        while need_more_measurements(measurements)
+            cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
             push!(measurements, cur_time)
         end
-        copying = @elapsed begin
-            # NOTE: we adapt, since the result may be a non-contiguous view,
-            #       and copying those allocates GPU memory.
-            result = adapt(Array, result)
-        end
-
-        # subsequent measurements: keep going until time doesn't improve
-        measuring += @elapsed begin
-            while need_more_measurements(measurements)
-                cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
-                push!(measurements, cur_time)
-            end
-        end
-
-        return result, (; initializing, settling, measuring, copying)
     end
 
-    # verify the results
-    if result !== nothing && !verify(problem, reference_result, result)
-        @warn "Configuration produced invalid result: $(repr_row(config))"
-        return (; measurements, exclusives), "invalid_result"
-    end
-
-    if minimum(measurements) > max_time
-        return (; measurements, exclusives), "slow"
-    end
-    return (; measurements, exclusives), "success"
+    return measurements, result, (; initializing, settling, measuring, copying)
 end
 
 function benchmark_configs(all_configs)
@@ -376,7 +355,7 @@ function main()
     nconfigs = sum(count_configs, problems)
     time_limits = []
     for problem in problems
-        time_limits = push!(time_limits, TIME_LIMIT * count_configs(problem) / nconfigs)
+        time_limits = push!(time_limits, SWEEP_TIME_LIMIT * count_configs(problem) / nconfigs)
     end
 
     # Gather baseline performance and results
@@ -426,9 +405,6 @@ function main()
         try
             all_configs = deserialize(config_path)
 
-            # transitionary measure: remove status=new rows
-            all_configs = all_configs[all_configs[!, "status"] .!= "new", :]
-
             @info "Loaded $(size(all_configs, 1)) configurations."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
@@ -474,7 +450,9 @@ function main()
 
         # Give configurations that ran into an unknown error another change
         # (note that we don't retry them within a run)
-        configs[configs.status .== "unknown_error", :status] .= "new"
+        for status in ["unknown_error"; RETRY_STATUSSES]
+            configs[configs.status .== status, :status] .= "new"
+        end
 
         # Filter new configurations where we can determine upfront that they are unsupported.
         let data = allocate_data(problem)
@@ -512,9 +490,7 @@ function main()
         total_count = size(configs, 1)
         println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
 
-        jobs = filter(1:size(configs, 1)) do i
-            configs[i, :status] in ["pending"; RETRY_STATUSSES]
-        end
+        jobs = findall(configs.status .== "pending")
         if !isempty(jobs)
             shuffle!(jobs)
             njobs = length(jobs)
@@ -545,11 +521,14 @@ function main()
             # Process jobs!
             println(" - time limit: $(prettytime(time_limits[problem_idx]))")
             reference_result = deserialize(joinpath(reference_results, "$(problem_idx).bin"))
+            initial_category_counters = Dict(counter(configs[!, "status"]))
             p = Progress(njobs; desc="Measuring configurations", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             sweep_start = time()
             @sync begin
+                gpu_lock = ReentrantLock()
+
                 # Measuring tasks
                 # NOTE: the job done by this task should be kept minimal, as it determines
                 #       how quickly work can be submtited. we could switch to threads, but
@@ -576,61 +555,76 @@ function main()
                             config = configs[i, :]
                             worker_jobs[worker] = (; start_time=time(), i)
                             kill_worker = false
+
                             try
-                                times, config.status =
-                                    remotecall_fetch(measure_config, worker,
-                                                     problem, NamedTuple(config),
-                                                     best_time, reference_result)
-
-                                # save the best measurement
-                                if haskey(times, :measurements)
-                                    config.time = minimum(times.measurements)
-                                end
-
-                                # keep track of time spend in exclusive sections
-                                if haskey(times, :exclusives)
-                                    for k in keys(times.exclusives)
-                                        v = times.exclusives[k]
-                                        exclusive_times[k] = get(exclusive_times, k, 0.0) + v
+                                # prepare
+                                function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
+                                    output = remotecall(args...)
+                                    # XXX: output is a Future, which doesn't support close,
+                                    #      so we need to throw an exception to end `fetch`
+                                    #timer = Timer(timeout) do t
+                                    #    isready(output) || close(output)
+                                    #end
+                                    #try
+                                    #    return fetch(output)
+                                    #finally
+                                    #    close(timer)
+                                    #end
+                                    waiter = @async try
+                                        fetch(output)
+                                    catch e
+                                        isa(e, InterruptException) && return nothing
+                                    end
+                                    timer = Timer(timeout) do t
+                                        isready(output) || Base.throwto(waiter, InterruptException())
+                                    end
+                                    try
+                                        return fetch(waiter)
+                                    finally
+                                        close(timer)
                                     end
                                 end
+                                status = @something(
+                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
+                                    error("Time-out preparing configuration")
+                                )
+                                if status !== "success"
+                                    config.status = status
+                                    continue
+                                end
 
-                                # store memory usage statistics
-                                worker_pid, worker_cpu_mem = remotecall_fetch(worker) do
-                                    getpid(), Sys.maxrss()
+                                # measure
+                                max_time = 2 * best_time
+                                measurements, result, exclusives = @lock gpu_lock begin
+                                    @something(
+                                        remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
+                                        error("Time-out measuring configuration")
+                                    )
                                 end
-                                worker_gpu_mem = try
-                                    dev = NVML.Device(parent_uuid(device()))
-                                    procs = NVML.compute_processes(dev)
-                                    if haskey(procs, worker_pid)
-                                        info = procs[worker_pid]
-                                        coalesce(info.used_gpu_memory, 0)
-                                    else
-                                        0
-                                    end
-                                catch err
-                                    isa(err, NVML.NVMLError) || rethrow()
-                                    err.code in [NVML.ERROR_NOT_SUPPORTED,
-                                                 NVML.ERROR_NO_PERMISSION] || rethrow()
+                                config.time = minimum(measurements)
+                                for k in keys(exclusives)
+                                    v = exclusives[k]
+                                    exclusive_times[k] = get(exclusive_times, k, 0.0) + v
                                 end
-                                worker_memory_usage[worker] = (; cpu=worker_cpu_mem,
-                                                                 gpu=worker_gpu_mem)
 
-                                # check if we're running close to OOM
-                                current_cpu_memory = Sys.free_memory()
-                                current_gpu_memory = CUDA.available_memory()
-                                cpu_hungry_worker = sort(collect(keys(worker_memory_usage));
-                                                         by=worker->-worker_memory_usage[worker].cpu)[end]
-                                gpu_hungry_worker = sort(collect(keys(worker_memory_usage));
-                                                         by=worker->-worker_memory_usage[worker].gpu)[end]
-                                if current_cpu_memory < (1-memory_margin)*initial_cpu_memory && cpu_hungry_worker == worker
-                                    @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].cpu))"
-                                    kill_worker = true
+                                # bail out if this is a slow config
+                                if minimum(measurements) > max_time
+                                    config.status = "slow"
+                                    continue
                                 end
-                                if current_gpu_memory < (1-memory_margin)*initial_gpu_memory && gpu_hungry_worker == worker
-                                    @warn "System running low on on GPU memory ($(Base.format_bytes(current_gpu_memory))/$(Base.format_bytes(initial_gpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].gpu))"
-                                    kill_worker = true
+
+                                # verify results
+                                verified = @something(
+                                    remotecall_until(verify, worker, problem, reference_result, result),
+                                    error("Time-out verifying results")
+                                )
+                                if !verified
+                                    @warn "Configuration produced invalid result: $(repr_row(config))"
+                                    config.status = "invalid_result"
+                                    continue
                                 end
+
+                                config.status = "success"
                             catch err
                                 config.status = "crashed"
 
@@ -641,6 +635,45 @@ function main()
                             finally
                                 delete!(worker_jobs, worker)
                                 push!(results, (worker, i))
+
+                                if !kill_worker
+                                    # store memory usage statistics
+                                    worker_pid, worker_cpu_mem = remotecall_fetch(worker) do
+                                        getpid(), Sys.maxrss()
+                                    end
+                                    worker_gpu_mem = try
+                                        dev = NVML.Device(parent_uuid(device()))
+                                        procs = NVML.compute_processes(dev)
+                                        if haskey(procs, worker_pid)
+                                            info = procs[worker_pid]
+                                            coalesce(info.used_gpu_memory, 0)
+                                        else
+                                            0
+                                        end
+                                    catch err
+                                        isa(err, NVML.NVMLError) || rethrow()
+                                        err.code in [NVML.ERROR_NOT_SUPPORTED,
+                                                    NVML.ERROR_NO_PERMISSION] || rethrow()
+                                    end
+                                    worker_memory_usage[worker] = (; cpu=worker_cpu_mem,
+                                                                     gpu=worker_gpu_mem)
+
+                                    # check if we're running close to OOM
+                                    current_cpu_memory = Sys.free_memory()
+                                    current_gpu_memory = CUDA.available_memory()
+                                    cpu_hungry_worker = sort(collect(keys(worker_memory_usage));
+                                                            by=worker->-worker_memory_usage[worker].cpu)[end]
+                                    gpu_hungry_worker = sort(collect(keys(worker_memory_usage));
+                                                            by=worker->-worker_memory_usage[worker].gpu)[end]
+                                    if current_cpu_memory < (1-memory_margin)*initial_cpu_memory && cpu_hungry_worker == worker
+                                        @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].cpu))"
+                                        kill_worker = true
+                                    end
+                                    if current_gpu_memory < (1-memory_margin)*initial_gpu_memory && gpu_hungry_worker == worker
+                                        @warn "System running low on on GPU memory ($(Base.format_bytes(current_gpu_memory))/$(Base.format_bytes(initial_gpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].gpu))"
+                                        kill_worker = true
+                                    end
+                                end
 
                                 if kill_worker
                                     rmprocs(worker)
@@ -656,7 +689,7 @@ function main()
                         end
 
                         if worker !== nothing
-                            remotecall_fetch(clean_data, worker)
+                            remote_do(CUDA.device_reset!, worker)
                         end
                     end)
                 end
@@ -710,9 +743,10 @@ function main()
                             # job state
                             category_counters = Dict(counter(configs[!, "status"]))
                             for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
-                                abs = category_counters[k]
-                                rel = round(100 * abs / sum(values(category_counters)); sigdigits=3)
-                                push!(vals, (k, "$(abs) ($(rel)%)"))
+                                initial = get(initial_category_counters, k, 0)
+                                current = category_counters[k]
+                                relative = round(100 * current / sum(values(category_counters)); sigdigits=3)
+                                push!(vals, (k, "$(current-initial) + $(initial) ($(relative)%)"))
                             end
 
                             push!(vals, ("", ""))
@@ -815,6 +849,5 @@ end
 FileLogger(log_filename(); append=true) |> timestamp_logger |> (x -> MinLevelLogger(x, Logging.Info)) |> global_logger
 
 if !isinteractive() && myid() == 1
-    isfile(PIDFILE) && error("Another tuning process is already running. If this is not the case, please remove the file $(PIDFILE).")
     main()
 end
