@@ -527,17 +527,37 @@ function main()
             results = Channel(Inf)
             sweep_start = time()
             @sync begin
+                running_jobs = Dict()
+                memory_usage = Dict()
                 gpu_lock = ReentrantLock()
 
                 # Measuring tasks
                 # NOTE: the job done by this task should be kept minimal, as it determines
                 #       how quickly work can be submtited. we could switch to threads, but
                 #       Distributed isn't threadsafe.
-                worker_jobs = Dict()
-                worker_memory_usage = Dict()
+                function has_work()
+                    isempty(jobs) && return false
+
+                    # too many workers for the number of jobs
+                    if nworkers() > length(jobs) + length(running_jobs)
+                        return false
+                    end
+
+                    # reached target time
+                    if !EXHAUSTIVE && best_time < target_time
+                        return false
+                    end
+
+                    # time limit
+                    if (time() - sweep_start) > time_limits[problem_idx]
+                        return false
+                    end
+
+                    return true
+                end
                 for worker in workers()
                     errormonitor(@async begin
-                        while !isempty(jobs)
+                        while has_work()
                             # ensure we still have a worker
                             if worker === nothing
                                 try
@@ -553,7 +573,7 @@ function main()
                             isempty(jobs) && break
                             i = popfirst!(jobs)
                             config = configs[i, :]
-                            worker_jobs[worker] = (; start_time=time(), i)
+                            running_jobs[worker] = (; start_time=time(), i)
                             kill_worker = false
 
                             try
@@ -633,7 +653,7 @@ function main()
                                 @error "Unexpected exception on worker $worker: $log"
                                 kill_worker = true
                             finally
-                                delete!(worker_jobs, worker)
+                                delete!(running_jobs, worker)
                                 push!(results, (worker, i))
 
                                 if !kill_worker
@@ -655,29 +675,29 @@ function main()
                                         err.code in [NVML.ERROR_NOT_SUPPORTED,
                                                     NVML.ERROR_NO_PERMISSION] || rethrow()
                                     end
-                                    worker_memory_usage[worker] = (; cpu=worker_cpu_mem,
+                                    memory_usage[worker] = (; cpu=worker_cpu_mem,
                                                                      gpu=worker_gpu_mem)
 
                                     # check if we're running close to OOM
                                     current_cpu_memory = Sys.free_memory()
                                     current_gpu_memory = CUDA.available_memory()
-                                    cpu_hungry_worker = sort(collect(keys(worker_memory_usage));
-                                                            by=worker->-worker_memory_usage[worker].cpu)[end]
-                                    gpu_hungry_worker = sort(collect(keys(worker_memory_usage));
-                                                            by=worker->-worker_memory_usage[worker].gpu)[end]
+                                    cpu_hungry_worker = sort(collect(keys(memory_usage));
+                                                            by=worker->-memory_usage[worker].cpu)[end]
+                                    gpu_hungry_worker = sort(collect(keys(memory_usage));
+                                                            by=worker->-memory_usage[worker].gpu)[end]
                                     if current_cpu_memory < (1-memory_margin)*initial_cpu_memory && cpu_hungry_worker == worker
-                                        @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].cpu))"
+                                        @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(memory_usage[worker].cpu))"
                                         kill_worker = true
                                     end
                                     if current_gpu_memory < (1-memory_margin)*initial_gpu_memory && gpu_hungry_worker == worker
-                                        @warn "System running low on on GPU memory ($(Base.format_bytes(current_gpu_memory))/$(Base.format_bytes(initial_gpu_memory)) available); recycling worker $worker using $(Base.format_bytes(worker_memory_usage[worker].gpu))"
+                                        @warn "System running low on on GPU memory ($(Base.format_bytes(current_gpu_memory))/$(Base.format_bytes(initial_gpu_memory)) available); recycling worker $worker using $(Base.format_bytes(memory_usage[worker].gpu))"
                                         kill_worker = true
                                     end
                                 end
 
                                 if kill_worker
                                     rmprocs(worker)
-                                    delete!(worker_memory_usage, worker)
+                                    delete!(memory_usage, worker)
                                     worker = nothing
                                 end
 
@@ -689,14 +709,15 @@ function main()
                         end
 
                         if worker !== nothing
-                            remote_do(CUDA.device_reset!, worker)
+                            rmprocs(worker)
                         end
                     end)
                 end
 
                 # Result processing task
                 errormonitor(@async begin
-                    while !isempty(jobs) || !isempty(worker_jobs) || !isempty(results)
+                    t_checkpoint = 0
+                    while workers() != [myid()]
                         # process results
                         if isready(results)
                             while isready(results)
@@ -709,7 +730,12 @@ function main()
                                 end
                                 @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time))"
                             end
-                            checkpoint()
+
+                            # save results every minute
+                            if time() - t_checkpoint > 60
+                                checkpoint()
+                                t_checkpoint = time()
+                            end
                         end
 
                         # update the progress bar
@@ -717,6 +743,7 @@ function main()
                             vals = []
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
+                            push!(vals, ("jobs", "$(length(jobs)) pending, $(length(running_jobs)) active"))
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
@@ -765,33 +792,21 @@ function main()
                         nfinished = njobs - length(jobs)
                         update!(p, nfinished; showvalues, valuecolor=:normal)
 
-                        # Check if we're done
-                        if !EXHAUSTIVE && best_time < target_time
-                            cancel(p, "stopping after beating target time")
-                            break
-                        end
-                        if (time() - sweep_start) > time_limits[problem_idx]
-                            cancel(p, "stopping after hitting time limit")
-                            break
-                        end
-
                         sleep(5)
                     end
 
+                    # Finalize the progress bar
                     if isempty(jobs)
                         finish!(p)
+                    else
+                        cancel(p)
                     end
-
-                    empty!(jobs)
                 end)
             end
+            @assert workers() == [myid()]
 
             final_count = count(configs.status .!= "pending")
             println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
-
-            # kill workers
-            rmprocs(workers()...)
-            @assert workers() == [myid()]
         end
         checkpoint()
     end
