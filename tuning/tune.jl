@@ -388,9 +388,10 @@ function main()
         serialize(joinpath(reference_results, "$(problem_idx).bin"), result)
     end
 
-    # reclaim memory
-    GC.gc(true)
-    CUDA.reclaim()
+    # Get the device we're working on
+    cuda_dev = device()
+    mig = uuid(cuda_dev) != parent_uuid(cuda_dev)
+    nvml_dev = NVML.Device(uuid(cuda_dev); mig)
 
 
     #
@@ -482,13 +483,15 @@ function main()
             for arr in data
                 CUDA.unsafe_free!(arr)
             end
-            GC.gc(true)
-            CUDA.reclaim()
         end
         checkpoint()
         initial_count = count(configs.status .!= "pending")
         total_count = size(configs, 1)
         println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
+
+        # Get rid of the CUDA context on the master process
+        # NOTE: don't use CUDA API's after this point!
+        CUDA.device_reset!()
 
         jobs = findall(configs.status .== "pending")
         if !isempty(jobs)
@@ -496,6 +499,10 @@ function main()
             njobs = length(jobs)
 
             # Determine memory usage
+            initial_cpu_memory = Sys.free_memory()
+            initial_gpu_memory = NVML.memory_info(nvml_dev).free
+
+            # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
             gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
             gpu_mem_max = gpu_mem_target + 1500*2^20        # overhead from CUDA context, etc
@@ -505,8 +512,6 @@ function main()
 
             # Spawn workers
             memory_margin = 0.9
-            initial_cpu_memory = Sys.free_memory()
-            initial_gpu_memory = CUDA.available_memory()
             max_workers = min(
                 floor(Int, initial_cpu_memory * memory_margin / cpu_mem_max),
                 floor(Int, initial_gpu_memory * memory_margin / gpu_mem_max),
@@ -662,8 +667,7 @@ function main()
                                         getpid(), Sys.maxrss()
                                     end
                                     worker_gpu_mem = try
-                                        dev = NVML.Device(parent_uuid(device()))
-                                        procs = NVML.compute_processes(dev)
+                                        procs = NVML.compute_processes(nvml_dev)
                                         if haskey(procs, worker_pid)
                                             info = procs[worker_pid]
                                             coalesce(info.used_gpu_memory, 0)
@@ -680,7 +684,7 @@ function main()
 
                                     # check if we're running close to OOM
                                     current_cpu_memory = Sys.free_memory()
-                                    current_gpu_memory = CUDA.available_memory()
+                                    current_gpu_memory = NVML.memory_info(nvml_dev).free
                                     cpu_hungry_worker = sort(collect(keys(memory_usage));
                                                             by=worker->-memory_usage[worker].cpu)[end]
                                     gpu_hungry_worker = sort(collect(keys(memory_usage));
@@ -779,12 +783,11 @@ function main()
                             push!(vals, ("", ""))
 
                             # gpu stats
-                            dev = NVML.Device(parent_uuid(device()))
-                            push!(vals, ("power usage", "$(NVML.power_usage(dev)) W"))
-                            push!(vals, ("temperature", "$(NVML.temperature(dev)) °C"))
-                            meminfo = NVML.memory_info(dev)
+                            push!(vals, ("power usage", "$(NVML.power_usage(nvml_dev)) W"))
+                            push!(vals, ("temperature", "$(NVML.temperature(nvml_dev)) °C"))
+                            meminfo = NVML.memory_info(nvml_dev)
                             push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
-                            utilization = NVML.utilization_rates(dev)
+                            utilization = NVML.utilization_rates(nvml_dev)
                             push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
 
                             vals
