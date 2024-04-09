@@ -106,16 +106,21 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
     end
 end
 
-function addworkers(X; gpu_mem_target, cpu_mem_target)
+function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing)
     env = [
         "JULIA_NUM_THREADS" => "1",
-        "OPENBLAS_NUM_THREADS" => "1",
-        "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(gpu_mem_target),
+        "OPENBLAS_NUM_THREADS" => "1"
     ]
+    if gpu_mem_target !== nothing
+        push!(env, "JULIA_CUDA_SOFT_MEMORY_LIMIT" => string(gpu_mem_target))
+    end
+
     exeflags = [
-        "--project=$(Base.active_project())",
-        "--heap-size-hint=$cpu_mem_target"
+        "--project=$(Base.active_project())"
     ]
+    if cpu_mem_target !== nothing
+        push!(exeflags, "--heap-size-hint=$cpu_mem_target")
+    end
 
     procs = addprocs(X; exeflags, env)
     @everywhere procs include($(joinpath(@__DIR__, "tune.jl")))
@@ -869,7 +874,12 @@ function main()
     end
     if best_configs === nothing
         @info "Benchmarking configurations for plot..."
-        best_configs = benchmark_configs(all_configs)
+
+        # XXX: the device reset from above breaks cuTENSOR, so use a worker process
+        worker = addworkers(1)[1]
+        best_configs = remotecall_fetch(worker) do
+            benchmark_configs(all_configs)
+        end
 
         # Add coverage to best configs
         best_configs.coverage .= 0.0
