@@ -116,11 +116,13 @@ function generate_configs(problem)
 end
 
 function select_configs(configs, problem)
-    # use groupby to return a mutable handle
-    for group in groupby(configs, [:name, :extents])
-        config = first(group)
-        if config.name == problem.name && config.extents == [problem.extents...]
-            return group
+    if configs !== nothing
+        # use groupby to return a mutable handle
+        for group in groupby(configs, [:name, :extents])
+            config = first(group)
+            if config.name == problem.name && config.extents == [problem.extents...]
+                return group
+            end
         end
     end
     return nothing

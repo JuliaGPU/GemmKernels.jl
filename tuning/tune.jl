@@ -432,8 +432,8 @@ function main()
     # Find the best times so far
     best_times = Dict()
     for problem in problems
-        configs = select_configs(all_configs, problem)
         best_time = Inf
+        configs = select_configs(all_configs, problem)
         if configs !== nothing
             best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         end
