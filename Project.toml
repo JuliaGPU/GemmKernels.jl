@@ -1,7 +1,7 @@
 name = "GemmKernels"
 uuid = "312cec97-f96c-4f55-a63d-8e567f91b59b"
 authors = ["Thomas Faingnaert and contributors"]
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
