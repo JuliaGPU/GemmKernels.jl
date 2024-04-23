@@ -15,6 +15,14 @@ for f in (:fragtype_a, :fragtype_b, :fragtype_accum, :load_a, :load_b, :load_c, 
     @eval @inline $f(op, ::Type{Layout.Padded{L, P}}, args...) where {L, P} = $f(op, L, args...)
 end
 
+# -----------------------------------
+# Default definition for zero layouts
+# -----------------------------------
+
+for f in (:fragtype_a, :fragtype_b, :fragtype_accum)
+    @eval @inline $f(op, ::Type{Layout.Zero{T}}, args...) where {T} = $f(op, Layout.UnsafeAlignedColMajor{T}, args...)
+end
+
 
 # ---
 # FPU
@@ -224,6 +232,11 @@ for (layout_type, wmma_layout_type, convert_index_func) in [
             WMMA.store_d(ptr, frag, size(workspace, 1), $wmma_layout_type, conf)
         end
     end
+end
+
+@inline function load_c(::Type{WMMAOp{M, N, K, CT, AT}}, ::Type{Layout.Zero{AT}}, workspace, tile::Tile) where {M, N, K, CT, AT}
+    conf = WMMA.Config{M, N, K, AT}
+    return WMMA.fill_c(zero(AT), conf)
 end
 
 function mma(::Type{WMMAOp{M, N, K, CT, AT}}, a_frag, b_frag, c_frag) where {M, N, K, CT, AT}

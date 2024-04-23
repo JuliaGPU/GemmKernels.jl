@@ -261,7 +261,7 @@ macro get_wmma_config()
 
                                         shared_a_layout = Layout.Padded{transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type}, 16 ÷ sizeof(AB_type)},
                                         shared_b_layout = Layout.Padded{transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type}, 16 ÷ sizeof(AB_type)},
-                                        shared_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
+                                        shared_c_layout = zero_c ? Layout.Zero{CD_type} : Layout.UnsafeAlignedColMajor{CD_type},
                                         shared_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
 
                                         operator = Operator.WMMAOp{OP_M, OP_N, OP_K, AB_type, CD_type},
