@@ -37,6 +37,7 @@ end
     alignment = sizeof(T) * N
 
     return quote
+        $(Expr(:meta, :inline))
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
         @boundscheck checkalignment(vec_ptr, $alignment)
         return unsafe_load(vec_ptr, 1, Val($alignment))
@@ -47,7 +48,9 @@ end
                                      x::NTuple{M,<:Any}) where {N, T, AS, M}
     alignment = sizeof(T) * N
 
-    ex = quote end
+    ex = quote
+        $(Expr(:meta, :inline))
+    end
 
     # we may be storing more values than we can using a single vectorized operation
     # (e.g., when types mismatch, storing 8 Float16s in a Float32 shared memory layout)
