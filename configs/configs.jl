@@ -325,7 +325,7 @@ function prepare(gemm::MatrixMultiplication{WMMA}; BLOCK_M, BLOCK_N, BLOCK_K, WA
 
         shared_a_layout = Layout.Padded{gemm.transpose_a ? Layout.UnsafeAlignedRowMajor{gemm.a_type} : Layout.UnsafeAlignedColMajor{gemm.a_type}, 16 ÷ sizeof(gemm.a_type)},
         shared_b_layout = Layout.Padded{gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type}, 16 ÷ sizeof(gemm.b_type)},
-        shared_c_layout = Layout.UnsafeAlignedColMajor{gemm.c_type},
+        shared_c_layout = zero_c ? Layout.Zero{gemm.c_type} : Layout.UnsafeAlignedColMajor{gemm.c_type},
         shared_d_layout = Layout.UnsafeAlignedColMajor{gemm.d_type},
 
         operator = Operator.WMMAOp{OP_M, OP_N, OP_K, ab_type, cd_type},
