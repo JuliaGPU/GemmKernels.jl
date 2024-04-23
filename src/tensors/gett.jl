@@ -336,12 +336,16 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
 
         global_a_layout = TensorLayoutA,
         global_b_layout = TensorLayoutB,
-        global_c_layout = TensorLayoutC,
+        # XXX: How to do this properly? We don't have access to beta here...
+        # global_c_layout = TensorLayoutC,
+        global_c_layout = Layout.Zero{desc.descC.dataType},
         global_d_layout = TensorLayoutD,
 
         shared_a_layout = SharedLayoutA,
         shared_b_layout = SharedLayoutB,
-        shared_c_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
+        # XXX: How to do this properly? We don't have access to beta here...
+        # shared_c_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
+        shared_c_layout = Layout.Zero{desc.accumulateType},
         shared_d_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
 
         is_a_col_major = isColMajorA,
