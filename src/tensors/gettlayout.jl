@@ -27,7 +27,7 @@ abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, stride
                                  isLoadOrStoreStrided, strideOverExtent
                                 } <: Layout.UnsafeAlignedRowMajor{T} end
 
-@inline function Layout.load(
+Base.@propagate_inbounds @inline function Layout.load(
         ::Union{
             Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
                                     isLoadOrStoreStrided, strideOverExtent}},
@@ -61,7 +61,7 @@ abstract type GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, stride
     end
 end
 
-@inline function Layout.store!(
+Base.@propagate_inbounds @inline function Layout.store!(
         ::Union{
             Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2,
                                     isLoadOrStoreStrided, strideOverExtent}},

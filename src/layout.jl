@@ -33,7 +33,7 @@ end
     Int(ptr) % alignment == 0
 end
 
-@inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, i::Integer = 1) where {N, T, AS}
+Base.@propagate_inbounds @inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, i::Integer = 1) where {N, T, AS}
     alignment = sizeof(T) * N
 
     return quote
@@ -44,7 +44,7 @@ end
     end
 end
 
-@inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
+Base.@propagate_inbounds @inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
                                      x::NTuple{M,<:Any}, i::Integer = 1) where {N, T, AS, M}
     alignment = sizeof(T) * N
 
