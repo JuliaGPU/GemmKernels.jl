@@ -4,7 +4,7 @@ module Kernel
 using CUDA
 using GemmKernels
 using GemmKernels.Tiling
-using GemmKernels: LocalArray, @immutable
+using GemmKernels: LocalArray, @immutable, CTASwizzle
 using LLVMLoopInfo: @loopinfo
 
 function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
@@ -16,8 +16,7 @@ function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
     num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
 
     # Constants
-    block_i = (blockIdx().x - 1) * conf.block_shape.M
-    block_j = (blockIdx().y - 1) * conf.block_shape.N
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape)
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1
@@ -154,8 +153,7 @@ function matmul_pipelined(conf::GemmKernels.Config, a, b, c, d,
     num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
 
     # Constants
-    block_i = (blockIdx().x - 1) * conf.block_shape.M
-    block_j = (blockIdx().y - 1) * conf.block_shape.N
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape)
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1

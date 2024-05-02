@@ -1,3 +1,5 @@
+using GemmKernels: CTASwizzle
+
 #
 # low-level
 #
@@ -20,8 +22,7 @@ function matmul(conf::Config, a, b, c, d;
             epilogue]
 
     threads = conf.warps_per_block * 32
-    blocks = (cld(conf.matmul_shape.M, conf.block_shape.M),
-              cld(conf.matmul_shape.N, conf.block_shape.N))
+    blocks = CTASwizzle.number_of_blocks(conf.cta_swizzle, conf.block_shape, conf.matmul_shape)
 
     shmem = Kernel.shmem_size(conf, kernel)
     max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
