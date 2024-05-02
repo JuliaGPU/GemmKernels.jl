@@ -1,3 +1,5 @@
+using GemmKernels: CTASwizzle
+
 @staticdef struct Config
     #= Params =#
     matmul_shape                # MNK, overall shape of the MATMUL operation
@@ -33,6 +35,9 @@
     #= Is A & B stored in Column major order? This determines the iteration order of the parallelisation =#
     is_a_col_major
     is_b_col_major
+
+    #= CTA Swizzling function =#
+    cta_swizzle
 end
 
 function Base.show(io::IO, config::Config)
@@ -66,6 +71,8 @@ function Base.show(io::IO, config::Config)
 
     println(io, "is_a_col_major:   $(config.is_a_col_major)")
     println(io, "is_b_col_major:   $(config.is_b_col_major)")
+
+    println(io, "cta_swizzle:      $(config.cta_swizzle)")
 end
 
 struct ConfigError <: Exception
@@ -267,6 +274,9 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     require_tile_sized_global(global_c_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
     require_tile_sized_global(global_d_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
 
+    # CTA swizzling function.
+    cta_swizzle = CTASwizzle.HorizontallyTiled{8}
+
     return Config(
         #= Params =#
         gemm_shape,
@@ -298,5 +308,8 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         #= Is A & B Col Major? =#
         is_a_col_major,
         is_b_col_major,
+
+        #= CTA Swizzle function =#
+        cta_swizzle,
     )
 end

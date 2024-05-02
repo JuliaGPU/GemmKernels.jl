@@ -11,6 +11,7 @@ include("utils.jl")
 # framework
 include("layout.jl")
 include("operator.jl")
+include("cta-swizzle.jl")
 include("config.jl")
 include("epilogue.jl")
 include("kernel.jl")
