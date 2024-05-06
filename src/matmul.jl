@@ -101,7 +101,12 @@ end
         shared_b_layout = Layout.Padded{b_aligned_layout_base{eltype(B)}, 8}
     end
     ## outputs are never transposed, and padding them doesn't seem worth it
-    shared_c_layout = shared_d_layout = Layout.UnsafeAlignedColMajor{eltype(C)}
+    shared_c_layout = if zeroBeta
+        Layout.Zero{eltype(C)}
+    else
+        Layout.UnsafeAlignedColMajor{eltype(C)}
+    end
+    shared_d_layout = Layout.UnsafeAlignedColMajor{eltype(C)}
 
     # determine block shape
     # XXX: heuristic should take much more into account (GEMM size, at least)
