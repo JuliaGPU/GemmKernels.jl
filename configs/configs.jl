@@ -897,7 +897,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
                                         OP_M, OP_N, OP_K,
                                         kernel,
                                         is_A_col_major, is_B_col_major, is_D_col_major,
-                                        PERM_M, PERM_N, PERM_K)
+                                        PERM_M, PERM_N, PERM_K, cta_swizzle)
     @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
     data_type = tc.a_type
 
@@ -931,6 +931,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
     GemmKernels.Tensors.OVERRIDE_perm_M = PERM_M
     GemmKernels.Tensors.OVERRIDE_perm_N = PERM_N
     GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
+    GemmKernels.Tensors.OVERRIDE_cta_swizzle = cta_swizzle
 
     plan = Tensors.ContractionPlan(
         a_desc, tc.modes[2],

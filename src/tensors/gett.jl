@@ -9,6 +9,7 @@ OVERRIDE_is_D_col_major = nothing
 OVERRIDE_perm_M = nothing
 OVERRIDE_perm_N = nothing
 OVERRIDE_perm_K = nothing
+OVERRIDE_cta_swizzle = nothing
 
 struct GETTPlan <: AbstractAlgorithmPlan
     gemmConf
@@ -351,6 +352,8 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
         is_a_col_major = isColMajorA,
         is_b_col_major = isColMajorB,
         is_cd_col_major = isColMajorD,
+
+        cta_swizzle = OVERRIDE_do_override ? OVERRIDE_cta_swizzle : CTASwizzle.Identity
     )
 
     return GETTPlan(gemmConf)

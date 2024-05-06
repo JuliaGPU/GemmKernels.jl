@@ -42,7 +42,8 @@ function count_configs(problem)
     1 *                                                     # is_D_col_major
     length(permutations(intersect(modes[1], modes[2]))) *   # PERM_M
     length(permutations(intersect(modes[1], modes[3]))) *   # PERM_N
-    length(permutations(intersect(modes[2], modes[3])))     # PERM_K
+    length(permutations(intersect(modes[2], modes[3]))) *   # PERM_K
+    10                                                      # CTA swizzling
 end
 
 function generate_configs(problem)
@@ -67,7 +68,10 @@ function generate_configs(problem)
         is_D_col_major=Bool[],
         PERM_M=Vector{Int}[],
         PERM_N=Vector{Int}[],
-        PERM_K=Vector{Int}[]
+        PERM_K=Vector{Int}[],
+
+        ## CTA swizzling
+        cta_swizzle_str=String[]
     )
 
     for BLOCK_M in 2 .^ (6:9),
@@ -86,7 +90,9 @@ function generate_configs(problem)
         is_D_col_major in [#=false,=# true], # XXX: causes illegal memory accesses
         PERM_M in permutations(intersect(problem.modes[1], problem.modes[2])),
         PERM_N in permutations(intersect(problem.modes[1], problem.modes[3])),
-        PERM_K in permutations(intersect(problem.modes[2], problem.modes[3]))
+        PERM_K in permutations(intersect(problem.modes[2], problem.modes[3])),
+        cta_swizzle_str in ["horizontal-1", "horizontal-2", "horizontal-4", "horizontal-8", "horizontal-16",
+                            "vertical-1", "vertical-2", "vertical-4", "vertical-8", "vertical-16"]
 
         push!(configs, (;
             :name => problem.name,
@@ -107,7 +113,9 @@ function generate_configs(problem)
             :is_D_col_major => is_D_col_major,
             :PERM_M => PERM_M,
             :PERM_N => PERM_N,
-            :PERM_K => PERM_K
+            :PERM_K => PERM_K,
+
+            :cta_swizzle_str => cta_swizzle_str,
         ))
     end
 
@@ -146,6 +154,7 @@ function repr_row(row)
         row.is_D_col_major && print(io, "D ")
         print(io, "col-major")
     end
+    print(io, ", $(row.cta_swizzle_str) swizzle")
     print(io, ", $(row.kernel_str) kernel)")
 
     return String(take!(io))
@@ -167,9 +176,10 @@ function create_params(row)
     PERM_M = row.PERM_M
     PERM_N = row.PERM_N
     PERM_K = row.PERM_K
+    cta_swizzle = cta_swizzle_string_to_function(row.cta_swizzle_str)
 
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
-       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K)
+       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle)
 end
 
 function kernel_string_to_function(str)
@@ -181,6 +191,18 @@ function kernel_string_to_function(str)
         return Kernel.matmul_pipelined_ng
     else
         error("Unknown kernel string: $str")
+    end
+end
+
+function cta_swizzle_string_to_function(str)
+    if startswith(str, "horizontal-")
+        N = parse(Int, chopprefix(str, "horizontal-"))
+        return CTASwizzle.HorizontallyTiled{N}
+    elseif startswith(str, "vertical-")
+        N = parse(Int, chopprefix(str, "vertical-"))
+        return CTASwizzle.VerticallyTiled{N}
+    else
+        error("Unknown CTA swizzle string: $str")
     end
 end
 

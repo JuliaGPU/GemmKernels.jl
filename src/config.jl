@@ -275,7 +275,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     require_tile_sized_global(global_d_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
 
     # CTA swizzling function.
-    cta_swizzle = CTASwizzle.HorizontallyTiled{8}
+    cta_swizzle = get(params, :cta_swizzle, CTASwizzle.Identity)
 
     return Config(
         #= Params =#
