@@ -36,7 +36,7 @@ function count_configs(problem)
     length(0:3) *                                           # WARPS_M
     length(0:3) *                                           # WARPS_N
     3 *                                                     # (OP_M, OP_N, OP_K)
-    2 *                                                     # kernel_str
+    3 *                                                     # kernel_str
     2 *                                                     # is_A_col_major
     2 *                                                     # is_B_col_major
     1 *                                                     # is_D_col_major
@@ -80,7 +80,7 @@ function generate_configs(problem)
             (8, 32, 16),
             (32, 8, 16),
         ],
-        kernel_str in ["singlestage", "pipelined"],
+        kernel_str in ["singlestage", "pipelined", "pipelined_ng"],
         is_A_col_major in [false, true],
         is_B_col_major in [false, true],
         is_D_col_major in [#=false,=# true], # XXX: causes illegal memory accesses
@@ -177,6 +177,8 @@ function kernel_string_to_function(str)
         return Kernel.matmul_singlestage
     elseif str == "pipelined"
         return Kernel.matmul_pipelined
+    elseif str == "pipelined_ng"
+        return Kernel.matmul_pipelined_ng
     else
         error("Unknown kernel string: $str")
     end
