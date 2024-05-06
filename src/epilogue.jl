@@ -3,6 +3,7 @@ module Epilogue
 
 using CUDA
 using GemmKernels
+using GemmKernels: CTASwizzle
 using GemmKernels.Tiling
 using LLVMLoopInfo: @loopinfo
 
@@ -14,8 +15,7 @@ struct Default end
 
 @inline function (ep::Default)(conf::GemmKernels.Config, d, shmem_d, transform)
     # Constants
-    block_i = (blockIdx().x - 1) * conf.block_shape.M
-    block_j = (blockIdx().y - 1) * conf.block_shape.N
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape)
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1
@@ -53,8 +53,7 @@ end
 
 @inline function (ep::Bias{B})(conf::GemmKernels.Config, d, shmem_d, transform) where {B}
     # Constants
-    block_i = (blockIdx().x - 1) * conf.block_shape.M
-    block_j = (blockIdx().y - 1) * conf.block_shape.N
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape)
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1
