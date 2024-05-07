@@ -112,7 +112,7 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing)
         "OPENBLAS_NUM_THREADS" => "1"
     ]
     if gpu_mem_target !== nothing
-        push!(env, "JULIA_CUDA_SOFT_MEMORY_LIMIT" => string(gpu_mem_target))
+        push!(env, "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(gpu_mem_target))
     end
 
     exeflags = [
