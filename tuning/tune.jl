@@ -549,94 +549,145 @@ function main()
             njobs = length(jobs)
 
             # Determine memory usage
-            initial_cpu_memory = Sys.free_memory()
-            initial_gpu_memory = NVML.memory_info(nvml_dev).free
+            cpu_memory_available = Sys.free_memory()
+            gpu_memory_available = NVML.memory_info(nvml_dev).free
+            memory_margin = 0.9
 
             # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
-            gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
-            gpu_mem_limit = gpu_mem_target + 1500*2^20      # overhead from CUDA context, etc
-            # TODO: how come the context grows so large?
-            cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
-            cpu_mem_limit = sizeof(problem) + 2000*2^20     # compilation headroom
 
-            # Spawn workers
-            memory_margin = 0.9
-            max_workers = min(
-                floor(Int, initial_cpu_memory * memory_margin / cpu_mem_limit),
-                floor(Int, initial_gpu_memory * memory_margin / gpu_mem_limit),
+            # Spawn benchmarking workers
+            add_gpu_workers(X) = addworkers(X)
+            benchmark_workers = add_gpu_workers(1)
+            cpu_memory_available -= 3*sizeof(problem)               # 2 for the data, 1 for the comparison
+            gpu_memory_available -= sizeof(problem) + 2000*2^20     # compilation headroom
+
+            # Spawn compilation workers
+            cpu_mem_target = 1000*2^20
+            cpu_mem_limit = 2000*2^20
+            gpu_mem_limit = 500*2^20    # size of context
+            add_cpu_workers(X) = addworkers(X; cpu_mem_target, cpu_mem_limit)
+            cpu_max_workers = min(
+                floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit),
+                floor(Int, gpu_memory_available * memory_margin / gpu_mem_limit),
                 Sys.CPU_THREADS,
                 njobs+1
             )
-            println(" - using $max_workers workers with $(Base.format_bytes(cpu_mem_limit))/$(Base.format_bytes(initial_cpu_memory)) CPU memory, $(Base.format_bytes(gpu_mem_limit))/$(Base.format_bytes(initial_gpu_memory)) GPU memory")
-            total_workers = max(1, max_workers-1)
-            addworkers(total_workers; cpu_mem_target, cpu_mem_limit, gpu_mem_target)
-            @assert nworkers() == total_workers
+            compile_workers = add_cpu_workers(cpu_max_workers)
 
             # Process jobs!
             println(" - time limit: $(prettytime(time_limits[problem]))")
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
-            p = Progress(njobs; desc="Measuring configurations", showspeed=true)
+            p = ProgressUnknown(desc="Measuring configurations", showspeed=true)
             exclusive_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             sweep_start = time()
+            initial_jobs = Channel(Inf)
+            for job in jobs
+                put!(initial_jobs, job)
+            end
+            promising_jobs = Channel(10)
+            nfinished = 0
             @sync begin
-                running_jobs = Dict()
-                memory_usage = Dict()
-                gpu_lock = ReentrantLock()
-
-                # Measuring tasks
-                # NOTE: the job done by this task should be kept minimal, as it determines
-                #       how quickly work can be submtited. we could switch to threads, but
-                #       Distributed isn't threadsafe.
-                function has_work()
-                    isempty(jobs) && return false
-
-                    # too many workers for the number of jobs
-                    if nworkers() > length(jobs) + length(running_jobs)
-                        return false
-                    end
-
-                    # reached target time
-                    if !EXHAUSTIVE && best_time < target_time
-                        return false
-                    end
-
-                    # time limit
-                    if (time() - sweep_start) > time_limits[problem]
-                        return false
-                    end
-
-                    return true
-                end
-                for worker in workers()
+                # Compilation tasks
+                for worker in compile_workers
                     errormonitor(@async begin
-                        while has_work()
+                        while isopen(initial_jobs) && !isempty(initial_jobs)
                             # ensure we still have a worker
                             if worker === nothing
                                 try
-                                    worker = addworkers(1; cpu_mem_target, gpu_mem_target)[1]
+                                    worker = add_cpu_workers(1)[1]
                                 catch err
                                     # give up for this problem
-                                    @error "Failed to add worker: $(sprint(Base.showerror, err))"
+                                    @error "Failed to add CPU worker: $(sprint(Base.showerror, err))"
                                     break
                                 end
                             end
 
                             # get a job
-                            isempty(jobs) && break
-                            i = popfirst!(jobs)
+                            i = take!(initial_jobs)
                             config = configs[i, :]
-                            running_jobs[worker] = (; start_time=time(), i)
+                            kill_worker = false
+
+                            status = try
+                                # prepare
+                                status = @something(
+                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
+                                    error("Time-out preparing configuration")
+                                )
+
+                                if status == "success"
+                                    config.status = "promising"
+                                else
+                                    config.status = status
+                                end
+                            catch err
+                                config.status = "crashed"
+
+                                bt = catch_backtrace()
+                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                                @error "Unexpected exception on worker $worker: $log"
+                                kill_worker = true
+                            finally
+                                push!(results, (worker, i))
+
+                                if kill_worker
+                                    rmprocs(worker)
+                                    worker = nothing
+                                end
+
+                                # Consider retrying failed configurations
+                                if config.status in RETRY_STATUSSES
+                                    push!(initial_jobs, i)
+                                end
+                            end
+
+                            # submit for further processing
+                            if config.status == "promising"
+                                try
+                                    put!(promising_jobs, i)
+                                catch err
+                                    isa(err, EOFError) || rethrow()
+                                end
+                            end
+                        end
+
+                        if worker !== nothing
+                            rmprocs(worker)
+                        end
+                    end)
+                end
+
+                # Benchmarking tasks
+                for worker in benchmark_workers
+                    errormonitor(@async begin
+                        while isopen(promising_jobs) &&
+                              (!isempty(initial_jobs) || !isempty(promising_jobs))
+                            # ensure we still have a worker
+                            if worker === nothing
+                                try
+                                    worker = add_gpu_workers(1)[1]
+                                catch err
+                                    # give up for this problem
+                                    @error "Failed to add GPU worker: $(sprint(Base.showerror, err))"
+                                    break
+                                end
+                            end
+
+                            # get a job
+                            i = take!(promising_jobs)
+                            config = configs[i, :]
                             kill_worker = false
 
                             try
                                 # prepare
-                                status = @something(
-                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
-                                    error("Time-out preparing configuration")
-                                )
+                                preparing = @elapsed begin
+                                    status = @something(
+                                        remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
+                                        error("Time-out preparing configuration")
+                                    )
+                                end
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -644,13 +695,13 @@ function main()
 
                                 # measure
                                 max_time = 2 * best_time
-                                measurements, result, exclusives = @lock gpu_lock begin
-                                    @something(
-                                        remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
-                                        error("Time-out measuring configuration")
-                                    )
-                                end
+                                measurements, result, exclusives = @something(
+                                    remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
+                                    error("Time-out measuring configuration")
+                                )
                                 config.time = minimum(measurements)
+                                exclusives = Dict(pairs(exclusives)...,
+                                                  :preparing => preparing)
                                 for k in keys(exclusives)
                                     v = exclusives[k]
                                     exclusive_times[k] = get(exclusive_times, k, 0.0) + v
@@ -682,50 +733,11 @@ function main()
                                 @error "Unexpected exception on worker $worker: $log"
                                 kill_worker = true
                             finally
-                                delete!(running_jobs, worker)
+                                nfinished += 1
                                 push!(results, (worker, i))
-
-                                if !kill_worker
-                                    # store memory usage statistics
-                                    worker_pid, worker_cpu_mem = remotecall_fetch(worker) do
-                                        getpid(), Sys.maxrss()
-                                    end
-                                    worker_gpu_mem = try
-                                        procs = NVML.compute_processes(nvml_dev)
-                                        if haskey(procs, worker_pid)
-                                            info = procs[worker_pid]
-                                            coalesce(info.used_gpu_memory, 0)
-                                        else
-                                            0
-                                        end
-                                    catch err
-                                        isa(err, NVML.NVMLError) || rethrow()
-                                        err.code in [NVML.ERROR_NOT_SUPPORTED,
-                                                    NVML.ERROR_NO_PERMISSION] || rethrow()
-                                    end
-                                    memory_usage[worker] = (; cpu=worker_cpu_mem,
-                                                              gpu=worker_gpu_mem)
-
-                                    # check if we're running close to OOM
-                                    current_cpu_memory = Sys.free_memory()
-                                    current_gpu_memory = NVML.memory_info(nvml_dev).free
-                                    cpu_hungry_worker = sort(collect(keys(memory_usage));
-                                                            by=worker->memory_usage[worker].cpu)[end]
-                                    gpu_hungry_worker = sort(collect(keys(memory_usage));
-                                                            by=worker->memory_usage[worker].gpu)[end]
-                                    if current_cpu_memory < (1-memory_margin)*initial_cpu_memory && cpu_hungry_worker == worker
-                                        @warn "System running low on on CPU memory ($(Base.format_bytes(current_cpu_memory))/$(Base.format_bytes(initial_cpu_memory)) available); recycling worker $worker using $(Base.format_bytes(memory_usage[worker].cpu))"
-                                        kill_worker = true
-                                    end
-                                    if current_gpu_memory < (1-memory_margin)*initial_gpu_memory && gpu_hungry_worker == worker
-                                        @warn "System running low on on GPU memory ($(Base.format_bytes(current_gpu_memory))/$(Base.format_bytes(initial_gpu_memory)) available); recycling worker $worker using $(Base.format_bytes(memory_usage[worker].gpu))"
-                                        kill_worker = true
-                                    end
-                                end
 
                                 if kill_worker
                                     rmprocs(worker)
-                                    delete!(memory_usage, worker)
                                     worker = nothing
                                 end
 
@@ -771,7 +783,7 @@ function main()
                             vals = []
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
-                            push!(vals, ("jobs", "$(length(jobs)) pending, $(length(running_jobs)) active"))
+                            total_workers = length(compile_workers) + length(benchmark_workers)
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
@@ -816,8 +828,13 @@ function main()
 
                             vals
                         end
-                        nfinished = njobs - length(jobs)
                         update!(p, nfinished; showvalues, valuecolor=:normal)
+
+                        # see if we need to quit (reached target time or time limit)
+                        if (!EXHAUSTIVE && best_time < target_time) || (time() - sweep_start) > time_limits[problem]
+                            close(initial_jobs)
+                            close(promising_jobs, EOFError())
+                        end
 
                         sleep(5)
                     end
