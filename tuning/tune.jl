@@ -222,6 +222,34 @@ function prepare_config(problem, config)
     return "success"
 end
 
+function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
+    output = remotecall(args...)
+    # XXX: output is a Future, which doesn't support close,
+    #      so we need to throw an exception to end `fetch`
+    #timer = Timer(timeout) do t
+    #    isready(output) || close(output)
+    #end
+    #try
+    #    return fetch(output)
+    #finally
+    #    close(timer)
+    #end
+    waiter = @async try
+        fetch(output)
+    catch e
+        isa(e, InterruptException) && return nothing
+        rethrow()
+    end
+    timer = Timer(timeout) do t
+        isready(output) || Base.throwto(waiter, InterruptException())
+    end
+    try
+        return fetch(waiter)
+    finally
+        close(timer)
+    end
+end
+
 # take time measurements
 function measure_config(problem, config, max_time)
     state = prepared_state[]
@@ -628,33 +656,6 @@ function main()
 
                             try
                                 # prepare
-                                function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
-                                    output = remotecall(args...)
-                                    # XXX: output is a Future, which doesn't support close,
-                                    #      so we need to throw an exception to end `fetch`
-                                    #timer = Timer(timeout) do t
-                                    #    isready(output) || close(output)
-                                    #end
-                                    #try
-                                    #    return fetch(output)
-                                    #finally
-                                    #    close(timer)
-                                    #end
-                                    waiter = @async try
-                                        fetch(output)
-                                    catch e
-                                        isa(e, InterruptException) && return nothing
-                                        rethrow()
-                                    end
-                                    timer = Timer(timeout) do t
-                                        isready(output) || Base.throwto(waiter, InterruptException())
-                                    end
-                                    try
-                                        return fetch(waiter)
-                                    finally
-                                        close(timer)
-                                    end
-                                end
                                 status = @something(
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
                                     error("Time-out preparing configuration")
