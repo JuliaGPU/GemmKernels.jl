@@ -156,7 +156,7 @@ const prepared_state = Ref{Any}(nothing)
 cached_data = nothing
 
 # allocate data and compile kernels
-function prepare_config(problem, config)
+function prepare_config(problem, config, fake=false)
     @info "Processing configuration $(repr_row(config))..."
     state = prepared_state[]
 
@@ -165,7 +165,7 @@ function prepare_config(problem, config)
         try
             # this is the only place where we allocate device memory.
             # other allocation failures will be reported as crashes.
-            allocate_data(problem)
+            allocate_data(problem; fake)
         catch err
             bt = catch_backtrace()
             log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)

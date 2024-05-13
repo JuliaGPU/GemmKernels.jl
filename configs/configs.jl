@@ -717,12 +717,23 @@ function Base.sizeof(tc::TensorContraction)
            sizeof(tc.d_type) * prod(padded_extents[tc.modes[1]])
 end
 
-function allocate_data(tc::TensorContraction)
+function allocate_data(tc::TensorContraction; fake::Bool=false)
     padded_extents = pad_extents(tc.extents, tc.modes)
-    a = CuArray{tc.a_type}(undef, padded_extents[tc.modes[2]])
-    b = CuArray{tc.b_type}(undef, padded_extents[tc.modes[3]])
-    c = CuArray{tc.c_type}(undef, padded_extents[tc.modes[1]])
-    d = CuArray{tc.d_type}(undef, padded_extents[tc.modes[1]])
+    if fake
+        a = unsafe_wrap(CuArray{tc.a_type, length(tc.modes[2]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.a_type}, CU_NULL), padded_extents[tc.modes[2]])
+        b = unsafe_wrap(CuArray{tc.b_type, length(tc.modes[3]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.b_type}, CU_NULL), padded_extents[tc.modes[3]])
+        c = unsafe_wrap(CuArray{tc.c_type, length(tc.modes[1]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.c_type}, CU_NULL), padded_extents[tc.modes[1]])
+        d = unsafe_wrap(CuArray{tc.d_type, length(tc.modes[1]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.d_type}, CU_NULL), padded_extents[tc.modes[1]])
+    else
+        a = CuArray{tc.a_type}(undef, padded_extents[tc.modes[2]])
+        b = CuArray{tc.b_type}(undef, padded_extents[tc.modes[3]])
+        c = CuArray{tc.c_type}(undef, padded_extents[tc.modes[1]])
+        d = CuArray{tc.d_type}(undef, padded_extents[tc.modes[1]])
+    end
 
     return a, b, c, d
 end
