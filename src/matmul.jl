@@ -1,4 +1,5 @@
 using GemmKernels: CTASwizzle
+using Serialization
 
 #
 # low-level
@@ -45,7 +46,40 @@ function plan_matmul(conf::Config, a, b, c, d;
             transform_shared_to_regs_a, transform_shared_to_regs_b,
             transform_shared_to_regs_c, transform_regs_to_shared_d,
             epilogue]
-    hostkernel = @cuda launch=false kernel(conf, a, b, c, d, args...)
+    hostkernel = let
+        # XXX: to avoid the tuning process recompiling kernels, we load them from disk.
+        #      this relies on hashes being identical across processes, i.e., that the
+        #      hashed values are immutable or otherwise special (like type objects)
+        #@cuda launch=false kernel(conf, a, b, c, d, args...)
+
+        # create a compiler job
+        kernel_args = map(cudaconvert, (conf, a, b, c, d, args...))
+        F = typeof(kernel)
+        tt = Tuple{map(Core.Typeof, kernel_args)...}
+        source = CUDA.GPUCompiler.methodinstance(F, tt)
+        config = CUDA.compiler_config(device())
+        job = CUDA.GPUCompiler.CompilerJob(source, config)
+
+        # generate a unique id/path for the kernel
+        id = hash((conf, typeof(a), typeof(b), typeof(c), typeof(d), args...))
+        tmpdir = joinpath(tempdir(), "gemmkernels")
+        mkpath(tmpdir)
+        path = joinpath(tmpdir, "matmul_$(id).ptx")
+
+        # compile the kernel
+        compiled = if isfile(path)
+            deserialize(path)
+        else
+            compiled = CUDA.compile(job)
+            serialize(path, compiled)
+            compiled
+        end
+        fun = CUDA.link(job, compiled)
+
+        # mimic the rest of CUDA.jl compilation flow (see `cufunction`)
+        state = CUDA.KernelState(CUDA.create_exceptions!(fun.mod), UInt32(0))
+        CUDA.HostKernel{F,tt}(kernel, fun, state)
+    end
     attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
 
     threads ≤ CUDA.maxthreads(hostkernel) || throw(ConfigError("Requested too many threads for this kernel: This kernel can be launched using at most $(CUDA.maxthreads(hostkernel)) threads, while this configuration required $(threads)"))
