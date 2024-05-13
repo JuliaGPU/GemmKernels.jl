@@ -186,9 +186,6 @@ function prepare_config(problem, config, fake=false)
     params = create_params(config)
     try
         args = prepare(problem, data...; params...)
-        execute(problem, data...; args...)
-        synchronize()
-        # XXX: prevent this from actually executing? it may influence the measurements below
 
         prepared_state[] = (; data, params, args)
     catch err
@@ -216,38 +213,7 @@ function prepare_config(problem, config, fake=false)
         return "unknown_error"
     end
 
-    # settle down
-    device_synchronize()
-
     return "success"
-end
-
-function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
-    output = remotecall(args...)
-    # XXX: output is a Future, which doesn't support close,
-    #      so we need to throw an exception to end `fetch`
-    #timer = Timer(timeout) do t
-    #    isready(output) || close(output)
-    #end
-    #try
-    #    return fetch(output)
-    #finally
-    #    close(timer)
-    #end
-    waiter = @async try
-        fetch(output)
-    catch e
-        isa(e, InterruptException) && return nothing
-        rethrow()
-    end
-    timer = Timer(timeout) do t
-        isready(output) || Base.throwto(waiter, InterruptException())
-    end
-    try
-        return fetch(waiter)
-    finally
-        close(timer)
-    end
 end
 
 # take time measurements
@@ -255,6 +221,12 @@ function measure_config(problem, config, max_time)
     state = prepared_state[]
     @assert state !== nothing
     (; data, args, params) = state
+
+    # warm-up
+    warmup = @elapsed begin
+        execute(problem, data...; args...)
+        synchronize()
+    end
 
     # make sure we're starting with an idle device
     settling = @elapsed wait_if_throttling()
@@ -292,7 +264,7 @@ function measure_config(problem, config, max_time)
         end
     end
 
-    return measurements, result, (; initializing, settling, measuring, copying)
+    return measurements, result, (; warmup, initializing, settling, measuring, copying)
 end
 
 function benchmark_configs(all_configs)
@@ -380,6 +352,34 @@ function need_more_measurements(times)
     # check that the last two measurements didn't improve the minimum
     best_time = minimum(times)
     return times[end-1] < best_time || times[end] < best_time
+end
+
+function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
+    output = remotecall(args...)
+    # XXX: output is a Future, which doesn't support close,
+    #      so we need to throw an exception to end `fetch`
+    #timer = Timer(timeout) do t
+    #    isready(output) || close(output)
+    #end
+    #try
+    #    return fetch(output)
+    #finally
+    #    close(timer)
+    #end
+    waiter = @async try
+        fetch(output)
+    catch e
+        isa(e, InterruptException) && return nothing
+        rethrow()
+    end
+    timer = Timer(timeout) do t
+        isready(output) || Base.throwto(waiter, InterruptException())
+    end
+    try
+        return fetch(waiter)
+    finally
+        close(timer)
+    end
 end
 
 function main()
