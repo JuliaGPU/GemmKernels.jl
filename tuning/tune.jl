@@ -490,6 +490,10 @@ function main()
         time_limits[problem] = SWEEP_TIME_LIMIT * weights[problem] / total_weight
     end
 
+    # Get rid of the CUDA context on the master process
+    # NOTE: don't use CUDA API's after this point!
+    CUDA.device_reset!()
+
 
     #
     # Phase 2: Sweep parameters
@@ -517,7 +521,7 @@ function main()
         # augment the loaded configurations with new ones
         configs = generate_configs(problem)
         config_keys = names(configs)
-        configs.status .= "new"
+        configs.status .= "pending"
         configs.time .= Inf
         all_configs = merge_configs(all_configs, configs; on=config_keys)
         configs = select_configs(all_configs, problem)
@@ -525,46 +529,12 @@ function main()
         # Give configurations that ran into an unknown error another change
         # (note that we don't retry them within a run)
         for status in ["unknown_error"; RETRY_STATUSSES]
-            configs[configs.status .== status, :status] .= "new"
+            configs[configs.status .== status, :status] .= "pending"
         end
 
-        # Filter new configurations where we can determine upfront that they are unsupported.
-        let data = allocate_data(problem)
-            # XXX: do this on a worker
-            @showprogress desc="Filtering new configurations..." for config in eachrow(configs)
-                if config.status != "new"
-                    continue
-                end
-
-                try
-                    params = create_params(config)
-                    prepare(problem, data...; params...)
-                    # XXX: lots of failures only happen during `execute()`
-                    config.status = "pending"
-                catch err
-                    if isa(err, GemmKernels.ConfigError)
-                        config.status = "skipped"
-                    else
-                        bt = catch_backtrace()
-                        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
-                        @error "Unexpected error preparing $problem: $log" config
-
-                        rethrow()
-                    end
-                end
-            end
-            for arr in data
-                CUDA.unsafe_free!(arr)
-            end
-        end
-        checkpoint()
         initial_count = count(configs.status .!= "pending")
         total_count = size(configs, 1)
         println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
-
-        # Get rid of the CUDA context on the master process
-        # NOTE: don't use CUDA API's after this point!
-        CUDA.device_reset!()
 
         jobs = findall(configs.status .== "pending")
         if !isempty(jobs)
