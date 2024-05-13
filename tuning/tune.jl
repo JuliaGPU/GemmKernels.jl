@@ -598,7 +598,6 @@ function main()
                 put!(initial_jobs, job)
             end
             promising_jobs = Channel(10)
-            nfinished = 0
             @sync begin
                 # Compilation tasks
                 for worker in compile_workers
@@ -743,7 +742,6 @@ function main()
                                 @error "Unexpected exception on worker $worker: $log"
                                 kill_worker = true
                             finally
-                                nfinished += 1
                                 push!(results, (worker, i))
 
                                 if kill_worker
@@ -767,11 +765,13 @@ function main()
                 # Result processing task
                 errormonitor(@async begin
                     t_checkpoint = 0
+                    nfinished = 0
                     while workers() != [myid()]
                         # process results
                         if isready(results)
                             while isready(results)
                                 worker, i = take!(results)
+                                nfinished += 1
 
                                 # Update configuration
                                 config = configs[i, :]
