@@ -648,7 +648,11 @@ function main()
 
                                 # Consider retrying failed configurations
                                 if config.status in RETRY_STATUSSES
-                                    push!(initial_jobs, i)
+                                    try
+                                        push!(initial_jobs, i)
+                                    catch err
+                                        isa(err, EOFError) || rethrow()
+                                    end
                                 end
                             end
 
@@ -840,7 +844,7 @@ function main()
 
                         # see if we need to quit (reached target time or time limit)
                         if (!EXHAUSTIVE && best_time < target_time) || (time() - sweep_start) > time_limits[problem]
-                            close(initial_jobs)
+                            close(initial_jobs, EOFError())
                             close(promising_jobs, EOFError())
                         end
 
