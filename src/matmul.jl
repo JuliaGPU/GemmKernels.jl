@@ -4,23 +4,28 @@ using GemmKernels: CTASwizzle
 # low-level
 #
 
-function matmul(conf::Config, a, b, c, d;
-                transform_global_to_shared_a = Transform.Elementwise(),
-                transform_global_to_shared_b = Transform.Elementwise(),
-                transform_global_to_shared_c = Transform.Elementwise(),
-                transform_shared_to_global_d = Transform.Elementwise(),
-                transform_shared_to_regs_a = Transform.Elementwise(),
-                transform_shared_to_regs_b = Transform.Elementwise(),
-                transform_shared_to_regs_c = Transform.Elementwise(),
-                transform_regs_to_shared_d = Transform.Elementwise(),
-                epilogue = Epilogue.Default(),
-                kernel = Kernel.matmul_singlestage)
+struct MatmulPlan
+    conf::Config
 
-    args = [conf, a, b, c, d,
-            transform_global_to_shared_a, transform_global_to_shared_b, transform_global_to_shared_c, transform_shared_to_global_d,
-            transform_shared_to_regs_a, transform_shared_to_regs_b, transform_shared_to_regs_c, transform_regs_to_shared_d,
-            epilogue]
+    hostkernel::CUDA.HostKernel
+    threads::CuDim
+    blocks::CuDim
+    shmem::Int
 
+    args
+end
+
+function plan_matmul(conf::Config, a, b, c, d;
+                     transform_global_to_shared_a = Transform.Elementwise(),
+                     transform_global_to_shared_b = Transform.Elementwise(),
+                     transform_global_to_shared_c = Transform.Elementwise(),
+                     transform_shared_to_global_d = Transform.Elementwise(),
+                     transform_shared_to_regs_a = Transform.Elementwise(),
+                     transform_shared_to_regs_b = Transform.Elementwise(),
+                     transform_shared_to_regs_c = Transform.Elementwise(),
+                     transform_regs_to_shared_d = Transform.Elementwise(),
+                     epilogue = Epilogue.Default(),
+                     kernel = Kernel.matmul_singlestage)
     threads = conf.warps_per_block * 32
     blocks = CTASwizzle.number_of_blocks(conf.cta_swizzle, conf.block_shape, conf.matmul_shape)
 
@@ -35,12 +40,26 @@ function matmul(conf::Config, a, b, c, d;
         conf.block_shape.K ≥ 2 * conf.compute_op_shape.K || throw(ConfigError("Need at least two stages to use a pipelined kernel, i.e. BLOCK_K ≥ 2 * OPERATOR_K"))
     end
 
-    hostkernel = @cuda launch=false kernel(args...)
+    args = [transform_global_to_shared_a, transform_global_to_shared_b,
+            transform_global_to_shared_c, transform_shared_to_global_d,
+            transform_shared_to_regs_a, transform_shared_to_regs_b,
+            transform_shared_to_regs_c, transform_regs_to_shared_d,
+            epilogue]
+    hostkernel = @cuda launch=false kernel(conf, a, b, c, d, args...)
     attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
 
     threads ≤ CUDA.maxthreads(hostkernel) || throw(ConfigError("Requested too many threads for this kernel: This kernel can be launched using at most $(CUDA.maxthreads(hostkernel)) threads, while this configuration required $(threads)"))
 
-    hostkernel(args...; threads, blocks, shmem)
+    return MatmulPlan(conf, hostkernel, threads, blocks, shmem, args)
+end
+
+function matmul(plan::MatmulPlan, a, b, c, d)
+    plan.hostkernel(plan.conf, a, b, c, d, plan.args...; plan.threads, plan.blocks, plan.shmem)
+end
+
+function matmul(conf::Config, a, b, c, d; kwargs...)
+    plan = plan_matmul(conf, a, b, c, d; kwargs...)
+    matmul(plan, a, b, c, d)
 end
 
 

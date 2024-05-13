@@ -8,44 +8,70 @@ mutable struct ContractionPlan
     algorithmPlan::AbstractAlgorithmPlan
     operator
 
-    function ContractionPlan(desc::ContractionDescriptor; algo::ALGO=ALGO_GETT,
-                             operator=Operator.WMMAOp, blockShape=nothing,
-                             warpsPerBlock=nothing, computeWarp=nothing)
-        if (algo == ALGO_GETT)
+    # XXX: this should be done in setUpGETTKernel and stored in the GETT algorithm plan,
+    #      but the inputs are currently not known there, so this is a quick fix.
+    matmulPlan::GemmKernels.MatmulPlan
+    alpha
+    beta
+
+    function ContractionPlan(desc::ContractionDescriptor, α, a, b, β, c, d;
+                             algo::ALGO=ALGO_GETT, operator=Operator.WMMAOp,
+                             blockShape=nothing, warpsPerBlock=nothing, computeWarp=nothing,
+                             kernel=Kernel.matmul_singlestage)
+        if algo == ALGO_GETT
             algorithmPlan =
                 setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp)
-        end
 
-        return new(desc, algo, algorithmPlan, operator)
+            unaryOpA = desc.descA.unaryOp
+            unaryOpB = desc.descB.unaryOp
+            unaryOpC = desc.descC.unaryOp
+            unaryOpD = desc.descD.unaryOp
+
+            α = desc.computeType(α)
+            β = desc.computeType(β)
+
+            matmulPlan = GemmKernels.plan_matmul(
+                algorithmPlan.gemmConf, a, b, c, d;
+                transform_shared_to_regs_a = Transform.Elementwise(x -> unaryOpA(α * x)),
+                transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
+                transform_global_to_shared_c = Transform.Elementwise(x -> β * unaryOpC(x)),
+                transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
+                kernel)
+            end
+
+        return new(desc, algo, algorithmPlan, operator, matmulPlan, α, β)
     end
 
     function ContractionPlan(
-        a, modeA::ModeType,
-        b, modeB::ModeType,
-        c, modeC::ModeType,
-        d, modeD::ModeType;
+        α,
+        a, descA, modeA::ModeType,
+        b, descB, modeB::ModeType,
+        β,
+        c, descC, modeC::ModeType,
+        d, descD, modeD::ModeType;
         algo::ALGO=ALGO_GETT,
         computeType=eltype(a),
         accumulateType=eltype(c),
         operator=Operator.WMMAOp,
         blockShape=nothing,
         warpsPerBlock=nothing,
-        computeWarp=nothing
+        computeWarp=nothing,
+        kernel=Kernel.matmul_singlestage
     )
         desc = ContractionDescriptor(
-            a, modeA,
-            b, modeB,
-            c, modeC,
-            d, modeD,
+            descA, modeA,
+            descB, modeB,
+            descC, modeC,
+            descD, modeD,
             computeType,
             accumulateType
         )
-        return ContractionPlan(desc; algo=algo, operator=operator, blockShape=blockShape,
-                                     warpsPerBlock=warpsPerBlock, computeWarp=computeWarp)
+        return ContractionPlan(desc, α, a, b, β, c, d; algo, operator, kernel,
+                               blockShape, warpsPerBlock, computeWarp)
     end
 
     function ContractionPlan(plan::ContractionPlan, operator)
-        return ContractionPlan(plan.desc; algo=plan.algo, operator=operator)
+        return ContractionPlan(plan.desc; plan.algo, operator)
     end
 end
 
@@ -58,17 +84,12 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d;
     unaryOpD = plan.desc.descD.unaryOp
 
     α = plan.desc.computeType(α)
+    @assert α == plan.alpha "α must match the one in the plan"
     β = plan.desc.computeType(β)
+    @assert β == plan.beta "β must match the one in the plan"
 
     if plan.algo == ALGO_GETT
-        GemmKernels.matmul(
-            plan.algorithmPlan.gemmConf, a, b, c, d;
-            transform_shared_to_regs_a = Transform.Elementwise(x -> unaryOpA(α * x)),
-            transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
-            transform_global_to_shared_c = Transform.Elementwise(x -> β * unaryOpC(x)),
-            transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
-            kernel = kernel,
-        )
+        GemmKernels.matmul(plan.matmulPlan, a, b, c, d)
     else
         throw(ArgumentError("Unsupported algorithm!"))
     end
@@ -81,26 +102,32 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d, opAB, opABC)
     elseif (opAB == +) && (opABC == max)
         plan = ContractionPlan(plan, Operator.TropicalFPUOp)
         contraction!(plan, α, a, b, β, c, d)
+    else
+        error("Unsupported operator combination!")
     end
 end
 
 export elementwiseTrinary!
 function elementwiseTrinary!(plan::ContractionPlan, α, a, b, β, c, d, opAB, opABC)
     # Future work: reuse GemmKernels building blocks
+    error("Not implemented yet!")
 end
 
 export elementwiseBinary!
 function elementwiseBinary!(plan::ContractionPlan, α, a, β, c, d, opAB)
     # Future work: reuse GemmKernels building blocks
+    error("Not implemented yet!")
 end
 
 
 export reduction!
 function reduction!(α, a, β, c, d, opReduce)
     # Future work: reuse GemmKernels building blocks
+    error("Not implemented yet!")
 end
 
 export permutation!
 function permutation!(plan::ContractionPlan, α, a, d)
     # Future work: reuse GemmKernels building blocks
+    error("Not implemented yet!")
 end

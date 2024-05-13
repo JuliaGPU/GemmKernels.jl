@@ -934,10 +934,12 @@ function prepare(tc::TensorContraction, a, b, c, d;
     GemmKernels.Tensors.OVERRIDE_cta_swizzle = cta_swizzle
 
     plan = Tensors.ContractionPlan(
-        a_desc, tc.modes[2],
-        b_desc, tc.modes[3],
-        c_desc, tc.modes[1],
-        c_desc, tc.modes[1];
+        tc.alpha,
+        padded_a, a_desc, tc.modes[2],
+        padded_b, b_desc, tc.modes[3],
+        tc.beta,
+        padded_c, c_desc, tc.modes[1],
+        padded_d, c_desc, tc.modes[1];
         operator=Operator.WMMAOp{OP_M, OP_N, OP_K, tc.compute_type, tc.accumulate_type},
         computeType=tc.compute_type,
         accumulateType=tc.accumulate_type,
@@ -946,13 +948,12 @@ function prepare(tc::TensorContraction, a, b, c, d;
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
     )
 
-    (; plan, kernel, padded_a, padded_b, padded_c, padded_d, data_d)
+    (; plan, padded_a, padded_b, padded_c, padded_d, data_d)
 end
 
-function execute(tc::TensorContraction, a, b, c, d; plan, kernel,
+function execute(tc::TensorContraction, a, b, c, d; plan,
                                         padded_a, padded_b, padded_c, padded_d, data_d)
-    Tensors.contraction!(plan, tc.alpha, padded_a, padded_b, tc.beta, padded_c, padded_d;
-                         kernel)
+    Tensors.contraction!(plan, tc.alpha, padded_a, padded_b, tc.beta, padded_c, padded_d)
     return data_d
 end
 
