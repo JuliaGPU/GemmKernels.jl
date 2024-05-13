@@ -556,31 +556,41 @@ function main()
             # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
 
-            # Spawn benchmarking workers
-            add_gpu_workers(X) = addworkers(X)
-            benchmark_workers = add_gpu_workers(1)
-            cpu_memory_available -= 3*sizeof(problem)               # 2 for the data, 1 for the comparison
-            gpu_memory_available -= sizeof(problem) + 2000*2^20     # compilation headroom
+            # Spawn measurement workers
+            add_measurement_worker = let
+                gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
+                gpu_mem_limit = gpu_mem_target + 1000*2^20      # size of (reasonable) CUDA context
+                cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
+                cpu_mem_limit = 3*sizeof(problem) + 1000*2^20   # headroom
+                cpu_memory_available -= cpu_mem_limit
+                gpu_memory_available -= gpu_mem_limit
+
+                (X) -> addworkers(X; gpu_mem_target, cpu_mem_target, cpu_mem_limit)
+            end
+            measurement_workers = add_measurement_worker(1)
 
             # Spawn compilation workers
-            cpu_mem_target = 1000*2^20
-            cpu_mem_limit = 2000*2^20
-            gpu_mem_limit = 500*2^20    # size of context
-            add_cpu_workers(X) = addworkers(X; cpu_mem_target, cpu_mem_limit)
-            cpu_max_workers = min(
-                floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit),
-                floor(Int, gpu_memory_available * memory_margin / gpu_mem_limit),
-                Sys.CPU_THREADS,
-                njobs+1
-            )
-            compile_workers = add_cpu_workers(cpu_max_workers)
+            max_compile_workers, add_compile_worker = let
+                cpu_mem_target = 1000*2^20  # reasonable size of the heap
+                cpu_mem_limit = 2000*2^20   # compilation headroom
+                gpu_mem_limit = 500*2^20    # size of (minimal) CUDA context
+                max_workers = min(
+                    floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit),
+                    floor(Int, gpu_memory_available * memory_margin / gpu_mem_limit),
+                    Sys.CPU_THREADS,
+                    njobs+1
+                )
+
+                max_workers, (X) -> addworkers(X; cpu_mem_target, cpu_mem_limit)
+            end
+            compile_workers = add_compile_worker(max_compile_workers)
 
             # Process jobs!
             println(" - time limit: $(prettytime(time_limits[problem]))")
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
             p = ProgressUnknown(desc="Measuring configurations", showspeed=true)
-            exclusive_times = Dict{Symbol, Float64}()
+            measurement_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             sweep_start = time()
             initial_jobs = Channel(Inf)
@@ -597,10 +607,10 @@ function main()
                             # ensure we still have a worker
                             if worker === nothing
                                 try
-                                    worker = add_cpu_workers(1)[1]
+                                    worker = add_compile_worker(1)[1]
                                 catch err
                                     # give up for this problem
-                                    @error "Failed to add CPU worker: $(sprint(Base.showerror, err))"
+                                    @error "Failed to add compilation worker: $(sprint(Base.showerror, err))"
                                     break
                                 end
                             end
@@ -659,18 +669,18 @@ function main()
                     end)
                 end
 
-                # Benchmarking tasks
-                for worker in benchmark_workers
+                # Measurement tasks
+                for worker in measurement_workers
                     errormonitor(@async begin
                         while isopen(promising_jobs) &&
                               (!isempty(initial_jobs) || !isempty(promising_jobs))
                             # ensure we still have a worker
                             if worker === nothing
                                 try
-                                    worker = add_gpu_workers(1)[1]
+                                    worker = add_measurement_worker(1)[1]
                                 catch err
                                     # give up for this problem
-                                    @error "Failed to add GPU worker: $(sprint(Base.showerror, err))"
+                                    @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
                                     break
                                 end
                             end
@@ -695,16 +705,16 @@ function main()
 
                                 # measure
                                 max_time = 2 * best_time
-                                measurements, result, exclusives = @something(
+                                measurements, result, times = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
                                     error("Time-out measuring configuration")
                                 )
                                 config.time = minimum(measurements)
-                                exclusives = Dict(pairs(exclusives)...,
+                                times = Dict(pairs(times)...,
                                                   :preparing => preparing)
-                                for k in keys(exclusives)
-                                    v = exclusives[k]
-                                    exclusive_times[k] = get(exclusive_times, k, 0.0) + v
+                                for k in keys(times)
+                                    v = times[k]
+                                    measurement_times[k] = get(measurement_times, k, 0.0) + v
                                 end
 
                                 # bail out if this is a slow config
@@ -783,7 +793,7 @@ function main()
                             vals = []
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
-                            total_workers = length(compile_workers) + length(benchmark_workers)
+                            total_workers = length(compile_workers) + length(measurement_workers)
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
@@ -796,11 +806,9 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # how much time we spent in exclusive sections
-                            if !isempty(exclusive_times)
-                                push!(vals, ("total", prettytime(time() - sweep_start)))
-
-                                for (k, v) in exclusive_times
+                            # how much time we spent measuring configurations
+                            if !isempty(measurement_times)
+                                for (k, v) in measurement_times
                                     push!(vals, (k, prettytime(v)))
                                 end
 
