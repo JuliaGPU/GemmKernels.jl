@@ -395,40 +395,47 @@ function main()
 
     reference_result_dir = get_scratch!(GemmKernels, "reference_results")
     reference_results = Dict()
-    @showprogress desc="Measuring baselines..." for problem in problems
-        data = allocate_data(problem)
-        initialize_data(problem, data...)
+    let
+        worker = addworkers(1)[1]
+        @showprogress desc="Measuring baselines..." for problem in problems
+            path = tempname(reference_result_dir)
+            baseline_performances[problem] = remotecall_fetch(worker) do
+                data = allocate_data(problem)
+                initialize_data(problem, data...)
 
-        # calculate
-        result = Array(calculate_reference(problem, data...))
+                # calculate
+                result = Array(calculate_reference(problem, data...))
+                serialize(path, result)
 
-        # warm-up
-        args = prepare_baseline(problem, data...)
-        execute_baseline(problem, data...; args...)
-        wait_if_throttling()
+                # warm-up
+                args = prepare_baseline(problem, data...)
+                execute_baseline(problem, data...; args...)
+                wait_if_throttling()
 
-        # measure
-        measurements = []
-        while need_more_measurements(measurements)
-            prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-            push!(measurements, cur_time)
+                # measure
+                measurements = []
+                while need_more_measurements(measurements)
+                    prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
+                    cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                    push!(measurements, cur_time)
+                end
+
+                prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
+                baseline_data["$problem"] = Dict(
+                    "times" => measurements,
+                    "kernels" => prof.device.name,
+                )
+
+                for arr in data
+                    CUDA.unsafe_free!(arr)
+                end
+
+                minimum(measurements)
+            end
+            @assert isfile(path)
+            reference_results[problem] = path
         end
-
-        prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-        baseline_data["$problem"] = Dict(
-            "times" => measurements,
-            "kernels" => prof.device.name,
-        )
-
-        for arr in data
-            CUDA.unsafe_free!(arr)
-        end
-        baseline_performances[problem] = minimum(measurements)
-
-        path = tempname(reference_result_dir)
-        serialize(path, result)
-        reference_results[problem] = path
+        rmprocs(worker)
     end
 
     serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
@@ -850,11 +857,15 @@ function main()
     end
     if best_configs === nothing
         @info "Benchmarking configurations for plot..."
-
-        # XXX: the device reset from above breaks cuTENSOR, so use a worker process
-        worker = addworkers(1)[1]
-        best_configs = remotecall_fetch(worker) do
-            benchmark_configs(all_configs)
+        best_configs = let
+            worker = addworkers(1)[1]
+            try
+                remotecall_fetch(worker) do
+                    benchmark_configs(all_configs)
+                end
+            finally
+                rmprocs(worker)
+            end
         end
 
         # Add coverage to best configs
