@@ -288,7 +288,7 @@ function benchmark_configs(all_configs)
 
     # benchmark
     nbenchmarks = size(candidate_configs, 1) + size(problems, 1)
-    p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking", showspeed=true)
+    p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking:", showspeed=true)
     best_configs = similar(all_configs, 0)
     best_configs.gemmkernels_times = Vector{Float64}[]
     best_configs.baseline_times = Vector{Float64}[]
@@ -397,7 +397,7 @@ function main()
     reference_results = Dict()
     let
         worker = addworkers(1)[1]
-        @showprogress desc="Measuring baselines..." for problem in problems
+        @showprogress desc="Measuring baselines:" for problem in problems
             path = tempname(reference_result_dir)
             baseline_performances[problem] = remotecall_fetch(worker) do
                 data = allocate_data(problem)
@@ -589,7 +589,7 @@ function main()
             println(" - time limit: $(prettytime(time_limits[problem]))")
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
-            p = ProgressUnknown(desc="Measuring configurations", showspeed=true)
+            p = ProgressUnknown(desc="Measuring configurations:", showspeed=true)
             measurement_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             sweep_start = time()
