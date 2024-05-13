@@ -16,7 +16,7 @@ struct MatmulPlan
     args
 end
 
-function plan_matmul(conf::Config, a, b, c, d;
+function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
                      transform_global_to_shared_a = Transform.Elementwise(),
                      transform_global_to_shared_b = Transform.Elementwise(),
                      transform_global_to_shared_c = Transform.Elementwise(),
@@ -91,7 +91,7 @@ function matmul(plan::MatmulPlan, a, b, c, d)
     plan.hostkernel(plan.conf, a, b, c, d, plan.args...; plan.threads, plan.blocks, plan.shmem)
 end
 
-function matmul(conf::Config, a, b, c, d; kwargs...)
+function matmul(@nospecialize(conf::Config), a, b, c, d; kwargs...)
     plan = plan_matmul(conf, a, b, c, d; kwargs...)
     matmul(plan, a, b, c, d)
 end

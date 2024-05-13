@@ -94,28 +94,28 @@ function generate_configs(problem)
         cta_swizzle_str in ["horizontal-1", "horizontal-2", "horizontal-4", "horizontal-8", "horizontal-16",
                             "vertical-1", "vertical-2", "vertical-4", "vertical-8", "vertical-16"]
 
-        push!(configs, (;
-            :name => problem.name,
-            :extents => [problem.extents...],
+        push!(configs, (
+            problem.name,
+            [problem.extents...],
 
-            :BLOCK_M => BLOCK_M,
-            :BLOCK_N => BLOCK_N,
-            :BLOCK_K => BLOCK_K,
-            :WARPS_M => WARPS_M,
-            :WARPS_N => WARPS_N,
-            :OP_M => OP_M,
-            :OP_N => OP_N,
-            :OP_K => OP_K,
-            :kernel_str => kernel_str,
+            BLOCK_M,
+            BLOCK_N,
+            BLOCK_K,
+            WARPS_M,
+            WARPS_N,
+            OP_M,
+            OP_N,
+            OP_K,
+            kernel_str,
 
-            :is_A_col_major => is_A_col_major,
-            :is_B_col_major => is_B_col_major,
-            :is_D_col_major => is_D_col_major,
-            :PERM_M => PERM_M,
-            :PERM_N => PERM_N,
-            :PERM_K => PERM_K,
+            is_A_col_major,
+            is_B_col_major,
+            is_D_col_major,
+            PERM_M,
+            PERM_N,
+            PERM_K,
 
-            :cta_swizzle_str => cta_swizzle_str,
+            cta_swizzle_str,
         ))
     end
 

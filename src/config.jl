@@ -40,7 +40,7 @@ using GemmKernels: CTASwizzle
     cta_swizzle
 end
 
-function Base.show(io::IO, config::Config)
+function Base.show(io::IO, @nospecialize(config::Config))
     println(io, "matmul_shape:     $(config.matmul_shape)")
     println(io, "block_shape:      $(config.block_shape)")
     println(io, "warps_per_block:  $(config.warps_per_block)")
