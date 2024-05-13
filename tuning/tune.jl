@@ -106,7 +106,7 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
     end
 end
 
-function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing)
+function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_limit=nothing)
     env = [
         "JULIA_NUM_THREADS" => "1",
         "OPENBLAS_NUM_THREADS" => "1"
@@ -122,7 +122,12 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing)
         push!(exeflags, "--heap-size-hint=$cpu_mem_target")
     end
 
-    procs = addprocs(X; exeflags, env)
+    exename = first(Base.julia_cmd().exec)
+    if cpu_mem_limit !== nothing
+        exename = `systemd-run --quiet --scope --user -p MemoryLimit=$cpu_mem_limit $exename`
+    end
+
+    procs = addprocs(X; exename, exeflags, env)
     @everywhere procs include($(joinpath(@__DIR__, "tune.jl")))
     procs
 end
@@ -545,22 +550,22 @@ function main()
             # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
             gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
-            gpu_mem_max = gpu_mem_target + 1500*2^20        # overhead from CUDA context, etc
+            gpu_mem_limit = gpu_mem_target + 1500*2^20      # overhead from CUDA context, etc
             # TODO: how come the context grows so large?
             cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
-            cpu_mem_max = sizeof(problem) + 2000*2^20       # compilation headroom
+            cpu_mem_limit = sizeof(problem) + 2000*2^20     # compilation headroom
 
             # Spawn workers
             memory_margin = 0.9
             max_workers = min(
-                floor(Int, initial_cpu_memory * memory_margin / cpu_mem_max),
-                floor(Int, initial_gpu_memory * memory_margin / gpu_mem_max),
+                floor(Int, initial_cpu_memory * memory_margin / cpu_mem_limit),
+                floor(Int, initial_gpu_memory * memory_margin / gpu_mem_limit),
                 Sys.CPU_THREADS,
                 njobs+1
             )
-            println(" - using $max_workers workers with $(Base.format_bytes(cpu_mem_max))/$(Base.format_bytes(initial_cpu_memory)) CPU memory, $(Base.format_bytes(gpu_mem_max))/$(Base.format_bytes(initial_gpu_memory)) GPU memory")
+            println(" - using $max_workers workers with $(Base.format_bytes(cpu_mem_limit))/$(Base.format_bytes(initial_cpu_memory)) CPU memory, $(Base.format_bytes(gpu_mem_limit))/$(Base.format_bytes(initial_gpu_memory)) GPU memory")
             total_workers = max(1, max_workers-1)
-            addworkers(total_workers; cpu_mem_target, gpu_mem_target)
+            addworkers(total_workers; cpu_mem_target, cpu_mem_limit, gpu_mem_target)
             @assert nworkers() == total_workers
 
             # Process jobs!
