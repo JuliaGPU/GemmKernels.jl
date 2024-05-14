@@ -72,4 +72,4 @@ export CUDA_VISIBLE_DEVICES=$GPU_ID
 echo "+++ :julia: Instantiating project"
 julia --project -e 'using Pkg; Pkg.develop(path=dirname(@__DIR__)); Pkg.instantiate(); Pkg.precompile()'
 
-julia --project tune.jl "$@"
+julia --project --heap-size-hint=5G tune.jl "$@"
