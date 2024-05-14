@@ -5,7 +5,8 @@ using Dates
 using Distributed
 using Logging
 using LoggingExtras
-using ProgressMeter: Progress, next!, update!, finish!, cancel, @showprogress
+using ProgressMeter: Progress, ProgressUnknown, @showprogress,
+                     next!, update!, finish!, cancel
 using Serialization
 using Statistics
 using StatsBase: percentile
@@ -32,11 +33,13 @@ end
 # This interface is mostly defined in `configs/configs.jl`. The tuning script layers
 # some additional abstraction on top of this for the purpose of iteration & serialization:
 # - generate_problems(): return a list of input problems
-# - count_configs(problem): for this problem, count the number of configurations.
-# - generate_configs(problem): for this problem, generate configurations to sweep over.
+# - create_configs(): create an empty database for configurations
+# - config_iterator(problem): a generator that yields configurations for a specific problem.
 #   each configuration should also identify the problem it belongs to.
 # - select_configs(configs, problem): from a pre-existing list of configurations, list
 #   those matching a specific problem.
+# - find_config(configs, config): from a pre-existing list of configurations, find the index
+#   of a specific configuration, or nothing if it doesn't exist.
 # - repr_row(config): pretty-print a configuration
 # - create_params(row): create configuration parameters for this row
 #
@@ -130,24 +133,6 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
     procs = addprocs(X; exename, exeflags, env)
     @everywhere procs include($(joinpath(@__DIR__, "tune.jl")))
     procs
-end
-
-function merge_configs(all_configs, configs; on)
-    if all_configs === nothing
-        return configs
-    end
-
-    # merge in results from previous runs
-    configs = leftjoin(configs, all_configs; on, makeunique=true)
-    configs.time = coalesce.(configs.time_1, configs.time)
-    configs.status = coalesce.(configs.status_1, configs.status)
-    configs = select(configs, Not([:time_1, :status_1]))
-
-    # find the configs that are new, and merge them back
-    other_configs = antijoin(all_configs, configs; on)
-    all_configs = vcat(configs, other_configs)
-
-    all_configs
 end
 
 ############################################################################################
@@ -447,7 +432,7 @@ function main()
 
     # Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.bin")
-    all_configs = nothing
+    all_configs = create_configs()
     if isfile(config_path)
         @info "Loading configurations from disk..."
         try
@@ -458,16 +443,21 @@ function main()
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
             mv(config_path, "$(config_path).broken")
         end
+    else
+        all_configs.status = String[]
+        all_configs.time = Float64[]
     end
     function checkpoint()
-        relevant_configs = filter(all_configs) do row
-            # skip configurations we didn't process
-            !in(row.status, ["pending", "skipped"])
-        end
         temp_path = "$(config_path).$(getpid)"
-        serialize(temp_path, relevant_configs)
+        serialize(temp_path, all_configs)
         mv(temp_path, config_path; force=true)
     end
+
+    # Give configurations that ran into an unknown error another change
+    # (note that we don't retry them within a run)
+    deleteat!(all_configs, in.(all_configs.status,
+                               Ref([["unknown_error", "pending", "promising"];
+                                    RETRY_STATUSSES])))
 
     # Find the best times so far
     best_times = Dict()
@@ -489,7 +479,7 @@ function main()
     for problem in problems
         # start with the number of problems, and bias it towards problems with a bad ratio
         bias(x) = 100 * exp(-5 * x)
-        weights[problem] = count_configs(problem) * bias(perf_ratio(problem))
+        weights[problem] = length(config_iterator(problem)) * bias(perf_ratio(problem))
     end
     total_weight = sum(values(weights))
     time_limits = Dict()
@@ -511,10 +501,7 @@ function main()
         configs = select_configs(all_configs, problem)
 
         # See if there's anything we need to do
-        best_time = Inf
-        if configs !== nothing
-            best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
-        end
+        best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         target_time = baseline_performances[problem]
         println(" - target time: $(prettytime(target_time))")
         if best_time != Inf
@@ -525,29 +512,12 @@ function main()
             end
         end
 
-        # augment the loaded configurations with new ones
-        configs = generate_configs(problem)
-        config_keys = names(configs)
-        configs.status .= "pending"
-        configs.time .= Inf
-        all_configs = merge_configs(all_configs, configs; on=config_keys)
-        configs = select_configs(all_configs, problem)
-
-        # Give configurations that ran into an unknown error another change
-        # (note that we don't retry them within a run)
-        for status in ["unknown_error"; RETRY_STATUSSES]
-            configs[configs.status .== status, :status] .= "pending"
-        end
-
-        initial_count = count(configs.status .!= "pending")
-        total_count = size(configs, 1)
+        initial_count = size(configs, 1)
+        total_count = length(config_iterator(problem))
         println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
 
-        jobs = findall(configs.status .== "pending")
-        if !isempty(jobs)
-            shuffle!(jobs)
-            njobs = length(jobs)
-
+        njobs = total_count - initial_count
+        if njobs > 0
             # Determine memory usage
             cpu_memory_available = Sys.free_memory()
             gpu_memory_available = NVML.memory_info(nvml_dev).free
@@ -593,12 +563,25 @@ function main()
             measurement_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             sweep_start = time()
-            initial_jobs = Channel(Inf)
-            for job in jobs
-                put!(initial_jobs, job)
-            end
+            initial_jobs = Channel(100)
             promising_jobs = Channel(10)
             @sync begin
+                # Job queue
+                @async begin
+                    for config in config_iterator(problem)
+                        try
+                            # only process new configurations
+                            if find_config(configs, config) === nothing
+                                push!(all_configs, (config..., "pending", Inf))
+                                push!(initial_jobs, size(all_configs, 1))
+                            end
+                        catch err
+                            isa(err, EOFError) || rethrow()
+                            break
+                        end
+                    end
+                end
+
                 # Compilation tasks
                 for worker in compile_workers
                     errormonitor(@async begin
@@ -616,7 +599,7 @@ function main()
 
                             # get a job
                             i = take!(initial_jobs)
-                            config = configs[i, :]
+                            config = all_configs[i, :]
                             kill_worker = false
 
                             status = try
@@ -626,11 +609,12 @@ function main()
                                     error("Time-out preparing configuration")
                                 )
 
-                                if status == "success"
-                                    config.status = "promising"
-                                else
+                                if status != "success"
                                     config.status = status
+                                    continue
                                 end
+
+                                config.status = "promising"
                             catch err
                                 config.status = "crashed"
 
@@ -639,20 +623,20 @@ function main()
                                 @error "Unexpected exception on worker $worker: $log"
                                 kill_worker = true
                             finally
-                                push!(results, (worker, i))
+                                if config.status == "promising"
+                                    # submit for further processing
+                                    try
+                                        put!(promising_jobs, i)
+                                    catch err
+                                        isa(err, EOFError) || rethrow()
+                                    end
+                                else
+                                    push!(results, (worker, i))
+                                end
 
                                 if kill_worker
                                     rmprocs(worker)
                                     worker = nothing
-                                end
-
-                                # Consider retrying failed configurations
-                                if config.status in RETRY_STATUSSES
-                                    try
-                                        push!(initial_jobs, i)
-                                    catch err
-                                        isa(err, EOFError) || rethrow()
-                                    end
                                 end
                             end
 
@@ -690,7 +674,7 @@ function main()
 
                             # get a job
                             i = take!(promising_jobs)
-                            config = configs[i, :]
+                            config = all_configs[i, :]
                             kill_worker = false
 
                             try
@@ -713,8 +697,7 @@ function main()
                                     error("Time-out measuring configuration")
                                 )
                                 config.time = minimum(measurements)
-                                times = Dict(pairs(times)...,
-                                                  :preparing => preparing)
+                                times = Dict(pairs(times)..., :preparing => preparing)
                                 for k in keys(times)
                                     v = times[k]
                                     measurement_times[k] = get(measurement_times, k, 0.0) + v
@@ -752,11 +735,6 @@ function main()
                                     rmprocs(worker)
                                     worker = nothing
                                 end
-
-                                # Consider retrying failed configurations
-                                if config.status in RETRY_STATUSSES
-                                    push!(jobs, i)
-                                end
                             end
                         end
 
@@ -775,10 +753,10 @@ function main()
                         if isready(results)
                             while isready(results)
                                 worker, i = take!(results)
+                                config = all_configs[i, :]
                                 nfinished += 1
 
                                 # Update configuration
-                                config = configs[i, :]
                                 if config.status == "success"
                                     best_time = min(best_time, config.time)
                                 end
@@ -820,8 +798,10 @@ function main()
                             end
 
                             # job state
+                            configs = select_configs(all_configs, problem)
                             category_counters = Dict(counter(configs[!, "status"]))
-                            for k in sort(collect(keys(category_counters)); by=k->category_counters[k])
+                            for k in sort(collect(keys(category_counters));
+                                          by=k->category_counters[k])
                                 initial = get(initial_category_counters, k, 0)
                                 current = category_counters[k]
                                 relative = round(100 * current / sum(values(category_counters)); sigdigits=3)
@@ -852,17 +832,16 @@ function main()
                     end
 
                     # Finalize the progress bar
-                    if isempty(jobs)
+                    final_count = size(configs, 1)
+                    if final_count == total_count
                         finish!(p)
                     else
                         cancel(p)
                     end
+                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
                 end)
             end
             @assert workers() == [myid()]
-
-            final_count = count(configs.status .!= "pending")
-            println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
         end
         checkpoint()
     end
@@ -902,8 +881,8 @@ function main()
         for problem in problems
             best_config = select_configs(best_configs, problem)
             configs = select_configs(all_configs, problem)
-            nconfigs = count_configs(problem)
-            nmeasured = count(configs.status .!= "pending")
+            nconfigs = length(config_iterator(problem))
+            nmeasured = size(configs, 1)
             best_config.coverage .= nmeasured / nconfigs
         end
 

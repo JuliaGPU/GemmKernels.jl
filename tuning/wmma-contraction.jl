@@ -1,8 +1,8 @@
 ## constants
 
 using JSON
-using Combinatorics
-using ProgressMeter
+using Base.Iterators: product
+using Combinatorics: permutations
 
 const data_type = Float16
 const compute_type = Float16
@@ -28,26 +28,8 @@ function generate_problems()
     problems
 end
 
-function count_configs(problem)
-    modes = problem.modes
-    length(6:9) *                                           # BLOCK_M
-    length(6:9) *                                           # BLOCK_N
-    length(5:7) *                                           # BLOCK_K
-    length(0:3) *                                           # WARPS_M
-    length(0:3) *                                           # WARPS_N
-    3 *                                                     # (OP_M, OP_N, OP_K)
-    3 *                                                     # kernel_str
-    2 *                                                     # is_A_col_major
-    2 *                                                     # is_B_col_major
-    1 *                                                     # is_D_col_major
-    length(permutations(intersect(modes[1], modes[2]))) *   # PERM_M
-    length(permutations(intersect(modes[1], modes[3]))) *   # PERM_N
-    length(permutations(intersect(modes[2], modes[3]))) *   # PERM_K
-    10                                                      # CTA swizzling
-end
-
-function generate_configs(problem)
-    configs = DataFrame(
+function create_configs()
+    DataFrame(
         # problem
         name=String[],
         extents=Vector{Int}[],
@@ -69,68 +51,81 @@ function generate_configs(problem)
         PERM_M=Vector{Int}[],
         PERM_N=Vector{Int}[],
         PERM_K=Vector{Int}[],
-
         ## CTA swizzling
         cta_swizzle_str=String[]
     )
+end
 
-    for BLOCK_M in 2 .^ (6:9),
-        BLOCK_N in 2 .^ (6:9),
-        BLOCK_K in 2 .^ (5:7),
-        WARPS_M in 2 .^ (0:3),
-        WARPS_N in 2 .^ (0:3),
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
-        kernel_str in ["singlestage", "pipelined", "pipelined_ng"],
-        is_A_col_major in [false, true],
-        is_B_col_major in [false, true],
-        is_D_col_major in [#=false,=# true], # XXX: causes illegal memory accesses
-        PERM_M in permutations(intersect(problem.modes[1], problem.modes[2])),
-        PERM_N in permutations(intersect(problem.modes[1], problem.modes[3])),
-        PERM_K in permutations(intersect(problem.modes[2], problem.modes[3])),
-        cta_swizzle_str in ["horizontal-1", "horizontal-2", "horizontal-4", "horizontal-8", "horizontal-16",
-                            "vertical-1", "vertical-2", "vertical-4", "vertical-8", "vertical-16"]
+function config_iterator(problem)
+    param_product = product(
+        2 .^ (6:9),
+        2 .^ (6:9),
+        2 .^ (5:7),
+        2 .^ (0:3),
+        2 .^ (0:3),
+        [(16, 16, 16), (8, 32, 16), (32, 8, 16)],
+        ["singlestage", "pipelined", "pipelined_ng"],
 
-        push!(configs, (
-            problem.name,
-            [problem.extents...],
+        [false, true],
+        [false, true],
+        [true], # only true for is_D_col_major because of illegal memory accesses
+        permutations(intersect(problem.modes[1], problem.modes[2])),
+        permutations(intersect(problem.modes[1], problem.modes[3])),
+        permutations(intersect(problem.modes[2], problem.modes[3])),
 
-            BLOCK_M,
-            BLOCK_N,
-            BLOCK_K,
-            WARPS_M,
-            WARPS_N,
-            OP_M,
-            OP_N,
-            OP_K,
-            kernel_str,
+        ["horizontal-1", "horizontal-2", "horizontal-4", "horizontal-8", "horizontal-16",
+         "vertical-1", "vertical-2", "vertical-4", "vertical-8", "vertical-16"]
+    )
 
-            is_A_col_major,
-            is_B_col_major,
-            is_D_col_major,
-            PERM_M,
-            PERM_N,
-            PERM_K,
+    return ((;
+        problem.name,
+        extents = [problem.extents...],
 
-            cta_swizzle_str,
-        ))
-    end
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        WARPS_M,
+        WARPS_N,
+        OP_M, OP_N, OP_K,
+        kernel_str,
 
-    @assert nrow(configs) == count_configs(problem)
-    configs
+        is_A_col_major,
+        is_B_col_major,
+        is_D_col_major,
+        PERM_M,
+        PERM_N,
+        PERM_K,
+
+        cta_swizzle_str
+    ) for (
+        BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N,
+        (OP_M, OP_N, OP_K), kernel_str, is_A_col_major,
+        is_B_col_major, is_D_col_major, PERM_M, PERM_N,
+        PERM_K, cta_swizzle_str
+    ) in param_product)
 end
 
 function select_configs(configs, problem)
-    if configs !== nothing
-        # use groupby to return a mutable handle
-        for group in groupby(configs, [:name, :extents])
-            config = first(group)
-            if config.name == problem.name && config.extents == [problem.extents...]
-                return group
-            end
+    filter(configs) do config
+        config.name == problem.name && config.extents == [problem.extents...]
+    end
+end
+
+function find_config(configs, config)
+    for row in eachrow(configs)
+        if row.name == config.name && row.extents == config.extents &&
+            row.BLOCK_M == config.BLOCK_M && row.BLOCK_N == config.BLOCK_N &&
+            row.BLOCK_K == config.BLOCK_K && row.WARPS_M == config.WARPS_M &&
+            row.WARPS_N == config.WARPS_N && row.OP_M == config.OP_M &&
+            row.OP_N == config.OP_N && row.OP_K == config.OP_K &&
+            row.kernel_str == config.kernel_str &&
+            row.is_A_col_major == config.is_A_col_major &&
+            row.is_B_col_major == config.is_B_col_major &&
+            row.is_D_col_major == config.is_D_col_major &&
+            row.PERM_M == config.PERM_M && row.PERM_N == config.PERM_N &&
+            row.PERM_K == config.PERM_K &&
+            row.cta_swizzle_str == config.cta_swizzle_str
+            return row
         end
     end
     return nothing
