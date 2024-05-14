@@ -573,7 +573,7 @@ function main()
                             # only process new configurations
                             if find_config(configs, config) === nothing
                                 push!(all_configs, (config..., "pending", Inf))
-                                push!(initial_jobs, size(all_configs, 1))
+                                put!(initial_jobs, size(all_configs, 1))
                             end
                         catch err
                             isa(err, EOFError) || rethrow()
@@ -598,7 +598,12 @@ function main()
                             end
 
                             # get a job
-                            i = take!(initial_jobs)
+                            i = try
+                                take!(initial_jobs)
+                            catch err
+                                isa(err, EOFError) || rethrow()
+                                break
+                            end
                             config = all_configs[i, :]
                             kill_worker = false
 
@@ -629,6 +634,7 @@ function main()
                                         put!(promising_jobs, i)
                                     catch err
                                         isa(err, EOFError) || rethrow()
+                                        break
                                     end
                                 else
                                     push!(results, (worker, i))
@@ -646,6 +652,7 @@ function main()
                                     put!(promising_jobs, i)
                                 catch err
                                     isa(err, EOFError) || rethrow()
+                                    break
                                 end
                             end
                         end
@@ -673,7 +680,12 @@ function main()
                             end
 
                             # get a job
-                            i = take!(promising_jobs)
+                            i = try
+                                take!(promising_jobs)
+                            catch err
+                                isa(err, EOFError) || rethrow()
+                                break
+                            end
                             config = all_configs[i, :]
                             kill_worker = false
 
