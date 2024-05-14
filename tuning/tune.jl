@@ -564,7 +564,7 @@ function main()
             results = Channel(Inf)
             sweep_start = time()
             initial_jobs = Channel(100)
-            promising_jobs = Channel(10)
+            promising_jobs = Channel(2 * max_compile_workers)
             @sync begin
                 # Job queue
                 @async begin
