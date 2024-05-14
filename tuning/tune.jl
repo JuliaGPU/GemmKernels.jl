@@ -584,12 +584,16 @@ function main()
                             break
                         end
                     end
+
+                    # XXX: we should first wait until all jobs are processed
+                    close(initial_jobs, EOFError())
+                    close(promising_jobs, EOFError())
                 end
 
                 # Compilation tasks
                 for worker in compile_workers
                     errormonitor(@async begin
-                        while isopen(initial_jobs) && !isempty(initial_jobs)
+                        while isopen(initial_jobs)
                             # ensure we still have a worker
                             if worker === nothing
                                 try
@@ -670,8 +674,7 @@ function main()
                 # Measurement tasks
                 for worker in measurement_workers
                     errormonitor(@async begin
-                        while isopen(promising_jobs) &&
-                              (!isempty(initial_jobs) || !isempty(promising_jobs))
+                        while isopen(promising_jobs)
                             # ensure we still have a worker
                             if worker === nothing
                                 try
@@ -839,7 +842,8 @@ function main()
                         update!(p, nfinished; showvalues, valuecolor=:normal)
 
                         # see if we need to quit (reached target time or time limit)
-                        if (!EXHAUSTIVE && best_time < target_time) || (time() - sweep_start) > time_limits[problem]
+                        if (!EXHAUSTIVE && best_time < target_time) ||
+                           (time() - sweep_start) > time_limits[problem]
                             close(initial_jobs, EOFError())
                             close(promising_jobs, EOFError())
                         end
