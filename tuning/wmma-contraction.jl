@@ -111,26 +111,6 @@ function select_configs(configs, problem)
     end
 end
 
-function find_config(configs, config)
-    for row in eachrow(configs)
-        if row.name == config.name && row.extents == config.extents &&
-            row.BLOCK_M == config.BLOCK_M && row.BLOCK_N == config.BLOCK_N &&
-            row.BLOCK_K == config.BLOCK_K && row.WARPS_M == config.WARPS_M &&
-            row.WARPS_N == config.WARPS_N && row.OP_M == config.OP_M &&
-            row.OP_N == config.OP_N && row.OP_K == config.OP_K &&
-            row.kernel_str == config.kernel_str &&
-            row.is_A_col_major == config.is_A_col_major &&
-            row.is_B_col_major == config.is_B_col_major &&
-            row.is_D_col_major == config.is_D_col_major &&
-            row.PERM_M == config.PERM_M && row.PERM_N == config.PERM_N &&
-            row.PERM_K == config.PERM_K &&
-            row.cta_swizzle_str == config.cta_swizzle_str
-            return row
-        end
-    end
-    return nothing
-end
-
 function repr_row(row)
     io = IOBuffer()
 

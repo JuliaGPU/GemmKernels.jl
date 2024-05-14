@@ -38,8 +38,6 @@ end
 #   each configuration should also identify the problem it belongs to.
 # - select_configs(configs, problem): from a pre-existing list of configurations, list
 #   those matching a specific problem.
-# - find_config(configs, config): from a pre-existing list of configurations, find the index
-#   of a specific configuration, or nothing if it doesn't exist.
 # - repr_row(config): pretty-print a configuration
 # - create_params(row): create configuration parameters for this row
 #
@@ -555,6 +553,12 @@ function main()
             end
             compile_workers = add_compile_worker(max_compile_workers)
 
+            # Functionality to quickly detect already seen configurations, by hashing
+            # all columns except the status/time ones added by the tuning script.
+            problem_cols = Symbol.(filter(!in(["status", "time"]), names(all_configs)))
+            hash_config(config) = hash(((getproperty(config, col) for col in problem_cols)...,))
+            seen_configs = Set(hash_config.(eachrow(configs)))
+
             # Process jobs!
             println(" - time limit: $(prettytime(time_limits[problem]))")
             reference_result = deserialize(reference_results[problem])
@@ -571,7 +575,7 @@ function main()
                     for config in config_iterator(problem)
                         try
                             # only process new configurations
-                            if find_config(configs, config) === nothing
+                            if !in(hash_config(config), seen_configs)
                                 push!(all_configs, (config..., "pending", Inf))
                                 put!(initial_jobs, size(all_configs, 1))
                             end
