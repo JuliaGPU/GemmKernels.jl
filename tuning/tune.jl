@@ -211,9 +211,6 @@ function measure_config(problem, config, max_time)
         synchronize()
     end
 
-    # make sure we're starting with an idle device
-    settling = @elapsed wait_if_throttling()
-
     # first measurement: check if the configuration is even worth measuring
     measurements = Float64[]
     measuring = @elapsed begin
@@ -221,8 +218,11 @@ function measure_config(problem, config, max_time)
     end
     push!(measurements, cur_time)
     if cur_time > max_time
-        return measurements, nothing, (; settling, measuring)
+        return measurements, nothing, (; measuring)
     end
+
+    # make sure we're starting with an idle device
+    settling = @elapsed wait_if_throttling()
 
     # second measurement: fetch results to verify
     initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
@@ -710,7 +710,7 @@ function main()
                                 end
 
                                 # measure
-                                max_time = 2 * best_time
+                                max_time = 3 * target_time
                                 measurements, result, times = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
                                     error("Time-out measuring configuration")
