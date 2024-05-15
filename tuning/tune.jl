@@ -460,12 +460,8 @@ function main()
     # Find the best times so far
     best_times = Dict()
     for problem in problems
-        best_time = Inf
         configs = select_configs(all_configs, problem)
-        if configs !== nothing
-            best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
-        end
-        best_times[problem] = best_time
+        best_times[problem] = minimum(filter(x->x.status == "success", configs).time; init=Inf)
     end
 
     # Process problems in order of current ratio, tackling the worst ones first
