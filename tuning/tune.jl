@@ -685,11 +685,13 @@ function main()
                             end
 
                             # get a job
-                            i = try
-                                take!(promising_jobs)
-                            catch err
-                                isa(err, EOFError) || rethrow()
-                                break
+                            waiting = @elapsed begin
+                                i = try
+                                    take!(promising_jobs)
+                                catch err
+                                    isa(err, EOFError) || rethrow()
+                                    break
+                                end
                             end
                             config = all_configs[i, :]
                             kill_worker = false
@@ -714,7 +716,9 @@ function main()
                                     error("Time-out measuring configuration")
                                 )
                                 config.time = minimum(measurements)
-                                times = Dict(pairs(times)..., :preparing => preparing)
+                                times = Dict(pairs(times)...,
+                                                   :waiting => waiting,
+                                                   :preparing => preparing)
                                 for k in keys(times)
                                     v = times[k]
                                     measurement_times[k] = get(measurement_times, k, 0.0) + v
