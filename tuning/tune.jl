@@ -503,6 +503,7 @@ function main()
     for (problem_idx, problem) in enumerate(problems)
         println("\nProcessing $problem [$problem_idx/$(length(problems))]...")
         configs = select_configs(all_configs, problem)
+        sweep_start = time()
 
         # See if there's anything we need to do
         best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
@@ -572,7 +573,6 @@ function main()
             p = ProgressUnknown(desc="Measuring configurations:", showspeed=true)
             measurement_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
-            sweep_start = time()
             initial_jobs = Channel(100)
             promising_jobs = Channel(2 * max_compile_workers)
             @sync begin
@@ -911,10 +911,11 @@ function main()
         # Add coverage to best configs
         best_configs.coverage .= 0.0
         for problem in problems
-            best_config = select_configs(best_configs, problem)
             configs = select_configs(all_configs, problem)
             nconfigs = length(config_iterator(problem))
             nmeasured = size(configs, 1)
+
+            best_config = select_configs(best_configs, problem)
             best_config.coverage .= nmeasured / nconfigs
         end
 
