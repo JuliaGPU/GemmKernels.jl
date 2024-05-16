@@ -518,6 +518,7 @@ function main()
         end
 
         initial_count = size(configs, 1)
+        current_count = initial_count
         total_count = length(config_iterator(problem))
         println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
 
@@ -805,6 +806,7 @@ function main()
                         function showvalues()
                             vals = []
 
+                            push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             total_workers = length(compile_workers) + length(measurement_workers)
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
@@ -852,6 +854,7 @@ function main()
 
                             vals
                         end
+                        current_count += nfinished
                         update!(p, nfinished; showvalues, valuecolor=:normal)
 
                         # see if we need to stop
