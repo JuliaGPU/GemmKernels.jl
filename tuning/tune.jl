@@ -547,7 +547,7 @@ function main()
             # Spawn compilation workers
             max_compile_workers, add_compile_worker = let
                 cpu_mem_target = 2000*2^20  # reasonable size of the heap
-                cpu_mem_limit = 3000*2^20   # compilation headroom
+                cpu_mem_limit = 2500*2^20   # compilation headroom
                 gpu_mem_limit = 500*2^20    # size of (minimal) CUDA context
                 max_workers = min(
                     floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit),
