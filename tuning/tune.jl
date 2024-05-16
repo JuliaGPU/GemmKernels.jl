@@ -567,7 +567,7 @@ function main()
             promising_jobs = Channel(2 * max_compile_workers)
             @sync begin
                 # Job queue
-                @async begin
+                job_submitter = @async begin
                     for config in config_iterator(problem)
                         try
                             # only process new configurations
@@ -580,10 +580,6 @@ function main()
                             break
                         end
                     end
-
-                    # XXX: we should first wait until all jobs are processed
-                    close(initial_jobs, EOFError())
-                    close(promising_jobs, EOFError())
                 end
 
                 # Compilation tasks
@@ -659,10 +655,6 @@ function main()
                                     break
                                 end
                             end
-                        end
-
-                        if worker !== nothing
-                            rmprocs(worker)
                         end
                     end)
                 end
@@ -752,10 +744,6 @@ function main()
                                 end
                             end
                         end
-
-                        if worker !== nothing
-                            rmprocs(worker)
-                        end
                     end)
                 end
 
@@ -763,7 +751,7 @@ function main()
                 errormonitor(@async begin
                     t_checkpoint = 0
                     nfinished = 0
-                    while workers() != [myid()]
+                    while true
                         # process results
                         if isready(results)
                             while isready(results)
@@ -837,36 +825,41 @@ function main()
                         end
                         update!(p, nfinished; showvalues, valuecolor=:normal)
 
-                        # see if we need to quit (reached target time or time limit)
-                        if (!EXHAUSTIVE && best_time < target_time) ||
-                           (time() - sweep_start) > time_limits[problem]
-                            close(initial_jobs, EOFError())
-                            close(promising_jobs, EOFError())
+                        # see if we need to stop
+                        if istaskdone(job_submitter)
+                            finish!(p)
+                            println(" - tested all configurations")
+                            break
                         end
-
-                        # if we exceeded the time limit by a fair bit, we failed to properly
-                        # act on the close signal, so forcibly stop all workers
-                        if (time() - sweep_start) > time_limits[problem] + 60
-                            @error "Failed to stop in time, forcibly stopping all workers..."
-                            for worker in workers()
-                                try
-                                    rmprocs(worker; waitfor=30)
-                                catch err
-                                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
-                                end
-                            end
+                        if !EXHAUSTIVE && best_time < target_time
+                            finish!(p)
+                            println(" - found a configuration that beats the baseline")
+                            break
+                        end
+                        if (time() - sweep_start) > time_limits[problem]
+                            cancel(p)
+                            println(" - reached time limit")
+                            break
                         end
 
                         sleep(5)
                     end
 
-                    # Finalize the progress bar
-                    final_count = size(configs, 1)
-                    if final_count == total_count
-                        finish!(p)
-                    else
-                        cancel(p)
+                    # Clean-up
+                    close(initial_jobs, EOFError())
+                    close(promising_jobs, EOFError())
+                    if workers() != [myid()]
+                        for worker in workers()
+                            try
+                                rmprocs(worker; waitfor=30)
+                            catch err
+                                @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                            end
+                        end
                     end
+
+                    # Printn a summary
+                    final_count = size(configs, 1)
                     println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
                 end)
             end
