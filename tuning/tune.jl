@@ -567,7 +567,7 @@ function main()
             promising_jobs = Channel(2 * max_compile_workers)
             @sync begin
                 # Job queue
-                job_submitter = @async begin
+                job_submitter = errormonitor(@async begin
                     for config in config_iterator(problem)
                         try
                             # only process new configurations
@@ -580,7 +580,7 @@ function main()
                             break
                         end
                     end
-                end
+                end)
 
                 # Compilation tasks
                 for worker in compile_workers
