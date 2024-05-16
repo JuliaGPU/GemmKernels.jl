@@ -124,8 +124,15 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
     end
 
     exename = first(Base.julia_cmd().exec)
-    if cpu_mem_limit !== nothing
-        exename = `systemd-run --quiet --scope --user -p MemoryLimit=$cpu_mem_limit $exename`
+    if cpu_mem_target !== nothing || cpu_mem_limit !== nothing
+        runner = `systemd-run --quiet --scope --user`
+        if cpu_mem_target !== nothing
+            runner = `$runner -p MemoryHigh=$cpu_mem_target`
+        end
+        if cpu_mem_limit !== nothing
+            runner = `$runner -p MemoryMax=$cpu_mem_limit`
+        end
+        exename = `$runner $exename`
     end
 
     procs = addprocs(X; exename, exeflags, env)
@@ -535,8 +542,8 @@ function main()
 
             # Spawn compilation workers
             max_compile_workers, add_compile_worker = let
-                cpu_mem_target = 1000*2^20  # reasonable size of the heap
-                cpu_mem_limit = 2000*2^20   # compilation headroom
+                cpu_mem_target = 2000*2^20  # reasonable size of the heap
+                cpu_mem_limit = 3000*2^20   # compilation headroom
                 gpu_mem_limit = 500*2^20    # size of (minimal) CUDA context
                 max_workers = min(
                     floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit),
