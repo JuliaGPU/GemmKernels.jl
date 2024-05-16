@@ -822,7 +822,8 @@ function main()
                             # how much time we spent measuring configurations
                             if !isempty(measurement_times)
                                 for (k, v) in measurement_times
-                                    push!(vals, (k, prettytime(v)))
+                                    v_rel = round(100 * v / sum(values(measurement_times)); sigdigits=3)
+                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
                                 end
 
                                 push!(vals, ("", ""))
