@@ -844,6 +844,19 @@ function main()
                             close(promising_jobs, EOFError())
                         end
 
+                        # if we exceeded the time limit by a fair bit, we failed to properly
+                        # act on the close signal, so forcibly stop all workers
+                        if (time() - sweep_start) > time_limits[problem] + 60
+                            @error "Failed to stop in time, forcibly stopping all workers..."
+                            for worker in workers()
+                                try
+                                    rmprocs(worker; waitfor=30)
+                                catch err
+                                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                                end
+                            end
+                        end
+
                         sleep(5)
                     end
 
