@@ -125,10 +125,13 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
 
     exename = first(Base.julia_cmd().exec)
     if cpu_mem_target !== nothing || cpu_mem_limit !== nothing
-        runner = `systemd-run --quiet --scope --user`
-        if cpu_mem_target !== nothing
-            runner = `$runner -p MemoryHigh=$cpu_mem_target`
-        end
+        # if limits are set, disable swap to prevent excessive swapping
+        # (since we expect to be running close to the memory limit)
+        runner = `systemd-run --quiet --scope --user -p MemorySwapMax=0`
+        # XXX: MemoryHigh causes throttling, which we never want.
+        #if cpu_mem_target !== nothing
+        #    runner = `$runner -p MemoryHigh=$cpu_mem_target`
+        #end
         if cpu_mem_limit !== nothing
             runner = `$runner -p MemoryMax=$cpu_mem_limit`
         end
