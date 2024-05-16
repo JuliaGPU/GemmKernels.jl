@@ -549,12 +549,26 @@ function main()
                 cpu_mem_target = 2000*2^20  # reasonable size of the heap
                 cpu_mem_limit = 2500*2^20   # compilation headroom
                 gpu_mem_limit = 500*2^20    # size of (minimal) CUDA context
+
+                max_workers_cpu_mem = floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit)
+                max_workers_gpu_mem = floor(Int, gpu_memory_available * memory_margin / gpu_mem_limit)
+                max_workers_cpu_threads = Sys.CPU_THREADS
+                max_workers_njobs = njobs+1
+
                 max_workers = min(
-                    floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit),
-                    floor(Int, gpu_memory_available * memory_margin / gpu_mem_limit),
-                    Sys.CPU_THREADS,
-                    njobs+1
+                    max_workers_cpu_mem,
+                    max_workers_gpu_mem,
+                    max_workers_cpu_threads,
+                    max_workers_njobs
                 )
+
+                println("Determining max # of compilation workers:")
+                println("Limit determined by CPU memory: $max_workers_cpu_mem")
+                println("Limit determined by GPU memory: $max_workers_gpu_mem")
+                println("Limit determined by #CPU threads: $max_workers_cpu_threads")
+                println("Limit determined by #jobs: $max_workers_njobs")
+
+                println("--> Overall limit: $max_workers")
 
                 max_workers, (X) -> addworkers(X; cpu_mem_target, cpu_mem_limit)
             end
