@@ -618,7 +618,7 @@ function main()
             # Spawn compilation workers
             max_compile_workers, add_compile_worker = let
                 cpu_mem_target = 1500*2^20  # reasonable size of the heap
-                cpu_mem_limit = 2000*2^20   # compilation headroom
+                cpu_mem_limit = 2500*2^20   # compilation headroom
 
                 max_workers_cpu_mem = floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit)
                 max_workers_cpu_threads = Sys.CPU_THREADS
