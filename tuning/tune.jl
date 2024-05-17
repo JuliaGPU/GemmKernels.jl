@@ -732,16 +732,6 @@ function main()
                                     push!(results, (worker, i))
                                 end
                             end
-
-                            # submit for further processing
-                            if config.status == "promising"
-                                try
-                                    put!(promising_jobs, i)
-                                catch err
-                                    isa(err, EOFError) || rethrow()
-                                    break
-                                end
-                            end
                         end
                     end)
                 end
