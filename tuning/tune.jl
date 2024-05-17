@@ -120,7 +120,7 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
         "--project=$(Base.active_project())"
     ]
     if cpu_mem_target !== nothing
-        push!(exeflags, "--heap-size-hint=$(Int(cpu_mem_target))")
+        push!(exeflags, "--heap-size-hint=$(trunc(Int, cpu_mem_target))")
     end
 
     exename = first(Base.julia_cmd().exec)
@@ -130,10 +130,10 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
         runner = `systemd-run --quiet --scope --user -p MemorySwapMax=0`
         # XXX: MemoryHigh causes throttling, which we never want.
         #if cpu_mem_target !== nothing
-        #    runner = `$runner -p MemoryHigh=$(Int(cpu_mem_target))`
+        #    runner = `$runner -p MemoryHigh=$(trunc(Int, cpu_mem_target))`
         #end
         if cpu_mem_limit !== nothing
-            runner = `$runner -p MemoryMax=$(Int(cpu_mem_limit))`
+            runner = `$runner -p MemoryMax=$(trunc(Int, cpu_mem_limit))`
         end
         exename = `$runner $exename`
     end
