@@ -295,7 +295,8 @@ function measure_config(problem, config, max_time)
     # first measurement: check if the configuration is even worth measuring
     measurements = Float64[]
     measuring = @elapsed begin
-        cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+        prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
+        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
     end
     push!(measurements, cur_time)
     if cur_time > max_time
@@ -309,9 +310,10 @@ function measure_config(problem, config, max_time)
     initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
     settling += @elapsed wait_if_throttling()
     measuring += @elapsed begin
-        cur_time = CUDA.@elapsed blocking=true begin
+        prof = CUDA.@profile concurrent=false begin
             result = execute(problem, data...; args...)
         end
+        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
         push!(measurements, cur_time)
     end
     copying = @elapsed begin
@@ -323,7 +325,8 @@ function measure_config(problem, config, max_time)
     # subsequent measurements: keep going until time doesn't improve
     measuring += @elapsed begin
         while need_more_measurements(measurements)
-            cur_time = CUDA.@elapsed blocking=true execute(problem, data...; args...)
+            prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
+            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
             push!(measurements, cur_time)
         end
     end
@@ -607,7 +610,7 @@ function main()
                 gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
                 gpu_mem_limit = gpu_mem_target + 1000*2^20      # size of (reasonable) CUDA context
                 cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
-                cpu_mem_limit = 3*sizeof(problem) + 1000*2^20   # headroom
+                cpu_mem_limit = 3*sizeof(problem) + 1500*2^20   # headroom for CUPTI
                 cpu_memory_available -= cpu_mem_limit
                 gpu_memory_available -= gpu_mem_limit
 
