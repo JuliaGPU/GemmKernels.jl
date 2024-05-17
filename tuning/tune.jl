@@ -155,6 +155,10 @@ function prepare_config(problem, config, fake=false)
 
     # (re)allocate data
     data = if state === nothing
+        # make plan_matmul work without a context
+        GemmKernels.OVERRIDE_max_shmem[] = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
+        GemmKernels.OVERRIDE_cap[] = capability(device())
+
         try
             # this is the only place where we allocate device memory.
             # other allocation failures will be reported as crashes.
@@ -168,6 +172,10 @@ function prepare_config(problem, config, fake=false)
                 return "oom"
             else
                 rethrow()
+            end
+        finally
+            if fake
+                CUDA.device_reset!()
             end
         end
     else
@@ -194,13 +202,6 @@ function prepare_config(problem, config, fake=false)
             @info "Failed to compile $(repr_row(config))\n" * log
             return "compilation_error"
         end
-        if isa(err, OutOfGPUMemoryError)
-            # XXX: this shouldn't happen here as we already allocated all memory,
-            #      however it can occur during kernel launches or other CUDA calls
-            #      when very close to the memory limit.
-            @info "Not enough memory for configuration $(repr_row(config))\n" * log
-            return "oom"
-        end
 
         @info "Unknown error processing $(repr_row(config))\n" * log
         return "unknown_error"
@@ -217,7 +218,26 @@ function measure_config(problem, config, max_time)
 
     # warm-up
     warmup = @elapsed begin
-        execute(problem, data...; args...)
+        try
+            execute(problem, data...; args...)
+        catch err
+            bt = catch_backtrace()
+            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+
+            # NOTE: normally we would expect any configuration here to be executable,
+            #       since we perform all validation during planning, however to make it
+            #       possible to plan without a CUDA context we moved the linking step to
+            #       the execution phase, resulting in some errors only getting caught here.
+
+            # determine the cause of the error
+            if isa(err, GemmKernels.ConfigError)
+                @info "Skipping unsupported configuration $(repr_row(config))\n" * log
+                return "config_error", Float64[], nothing, ()
+            end
+
+            @info "Unknown error processing $(repr_row(config))\n" * log
+            return "unknown_error", Float64[], nothing, ()
+        end
         synchronize()
     end
 
@@ -228,7 +248,7 @@ function measure_config(problem, config, max_time)
     end
     push!(measurements, cur_time)
     if cur_time > max_time
-        return measurements, nothing, (; measuring)
+        return "slow", measurements, nothing, (; measuring)
     end
 
     # make sure we're starting with an idle device
@@ -257,7 +277,7 @@ function measure_config(problem, config, max_time)
         end
     end
 
-    return measurements, result, (; warmup, initializing, settling, measuring, copying)
+    return "success", measurements, result, (; warmup, initializing, settling, measuring, copying)
 end
 
 function benchmark_configs(all_configs)
@@ -546,25 +566,21 @@ function main()
 
             # Spawn compilation workers
             max_compile_workers, add_compile_worker = let
-                cpu_mem_target = 2000*2^20  # reasonable size of the heap
-                cpu_mem_limit = 2500*2^20   # compilation headroom
-                gpu_mem_limit = 500*2^20    # size of (minimal) CUDA context
+                cpu_mem_target = 1500*2^20  # reasonable size of the heap
+                cpu_mem_limit = 2000*2^20   # compilation headroom
 
                 max_workers_cpu_mem = floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit)
-                max_workers_gpu_mem = floor(Int, gpu_memory_available * memory_margin / gpu_mem_limit)
                 max_workers_cpu_threads = Sys.CPU_THREADS
                 max_workers_njobs = njobs+1
 
                 max_workers = min(
                     max_workers_cpu_mem,
-                    max_workers_gpu_mem,
                     max_workers_cpu_threads,
                     max_workers_njobs
                 )
 
                 println("Determining max # of compilation workers:")
                 println("Limit determined by CPU memory: $max_workers_cpu_mem")
-                println("Limit determined by GPU memory: $max_workers_gpu_mem")
                 println("Limit determined by #CPU threads: $max_workers_cpu_threads")
                 println("Limit determined by #jobs: $max_workers_njobs")
 
@@ -629,7 +645,6 @@ function main()
                                 break
                             end
                             config = all_configs[i, :]
-                            kill_worker = false
 
                             status = try
                                 # prepare
@@ -650,7 +665,8 @@ function main()
                                 bt = catch_backtrace()
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
                                 @error "Unexpected exception on worker $worker: $log"
-                                kill_worker = true
+                                rmprocs(worker)
+                                worker = nothing
                             finally
                                 if config.status == "promising"
                                     # submit for further processing
@@ -662,11 +678,6 @@ function main()
                                     end
                                 else
                                     push!(results, (worker, i))
-                                end
-
-                                if kill_worker
-                                    rmprocs(worker)
-                                    worker = nothing
                                 end
                             end
 
@@ -708,7 +719,6 @@ function main()
                                 end
                             end
                             config = all_configs[i, :]
-                            kill_worker = false
 
                             try
                                 # prepare
@@ -725,11 +735,11 @@ function main()
 
                                 # measure
                                 max_time = 3 * target_time
-                                measurements, result, times = @something(
+                                status, measurements, result, times = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
                                     error("Time-out measuring configuration")
                                 )
-                                config.time = minimum(measurements)
+                                config.time = minimum(measurements; init=Inf)
                                 times = Dict(pairs(times)...,
                                                    :waiting => waiting,
                                                    :preparing => preparing)
@@ -737,10 +747,8 @@ function main()
                                     v = times[k]
                                     measurement_times[k] = get(measurement_times, k, 0.0) + v
                                 end
-
-                                # bail out if this is a slow config
-                                if minimum(measurements) > max_time
-                                    config.status = "slow"
+                                if status != "success"
+                                    config.status = status
                                     continue
                                 end
 
@@ -762,14 +770,10 @@ function main()
                                 bt = catch_backtrace()
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
                                 @error "Unexpected exception on worker $worker: $log"
-                                kill_worker = true
+                                rmprocs(worker)
+                                worker = nothing
                             finally
                                 push!(results, (worker, i))
-
-                                if kill_worker
-                                    rmprocs(worker)
-                                    worker = nothing
-                                end
                             end
                         end
                     end)
