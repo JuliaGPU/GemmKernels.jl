@@ -120,7 +120,7 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
         "--project=$(Base.active_project())"
     ]
     if cpu_mem_target !== nothing
-        push!(exeflags, "--heap-size-hint=$cpu_mem_target")
+        push!(exeflags, "--heap-size-hint=$(Int(cpu_mem_target))")
     end
 
     exename = first(Base.julia_cmd().exec)
@@ -130,10 +130,10 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
         runner = `systemd-run --quiet --scope --user -p MemorySwapMax=0`
         # XXX: MemoryHigh causes throttling, which we never want.
         #if cpu_mem_target !== nothing
-        #    runner = `$runner -p MemoryHigh=$cpu_mem_target`
+        #    runner = `$runner -p MemoryHigh=$(Int(cpu_mem_target))`
         #end
         if cpu_mem_limit !== nothing
-            runner = `$runner -p MemoryMax=$cpu_mem_limit`
+            runner = `$runner -p MemoryMax=$(Int(cpu_mem_limit))`
         end
         exename = `$runner $exename`
     end
@@ -579,12 +579,13 @@ function main()
                     max_workers_njobs
                 )
 
-                println("Determining max # of compilation workers:")
-                println("Limit determined by CPU memory: $max_workers_cpu_mem")
-                println("Limit determined by #CPU threads: $max_workers_cpu_threads")
-                println("Limit determined by #jobs: $max_workers_njobs")
+                println("- max # of compilation workers: $max_workers")
+                println("  limit determined by CPU memory: $max_workers_cpu_mem")
+                println("  limit determined by #CPU threads: $max_workers_cpu_threads")
+                println("  limit determined by #jobs: $max_workers_njobs")
 
-                println("--> Overall limit: $max_workers")
+                # re-estimate memory limits
+                cpu_mem_limit = cpu_memory_available * memory_margin / max_workers
 
                 max_workers, (X) -> addworkers(X; cpu_mem_target, cpu_mem_limit)
             end
