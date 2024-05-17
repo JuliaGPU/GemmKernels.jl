@@ -57,7 +57,7 @@ function create_configs()
 end
 
 function config_iterator(problem)
-    param_product = product(
+    param_product = shuffle_product(
         2 .^ (6:9),
         2 .^ (6:9),
         2 .^ (5:7),

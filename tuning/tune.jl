@@ -68,6 +68,57 @@ const BENCHMARK_SAMPLES = 5
 
 ############################################################################################
 
+"""
+    shuffle_product(components...)
+
+Create an iterator that iterates over the Cartesian product of the given components,
+but shuffles the order in which the elements are visited. Every element is visited
+exactly once, with performance and memory use significantly better than a first
+generating all elements and then shuffling them.
+"""
+function shuffle_product(components...)
+    components = collect.(components)
+    indices = CartesianIndices(ntuple(i -> 1:length(components[i]), length(components)))
+    return ShuffledProductIterator(components, indices)
+end
+
+struct ShuffledProductIterator{T,I}
+    components::T   # the parameters to iterate over
+    indices::I      # for converting linear indices to component indices
+end
+
+Base.length(iter::ShuffledProductIterator) = length(iter.indices)
+
+function Base.iterate(iter::ShuffledProductIterator,
+                      state=(0, falses(prod(length, iter.components))))
+    # num is the number of elements we have visited so far, used to terminate the iteration.
+    # seen is a bitarray that tells us whether we have seen a particular element yet.
+    num, seen = state
+
+    if num == length(seen)
+        @assert all(seen)
+        return nothing
+    end
+
+    while true
+        i = rand(1:length(seen))
+        if !seen[i]
+            seen[i] = true
+
+            I = iter.indices[i]
+            vals = Tuple((iter.components[j][k] for (j,k) in enumerate(Tuple(I))))
+
+            new_state = (num+1, seen)
+            return vals, new_state
+        end
+
+        # near the end, we might be doing lots of retries.
+        # consider doing a linear scan then?
+    end
+end
+
+############################################################################################
+
 function timescale(time)
     if time < 1e-6
         1e9, "ns"
