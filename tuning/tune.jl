@@ -165,7 +165,7 @@ function prepare_config(problem, config, fake=false)
             allocate_data(problem; fake)
         catch err
             bt = catch_backtrace()
-            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+            log = sprint(Base.showerror, err)
 
             if isa(err, OutOfGPUMemoryError)
                 @info "Not enough memory for configuration $(repr_row(config))\n" * log
@@ -191,7 +191,7 @@ function prepare_config(problem, config, fake=false)
         prepared_state[] = (; data, params, args)
     catch err
         bt = catch_backtrace()
-        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+        log = sprint(Base.showerror, err)
 
         # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
@@ -222,7 +222,7 @@ function measure_config(problem, config, max_time)
             execute(problem, data...; args...)
         catch err
             bt = catch_backtrace()
-            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+            log = sprint(Base.showerror, err)
 
             # NOTE: normally we would expect any configuration here to be executable,
             #       since we perform all validation during planning, however to make it
@@ -664,7 +664,7 @@ function main()
                                 config.status = "crashed"
 
                                 bt = catch_backtrace()
-                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                                log = sprint(Base.showerror, err)
                                 @error "Unexpected exception on worker $worker: $log"
                                 rmprocs(worker)
                                 worker = nothing
@@ -769,7 +769,7 @@ function main()
                                 config.status = "crashed"
 
                                 bt = catch_backtrace()
-                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, bt)
+                                log = sprint(Base.showerror, err)
                                 @error "Unexpected exception on worker $worker: $log"
                                 rmprocs(worker)
                                 worker = nothing
