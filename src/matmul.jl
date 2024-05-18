@@ -1,5 +1,5 @@
 using GemmKernels: CTASwizzle
-using Serialization
+using Serialization, Scratch
 
 #
 # low-level
@@ -76,8 +76,7 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
     compiled = let
         # generate a unique id/path for the kernel
         id = hash((conf, typeof(a), typeof(b), typeof(c), typeof(d), args...))
-        tmpdir = joinpath(tempdir(), "gemmkernels")
-        mkpath(tmpdir)
+        tmpdir = get_scratch!(GemmKernels, "matmul_cache")
         path = joinpath(tmpdir, "matmul_$(id).ptx")
 
         # compile the kernel
