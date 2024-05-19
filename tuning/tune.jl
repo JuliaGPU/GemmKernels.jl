@@ -502,7 +502,11 @@ function main()
             @assert isfile(path)
             reference_results[problem] = path
         end
-        rmprocs(worker)
+        try
+            rmprocs(worker; waitfor=30)
+        catch err
+            @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+        end
     end
 
     serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
@@ -720,7 +724,11 @@ function main()
                                 bt = catch_backtrace()
                                 log = sprint(Base.showerror, err)
                                 @error "Unexpected exception on worker $worker: $log"
-                                rmprocs(worker)
+                                try
+                                    rmprocs(worker; waitfor=30)
+                                catch err
+                                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                                end
                                 worker = nothing
                             finally
                                 if config.status == "promising"
@@ -815,7 +823,11 @@ function main()
                                 bt = catch_backtrace()
                                 log = sprint(Base.showerror, err)
                                 @error "Unexpected exception on worker $worker: $log"
-                                rmprocs(worker)
+                                try
+                                    rmprocs(worker; waitfor=30)
+                                catch err
+                                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                                end
                                 worker = nothing
                             finally
                                 push!(results, (worker, i))
@@ -975,7 +987,11 @@ function main()
                     benchmark_configs(all_configs)
                 end
             finally
-                rmprocs(worker)
+                try
+                    rmprocs(worker; waitfor=30)
+                catch err
+                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                end
             end
         end
 
