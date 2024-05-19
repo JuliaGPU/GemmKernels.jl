@@ -201,7 +201,7 @@ cached_data = nothing
 
 # allocate data and compile kernels
 function prepare_config(problem, config, fake=false)
-    @info "Processing configuration $(repr_row(config))..."
+    @info "Preparing $(repr_row(config))"
     state = prepared_state[]
 
     # (re)allocate data
@@ -219,7 +219,7 @@ function prepare_config(problem, config, fake=false)
             log = sprint(Base.showerror, err)
 
             if isa(err, OutOfGPUMemoryError)
-                @info "Not enough memory for configuration $(repr_row(config))\n" * log
+                @error "Not enough memory\n" * log
                 return "oom"
             else
                 rethrow()
@@ -246,15 +246,15 @@ function prepare_config(problem, config, fake=false)
 
         # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
-            @info "Skipping unsupported configuration $(repr_row(config))\n" * log
+            @warn "Configuration is invalid\n" * log
             return "config_error"
         end
         if isa(err, CUDA.InvalidIRError)
-            @info "Failed to compile $(repr_row(config))\n" * log
+            @warn "Configuration failed to compile\n" * log
             return "compilation_error"
         end
 
-        @info "Unknown error processing $(repr_row(config))\n" * log
+        @error "Unknown error\n" * log
         return "unknown_error"
     end
 
@@ -263,6 +263,7 @@ end
 
 # take time measurements
 function measure_config(problem, config, max_time)
+    @info "Measuring $(repr_row(config))"
     state = prepared_state[]
     @assert state !== nothing
     (; data, args, params) = state
@@ -282,11 +283,11 @@ function measure_config(problem, config, max_time)
 
             # determine the cause of the error
             if isa(err, GemmKernels.ConfigError)
-                @info "Skipping unsupported configuration $(repr_row(config))\n" * log
+                @warn "Configuration is invalid\n" * log
                 return "config_error", Float64[], nothing, ()
             end
 
-            @info "Unknown error processing $(repr_row(config))\n" * log
+            @error "Unknown error\n" * log
             return "unknown_error", Float64[], nothing, ()
         end
         synchronize()
@@ -300,6 +301,7 @@ function measure_config(problem, config, max_time)
     end
     push!(measurements, cur_time)
     if cur_time > max_time
+        @info "Configuration is too slow"
         return "slow", measurements, nothing, (; measuring)
     end
 
@@ -331,6 +333,7 @@ function measure_config(problem, config, max_time)
         end
     end
 
+    @info "Measured $(prettytime(minimum(measurements))) in $(length(measurements)) measurements"
     return "success", measurements, result, (; warmup, initializing, settling, measuring, copying)
 end
 
