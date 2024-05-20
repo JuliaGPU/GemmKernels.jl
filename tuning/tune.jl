@@ -959,7 +959,6 @@ function main()
                     println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
                 end)
             end
-            @assert workers() == [myid()]
         end
         checkpoint()
     end
