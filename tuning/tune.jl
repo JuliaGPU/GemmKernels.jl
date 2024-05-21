@@ -14,9 +14,21 @@ using Random
 using Profile
 using Adapt
 using Scratch
+using Profile
 
 if myid() == 1
     using Plots
+end
+
+if "GK_PEEK_DURATION" ∈ keys(ENV)
+    Profile.set_peek_duration(parse(Float64, ENV["GK_PEEK_DURATION"]))
+end
+
+const PROGRESS_OUTPUT = if "GK_PROGRESS_OUTPUT" ∈ keys(ENV)
+    io = open(ENV["GK_PROGRESS_OUTPUT"], "w")
+    IOContext(io, :color => true)
+else
+    stderr
 end
 
 
@@ -350,7 +362,7 @@ function benchmark_configs(all_configs)
 
     # benchmark
     nbenchmarks = size(candidate_configs, 1) + size(problems, 1)
-    p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking:", showspeed=true)
+    p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking:", showspeed=true, output=PROGRESS_OUTPUT)
     best_configs = similar(all_configs, 0)
     best_configs.gemmkernels_times = Vector{Float64}[]
     best_configs.baseline_times = Vector{Float64}[]
@@ -660,7 +672,7 @@ function main()
             println(" - time limit: $(prettytime(time_limits[problem]))")
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
-            p = Progress(njobs; desc="Measuring configurations:", showspeed=true)
+            p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
             measurement_times = Dict{Symbol, Float64}()
             results = Channel(Inf)
             initial_jobs = Channel(100)
