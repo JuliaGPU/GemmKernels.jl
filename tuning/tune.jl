@@ -646,9 +646,6 @@ function main()
                 println("  limit determined by #CPU threads: $max_workers_cpu_threads")
                 println("  limit determined by #jobs: $max_workers_njobs")
 
-                # re-estimate memory limits
-                cpu_mem_limit = cpu_memory_available * memory_margin / max_workers
-
                 max_workers, (X) -> addworkers(X; cpu_mem_target)
             end
             compile_workers = add_compile_worker(max_compile_workers)
