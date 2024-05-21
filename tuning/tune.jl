@@ -158,7 +158,8 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
     end
 end
 
-function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_limit=nothing)
+const systemd_slice = Ref{String}()
+function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing)
     env = [
         "JULIA_NUM_THREADS" => "1",
         "OPENBLAS_NUM_THREADS" => "1"
@@ -175,17 +176,8 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, cpu_mem_l
     end
 
     exename = first(Base.julia_cmd().exec)
-    if cpu_mem_target !== nothing || cpu_mem_limit !== nothing
-        # if limits are set, disable swap to prevent excessive swapping
-        # (since we expect to be running close to the memory limit)
-        runner = `systemd-run --quiet --scope --user -p MemorySwapMax=0`
-        # XXX: MemoryHigh causes throttling, which we never want.
-        #if cpu_mem_target !== nothing
-        #    runner = `$runner -p MemoryHigh=$(trunc(Int, cpu_mem_target))`
-        #end
-        if cpu_mem_limit !== nothing
-            runner = `$runner -p MemoryMax=$(trunc(Int, cpu_mem_limit))`
-        end
+    if isassigned(systemd_slice)
+        runner = `systemd-run --quiet --user --scope --slice $(systemd_slice[])`
         exename = `$runner $exename`
     end
 
@@ -457,12 +449,32 @@ function main()
     # Phase 1: Prepare
     #
 
+    # Get the device we're working on
+    cuda_dev = device()
+    mig = uuid(cuda_dev) != parent_uuid(cuda_dev)
+    nvml_dev = NVML.Device(uuid(cuda_dev); mig)
+
+    # Determine out available memory
+    cpu_memory_available = Sys.free_memory()
+    gpu_memory_available = NVML.memory_info(nvml_dev).free
+    memory_margin = 0.9
+    ## the parent process uses some memory too
+    cpu_memory_available -= 5000*2^20
+    ## pool the remaining memory in a systemd slice
+    systemd_config = joinpath(homedir(), ".config", "systemd", "user")
+    mkpath(systemd_config)
+    write(joinpath(systemd_config, "gemmkernels.slice"),
+            """[Slice]
+                MemoryMax=$(floor(Int, cpu_memory_available * memory_margin))
+                MemorySwapMax=0""")
+    run(`systemctl --user daemon-reload`)
+    systemd_slice[] = "gemmkernels.slice"
+
     problems = generate_problems()
 
     # Gather baseline performance and results
     baseline_performances = Dict()
     baseline_data = Dict()
-
     reference_result_dir = get_scratch!(GemmKernels, "reference_results")
     reference_results = Dict()
     let
@@ -511,13 +523,7 @@ function main()
             @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
         end
     end
-
     serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
-
-    # Get the device we're working on
-    cuda_dev = device()
-    mig = uuid(cuda_dev) != parent_uuid(cuda_dev)
-    nvml_dev = NVML.Device(uuid(cuda_dev); mig)
 
     # Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.bin")
@@ -604,11 +610,6 @@ function main()
 
         njobs = total_count - initial_count
         if njobs > 0
-            # Determine memory usage
-            cpu_memory_available = Sys.free_memory()
-            gpu_memory_available = NVML.memory_info(nvml_dev).free
-            memory_margin = 0.9
-
             # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
 
@@ -621,7 +622,7 @@ function main()
                 cpu_memory_available -= cpu_mem_limit
                 gpu_memory_available -= gpu_mem_limit
 
-                (X) -> addworkers(X; gpu_mem_target, cpu_mem_target, cpu_mem_limit)
+                (X) -> addworkers(X; gpu_mem_target, cpu_mem_target)
             end
             measurement_workers = add_measurement_worker(1)
 
@@ -648,7 +649,7 @@ function main()
                 # re-estimate memory limits
                 cpu_mem_limit = cpu_memory_available * memory_margin / max_workers
 
-                max_workers, (X) -> addworkers(X; cpu_mem_target, cpu_mem_limit)
+                max_workers, (X) -> addworkers(X; cpu_mem_target)
             end
             compile_workers = add_compile_worker(max_compile_workers)
 
