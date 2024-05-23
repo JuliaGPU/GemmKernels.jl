@@ -231,11 +231,10 @@ function prepare_config(problem, config, fake=false)
             # other allocation failures will be reported as crashes.
             allocate_data(problem; fake)
         catch err
-            bt = catch_backtrace()
             log = sprint(Base.showerror, err)
 
             if isa(err, OutOfGPUMemoryError)
-                @error "Not enough memory\n" * log
+                @error "Not enough memory\n$log"
                 return "oom"
             else
                 rethrow()
@@ -257,20 +256,20 @@ function prepare_config(problem, config, fake=false)
 
         prepared_state[] = (; data, params, args)
     catch err
-        bt = catch_backtrace()
         log = sprint(Base.showerror, err)
 
         # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
-            @warn "Configuration is invalid\n" * log
+            @warn "Configuration is invalid\n$log"
             return "config_error"
         end
         if isa(err, CUDA.InvalidIRError)
-            @warn "Configuration failed to compile\n" * log
+            @warn "Configuration failed to compile\n$log"
             return "compilation_error"
         end
 
-        @error "Unknown error\n" * log
+        log *= sprint(Base.show_backtrace, catch_backtrace())
+        @error "Unknown error\n$log"
         return "unknown_error"
     end
 
@@ -289,7 +288,6 @@ function measure_config(problem, config, max_time)
         try
             execute(problem, data...; args...)
         catch err
-            bt = catch_backtrace()
             log = sprint(Base.showerror, err)
 
             # NOTE: normally we would expect any configuration here to be executable,
@@ -299,11 +297,12 @@ function measure_config(problem, config, max_time)
 
             # determine the cause of the error
             if isa(err, GemmKernels.ConfigError)
-                @warn "Configuration is invalid\n" * log
+                @warn "Configuration is invalid\n$log"
                 return "config_error", Float64[], nothing, ()
             end
 
-            @error "Unknown error\n" * log
+            log *= sprint(Base.show_backtrace, catch_backtrace())
+            @error "Unknown error\n$log"
             return "unknown_error", Float64[], nothing, ()
         end
         synchronize()
@@ -440,8 +439,15 @@ function need_more_measurements(times)
     return times[end-1] < best_time || times[end] < best_time
 end
 
-function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
-    output = remotecall(args...)
+# returns both the elapsed time, and the result
+function remotecall_until(f, worker, args...; timeout::Real=CONFIG_TIME_LIMIT)
+    t0 = time()
+    output = remotecall(worker) do
+        time = @elapsed begin
+            ret = f(args...)
+        end
+        time, ret
+    end
     # XXX: output is a Future, which doesn't support close,
     #      so we need to throw an exception to end `fetch`
     #timer = Timer(timeout) do t
@@ -462,7 +468,10 @@ function remotecall_until(args...; timeout::Real=CONFIG_TIME_LIMIT)
         isready(output) || Base.throwto(waiter, InterruptException())
     end
     try
-        return fetch(waiter)
+        worker_elapsed, ret = fetch(waiter)
+        master_elapsed = time() - t0
+        overhead = master_elapsed - worker_elapsed
+        return worker_elapsed, overhead, ret
     finally
         close(timer)
     end
@@ -544,7 +553,8 @@ function main()
         try
             rmprocs(worker; waitfor=30)
         catch err
-            @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+            log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+            @error "Failed to stop worker $worker\n$log"
         end
     end
     serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
@@ -563,7 +573,9 @@ function main()
     if isfile(config_path)
         @info "Loading configurations from disk..."
         try
-            all_configs = copy(DataFrame(Arrow.Table(config_path)))
+            read_time = @elapsed begin
+                all_configs = copy(DataFrame(Arrow.Table(config_path)))
+            end
 
             # for some reason Arrow converts nested vectors into subarrays.
             # this complicates us pushing vectors later, so convert them back.
@@ -573,7 +585,7 @@ function main()
                 end
             end
 
-            @info "Loaded $(size(all_configs, 1)) configurations."
+            @info "Loaded $(size(all_configs, 1)) configurations in $(prettytime(read_time))."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
             mv(config_path, "$(config_path).broken-$(Dates.format(now(), "yyyymmddHHMM"))")
@@ -654,7 +666,7 @@ function main()
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
 
             # Spawn measurement workers
-            add_measurement_worker = let
+            measurement_workers, add_measurement_worker = let
                 gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
                 gpu_mem_limit = gpu_mem_target + 1000*2^20      # size of (reasonable) CUDA context
                 cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
@@ -662,12 +674,11 @@ function main()
                 cpu_memory_available -= cpu_mem_limit
                 gpu_memory_available -= gpu_mem_limit
 
-                (X) -> addworkers(X; gpu_mem_target, cpu_mem_target)
+                1, (X) -> addworkers(X; gpu_mem_target, cpu_mem_target)
             end
-            measurement_workers = add_measurement_worker(1)
 
             # Spawn compilation workers
-            max_compile_workers, add_compile_worker = let
+            compile_workers, add_compile_worker = let
                 cpu_mem_target = 1500*2^20  # reasonable size of the heap
                 cpu_mem_limit = 2500*2^20   # compilation headroom
 
@@ -688,7 +699,6 @@ function main()
 
                 max_workers, (X) -> addworkers(X; cpu_mem_target)
             end
-            compile_workers = add_compile_worker(max_compile_workers)
 
             # Functionality to quickly detect already seen configurations, by hashing
             # all columns except the status/time ones added by the tuning script.
@@ -701,10 +711,15 @@ function main()
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
             p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
+            compilation_times = Dict{Symbol, Float64}()
             measurement_times = Dict{Symbol, Float64}()
+            function note_time(collection, key, value)
+                collection[key] = get(collection, key, 0.0) + value
+                return value
+            end
             results = Channel(Inf)
             initial_jobs = Channel(100)
-            promising_jobs = Channel(2 * max_compile_workers)
+            promising_jobs = Channel(2 * compile_workers)
             @sync begin
                 # Job queue
                 job_submitter = errormonitor(@async begin
@@ -725,8 +740,9 @@ function main()
                 # Compilation tasks
                 compilation_time_worker = 0
                 compilation_time_master = 0
-                for worker in compile_workers
+                for _ in 1:compile_workers
                     errormonitor(@async begin
+                        worker = nothing
                         while isopen(initial_jobs)
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
@@ -735,7 +751,10 @@ function main()
                             # ensure we still have a worker
                             if worker === nothing
                                 try
-                                    worker = add_compile_worker(1)[1]
+                                    startup = @elapsed begin
+                                        worker = add_compile_worker(1)[1]
+                                    end
+                                    worker_elapsed += note_time(compilation_times, :startup, startup)
                                 catch err
                                     # give up for this problem
                                     @error "Failed to add compilation worker: $(sprint(Base.showerror, err))"
@@ -754,12 +773,12 @@ function main()
 
                             status = try
                                 # prepare
-                                worker_elapsed += @elapsed begin
-                                    status = @something(
-                                        remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
-                                        error("Time-out preparing configuration")
-                                    )
-                                end
+                                preparing, distribution, status = @something(
+                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
+                                    error("Time-out preparing configuration")
+                                )
+                                worker_elapsed += note_time(compilation_times, :preparing, preparing)
+                                worker_elapsed += note_time(compilation_times, :distribution, distribution)
 
                                 if status != "success"
                                     config.status = status
@@ -769,14 +788,13 @@ function main()
                                 config.status = "promising"
                             catch err
                                 config.status = "crashed"
-
-                                bt = catch_backtrace()
-                                log = sprint(Base.showerror, err)
-                                @error "Unexpected exception on worker $worker: $log"
+                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                @error "Unexpected exception on worker $worker\n$log"
                                 try
                                     rmprocs(worker; waitfor=30)
                                 catch err
-                                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                    @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
                             finally
@@ -803,8 +821,9 @@ function main()
                 # Measurement tasks
                 measuring_time_worker = 0
                 measuring_time_master = 0
-                for worker in measurement_workers
+                for _ in 1:measurement_workers
                     errormonitor(@async begin
+                        worker = nothing
                         while isopen(promising_jobs)
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
@@ -813,7 +832,10 @@ function main()
                             # ensure we still have a worker
                             if worker === nothing
                                 try
-                                    worker = add_measurement_worker(1)[1]
+                                    startup = @elapsed begin
+                                        worker = add_measurement_worker(1)[1]
+                                    end
+                                    worker_elapsed += note_time(measurement_times, :startup, startup)
                                 catch err
                                     # give up for this problem
                                     @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
@@ -832,13 +854,12 @@ function main()
 
                             try
                                 # prepare
-                                preparing = @elapsed begin
-                                    status = @something(
-                                        remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
-                                        error("Time-out preparing configuration")
-                                    )
-                                end
-                                worker_elapsed += preparing
+                                preparing, distribution, status = @something(
+                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
+                                    error("Time-out preparing configuration")
+                                )
+                                worker_elapsed += note_time(measurement_times, :preparing, preparing)
+                                worker_elapsed += note_time(compilation_times, :distribution, distribution)
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -846,20 +867,17 @@ function main()
 
                                 # measure
                                 max_time = 3 * target_time
-                                worker_elapsed += @elapsed begin
-                                    status, measurements, result, times = @something(
-                                        remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
-                                        error("Time-out measuring configuration")
-                                    )
+                                measuring, distribution, (status, measurements, result, times) = @something(
+                                    remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
+                                    error("Time-out measuring configuration")
+                                )
+                                worker_elapsed += measuring
+                                ## measure_config returns subtimes
+                                for (k,v) in pairs(times)
+                                    note_time(measurement_times, k, v)
                                 end
+                                worker_elapsed += note_time(measurement_times, :distribution, distribution)
                                 config.time = minimum(measurements; init=Inf)
-
-                                # report subtimes
-                                times = Dict(pairs(times)..., :preparing => preparing)
-                                for k in keys(times)
-                                    v = times[k]
-                                    measurement_times[k] = get(measurement_times, k, 0.0) + v
-                                end
 
                                 if status != "success"
                                     config.status = status
@@ -867,10 +885,12 @@ function main()
                                 end
 
                                 # verify results
-                                verified = @something(
+                                verifying, distribution, verified = @something(
                                     remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
                                 )
+                                worker_elapsed += note_time(measurement_times, :verifying, verifying)
+                                worker_elapsed += note_time(measurement_times, :distribution, distribution)
                                 if !verified
                                     @warn "Configuration produced invalid result: $(repr_row(config))"
                                     config.status = "invalid_result"
@@ -880,14 +900,13 @@ function main()
                                 config.status = "success"
                             catch err
                                 config.status = "crashed"
-
-                                bt = catch_backtrace()
-                                log = sprint(Base.showerror, err)
-                                @error "Unexpected exception on worker $worker: $log"
+                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                @error "Unexpected exception on worker $worker\n$log"
                                 try
                                     rmprocs(worker; waitfor=30)
                                 catch err
-                                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                    @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
                             finally
@@ -935,7 +954,7 @@ function main()
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
-                            total_workers = length(compile_workers) + length(measurement_workers)
+                            total_workers = compile_workers + measurement_workers
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
 
                             push!(vals, ("", ""))
@@ -948,23 +967,29 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # distributed job times
+                            # compilation timings
                             compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
-                            push!(vals, ("compiling", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
-                            measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
-                            push!(vals, ("measuring", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
+                            push!(vals, ("compilation tasks", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
+                            if !isempty(compilation_times)
+                                for (k, v) in compilation_times
+                                    v_rel = round(100 * v / compilation_time_worker; sigdigits=3)
+                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                end
+                            end
 
                             push!(vals, ("", ""))
 
-                            # detailed timings of the actual measurements
+                            # measurement timings
+                            measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
+                            push!(vals, ("measuring tasks", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
                             if !isempty(measurement_times)
                                 for (k, v) in measurement_times
-                                    v_rel = round(100 * v / sum(values(measurement_times)); sigdigits=3)
+                                    v_rel = round(100 * v / measuring_time_worker; sigdigits=3)
                                     push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
                                 end
-
-                                push!(vals, ("", ""))
                             end
+
+                            push!(vals, ("", ""))
 
                             # job state
                             configs = select_configs(all_configs, problem)
@@ -1019,7 +1044,8 @@ function main()
                             try
                                 rmprocs(worker; waitfor=30)
                             catch err
-                                @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                @error "Failed to stop worker $worker\n$log"
                             end
                         end
                     end
@@ -1062,7 +1088,8 @@ function main()
                 try
                     rmprocs(worker; waitfor=30)
                 catch err
-                    @error "Failed to stop worker $worker" exception=(err, catch_backtrace())
+                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                    @error "Failed to stop worker $worker\n$log"
                 end
             end
         end
