@@ -489,6 +489,17 @@ function main()
 
     # Determine out available memory
     cpu_memory_available = Sys.free_memory()
+
+    # ZFS ARC cache is not counted as available memory (https://github.com/openzfs/zfs/issues/10255), so add the size manually here.
+    try
+        arc_size = parse(Int, first(filter(L -> L[1] == "size", split.(readlines(open("/proc/spl/kstat/zfs/arcstats")))))[end])
+        arc_min_size = parse(Int, first(filter(L -> L[1] == "c_min", split.(readlines(open("/proc/spl/kstat/zfs/arcstats")))))[end])
+
+        # ARC will not grow smaller than its minimum size.
+        cpu_memory_available += max(0, arc_size - arc_min_size)
+    catch
+    end
+
     gpu_memory_available = NVML.memory_info(nvml_dev).free
     memory_margin = 0.9
     ## the parent process uses some memory too
