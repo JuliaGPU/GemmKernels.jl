@@ -22,6 +22,7 @@ end
 
 if "GK_PEEK_DURATION" ∈ keys(ENV)
     Profile.set_peek_duration(parse(Float64, ENV["GK_PEEK_DURATION"]))
+    Profile.init(; n = 10^7, delay = 0.001)
 end
 
 const PROGRESS_OUTPUT = if "GK_PROGRESS_OUTPUT" ∈ keys(ENV)
@@ -31,6 +32,16 @@ else
     stderr
 end
 
+function custom_peek_report()
+    open("profile.log", "w") do io
+        iob = IOBuffer()
+        ioc = IOContext(IOContext(iob, io), :displaysize=>(99999, 99999))
+        Profile.print(ioc, groupby = [:thread, :task], noisefloor = 3.)
+        Base.print(io, String(take!(iob)))
+    end
+end
+
+Profile.peek_report[] = custom_peek_report
 
 ############################################################################################
 
