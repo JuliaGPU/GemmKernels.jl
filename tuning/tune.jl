@@ -706,9 +706,15 @@ function main()
                 end)
 
                 # Compilation tasks
+                compilation_time_worker = 0
+                compilation_time_master = 0
                 for worker in compile_workers
                     errormonitor(@async begin
                         while isopen(initial_jobs)
+                            # keep track of the time spend on the master, and on the workers
+                            master_t0 = time()
+                            worker_elapsed = 0.0
+
                             # ensure we still have a worker
                             if worker === nothing
                                 try
@@ -731,10 +737,12 @@ function main()
 
                             status = try
                                 # prepare
-                                status = @something(
-                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
-                                    error("Time-out preparing configuration")
-                                )
+                                worker_elapsed += @elapsed begin
+                                    status = @something(
+                                        remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
+                                        error("Time-out preparing configuration")
+                                    )
+                                end
 
                                 if status != "success"
                                     config.status = status
@@ -766,15 +774,25 @@ function main()
                                 else
                                     push!(results, (worker, i))
                                 end
+
+                                master_elapsed = time() - master_t0
+                                compilation_time_master += master_elapsed
+                                compilation_time_worker += worker_elapsed
                             end
                         end
                     end)
                 end
 
                 # Measurement tasks
+                measuring_time_worker = 0
+                measuring_time_master = 0
                 for worker in measurement_workers
                     errormonitor(@async begin
                         while isopen(promising_jobs)
+                            # keep track of the time spend on the master, and on the workers
+                            master_t0 = time()
+                            worker_elapsed = 0.0
+
                             # ensure we still have a worker
                             if worker === nothing
                                 try
@@ -787,13 +805,11 @@ function main()
                             end
 
                             # get a job
-                            waiting = @elapsed begin
-                                i = try
-                                    take!(promising_jobs)
-                                catch err
-                                    isa(err, EOFError) || rethrow()
-                                    break
-                                end
+                            i = try
+                                take!(promising_jobs)
+                            catch err
+                                isa(err, EOFError) || rethrow()
+                                break
                             end
                             config = all_configs[i, :]
 
@@ -805,6 +821,7 @@ function main()
                                         error("Time-out preparing configuration")
                                     )
                                 end
+                                worker_elapsed += preparing
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -812,18 +829,21 @@ function main()
 
                                 # measure
                                 max_time = 3 * target_time
-                                status, measurements, result, times = @something(
-                                    remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
-                                    error("Time-out measuring configuration")
-                                )
+                                worker_elapsed += @elapsed begin
+                                    status, measurements, result, times = @something(
+                                        remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
+                                        error("Time-out measuring configuration")
+                                    )
+                                end
                                 config.time = minimum(measurements; init=Inf)
-                                times = Dict(pairs(times)...,
-                                                   :waiting => waiting,
-                                                   :preparing => preparing)
+
+                                # report subtimes
+                                times = Dict(pairs(times)..., :preparing => preparing)
                                 for k in keys(times)
                                     v = times[k]
                                     measurement_times[k] = get(measurement_times, k, 0.0) + v
                                 end
+
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -855,6 +875,10 @@ function main()
                                 worker = nothing
                             finally
                                 push!(results, (worker, i))
+
+                                master_elapsed = time() - master_t0
+                                measuring_time_master += master_elapsed
+                                measuring_time_worker += worker_elapsed
                             end
                         end
                     end)
@@ -907,7 +931,15 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # how much time we spent measuring configurations
+                            # distributed job times
+                            compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
+                            push!(vals, ("compiling", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
+                            measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
+                            push!(vals, ("measuring", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
+
+                            push!(vals, ("", ""))
+
+                            # detailed timings of the actual measurements
                             if !isempty(measurement_times)
                                 for (k, v) in measurement_times
                                     v_rel = round(100 * v / sum(values(measurement_times)); sigdigits=3)
