@@ -441,7 +441,6 @@ end
 
 # returns both the elapsed time, and the result
 function remotecall_until(f, worker, args...; timeout::Real=CONFIG_TIME_LIMIT)
-    t0 = time()
     output = remotecall(worker) do
         time = @elapsed begin
             ret = f(args...)
@@ -468,10 +467,7 @@ function remotecall_until(f, worker, args...; timeout::Real=CONFIG_TIME_LIMIT)
         isready(output) || Base.throwto(waiter, InterruptException())
     end
     try
-        worker_elapsed, ret = fetch(waiter)
-        master_elapsed = time() - t0
-        overhead = master_elapsed - worker_elapsed
-        return worker_elapsed, overhead, ret
+        fetch(waiter)
     finally
         close(timer)
     end
@@ -626,7 +622,7 @@ function main()
 
     # Process problems in order of current ratio, tackling the worst ones first
     perf_ratio(problem) = baseline_performances[problem] / best_times[problem]
-    sort!(problems, by=perf_ratio)
+    #sort!(problems, by=perf_ratio)
 
     # Determine per-problem time limits
     weights = Dict()
@@ -784,12 +780,11 @@ function main()
 
                             status = try
                                 # prepare
-                                preparing, distribution, status = @something(
+                                preparing, status = @something(
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(compilation_times, :preparing, preparing)
-                                worker_elapsed += note_time(compilation_times, :distribution, distribution)
 
                                 if status != "success"
                                     config.status = status
@@ -865,12 +860,11 @@ function main()
 
                             try
                                 # prepare
-                                preparing, distribution, status = @something(
+                                preparing, status = @something(
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(measurement_times, :preparing, preparing)
-                                worker_elapsed += note_time(compilation_times, :distribution, distribution)
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -878,7 +872,7 @@ function main()
 
                                 # measure
                                 max_time = 3 * target_time
-                                measuring, distribution, (status, measurements, result, times) = @something(
+                                measuring, (status, measurements, result, times) = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
                                     error("Time-out measuring configuration")
                                 )
@@ -887,7 +881,6 @@ function main()
                                 for (k,v) in pairs(times)
                                     note_time(measurement_times, k, v)
                                 end
-                                worker_elapsed += note_time(measurement_times, :distribution, distribution)
                                 config.time = minimum(measurements; init=Inf)
 
                                 if status != "success"
@@ -896,12 +889,11 @@ function main()
                                 end
 
                                 # verify results
-                                verifying, distribution, verified = @something(
+                                verifying, verified = @something(
                                     remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
                                 )
                                 worker_elapsed += note_time(measurement_times, :verifying, verifying)
-                                worker_elapsed += note_time(measurement_times, :distribution, distribution)
                                 if !verified
                                     @warn "Configuration produced invalid result: $(repr_row(config))"
                                     config.status = "invalid_result"
