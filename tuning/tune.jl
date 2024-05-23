@@ -7,6 +7,7 @@ using Logging
 using LoggingExtras
 using ProgressMeter: Progress, ProgressUnknown, @showprogress,
                      next!, update!, finish!, cancel
+import Arrow
 using Serialization
 using Statistics
 using StatsBase: percentile
@@ -549,17 +550,33 @@ function main()
     serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
 
     # Load previous results from disk
-    config_path = joinpath(@__DIR__, "configs.bin")
+    config_path = joinpath(@__DIR__, "configs.arrow")
+    ## transition from Serialization to Arrow
+    old_config_path = joinpath(@__DIR__, "configs.bin")
+    if isfile(old_config_path) && !isfile(config_path)
+        df = deserialize(old_config_path)
+        Arrow.write("configs.arrow", df)
+        mv(old_config_path, "$(old_config_path).old")
+    end
+    ## load the new format
     all_configs = create_configs()
     if isfile(config_path)
         @info "Loading configurations from disk..."
         try
-            all_configs = deserialize(config_path)
+            all_configs = copy(DataFrame(Arrow.Table(config_path)))
+
+            # for some reason Arrow converts nested vectors into subarrays.
+            # this complicates us pushing vectors later, so convert them back.
+            for col in names(all_configs)
+                if eltype(all_configs[!, col]) <: SubArray
+                    all_configs[!, col] = map(Vector, all_configs[!, col])
+                end
+            end
 
             @info "Loaded $(size(all_configs, 1)) configurations."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
-            mv(config_path, "$(config_path).broken")
+            mv(config_path, "$(config_path).broken-$(Dates.format(now(), "yyyymmddHHMM"))")
         end
     else
         all_configs.status = String[]
@@ -567,7 +584,7 @@ function main()
     end
     function checkpoint()
         temp_path = "$(config_path).$(getpid())"
-        serialize(temp_path, all_configs)
+        Arrow.write(temp_path, all_configs)
         mv(temp_path, config_path; force=true)
     end
 
