@@ -566,7 +566,7 @@ function main()
         all_configs.time = Float64[]
     end
     function checkpoint()
-        temp_path = "$(config_path).$(getpid)"
+        temp_path = "$(config_path).$(getpid())"
         serialize(temp_path, all_configs)
         mv(temp_path, config_path; force=true)
     end
