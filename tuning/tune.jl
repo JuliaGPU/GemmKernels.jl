@@ -183,10 +183,11 @@ function wait_if_throttling(dev=NVML.Device(parent_uuid(device())))
 end
 
 const systemd_slice = Ref{String}()
-function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing)
+function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, tag="")
     env = [
         "JULIA_NUM_THREADS" => "1",
-        "OPENBLAS_NUM_THREADS" => "1"
+        "OPENBLAS_NUM_THREADS" => "1",
+        "GEMMKERNELS_WORKER_TAG" => tag
     ]
     if gpu_mem_target !== nothing
         push!(env, "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(gpu_mem_target))
@@ -518,7 +519,7 @@ function main()
     reference_result_dir = get_scratch!(GemmKernels, "reference_results")
     reference_results = Dict()
     let
-        worker = addworkers(1)[1]
+        worker = addworkers(1; tag="baseline")[1]
         @showprogress desc="Measuring baselines:" for problem in problems
             path = tempname(reference_result_dir)
             baseline_performances[problem] = remotecall_fetch(worker) do
@@ -681,7 +682,7 @@ function main()
                 cpu_memory_available -= cpu_mem_limit
                 gpu_memory_available -= gpu_mem_limit
 
-                1, (X) -> addworkers(X; gpu_mem_target, cpu_mem_target)
+                1, (X) -> addworkers(X; gpu_mem_target, cpu_mem_target, tag="measurement")
             end
 
             # Spawn compilation workers
@@ -704,7 +705,7 @@ function main()
                 println("  limit determined by #CPU threads: $max_workers_cpu_threads")
                 println("  limit determined by #jobs: $max_workers_njobs")
 
-                max_workers, (X) -> addworkers(X; cpu_mem_target)
+                max_workers, (X) -> addworkers(X; cpu_mem_target, tag="compilation")
             end
 
             # Functionality to quickly detect already seen configurations, by hashing
@@ -1082,7 +1083,7 @@ function main()
     if best_configs === nothing
         @info "Benchmarking configurations for plot..."
         best_configs = let
-            worker = addworkers(1)[1]
+            worker = addworkers(1; tag="best-configs-benchmarker")[1]
             try
                 remotecall_fetch(worker) do
                     benchmark_configs(all_configs)
