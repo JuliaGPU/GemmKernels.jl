@@ -33,7 +33,7 @@ else
 end
 
 function custom_peek_report()
-    open("profile.log", "w") do io
+    open("profile.$(getpid()).log", "w") do io
         iob = IOBuffer()
         ioc = IOContext(IOContext(iob, io), :displaysize=>(99999, 99999))
         Profile.print(ioc, groupby = [:thread, :task], noisefloor = 3.)
