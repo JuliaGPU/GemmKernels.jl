@@ -700,10 +700,10 @@ function main()
                     max_workers_njobs
                 )
 
-                println("- max # of compilation workers: $max_workers")
-                println("  limit determined by CPU memory: $max_workers_cpu_mem")
-                println("  limit determined by #CPU threads: $max_workers_cpu_threads")
-                println("  limit determined by #jobs: $max_workers_njobs")
+                println(" - max # of compilation workers: $max_workers")
+                println("   limit determined by CPU memory: $max_workers_cpu_mem")
+                println("   limit determined by #CPU threads: $max_workers_cpu_threads")
+                println("   limit determined by #jobs: $max_workers_njobs")
 
                 max_workers, (X) -> addworkers(X; cpu_mem_target, tag="compilation")
             end
@@ -714,8 +714,13 @@ function main()
             hash_config(config) = hash(((getproperty(config, col) for col in problem_cols)...,))
             seen_configs = Set(hash_config.(eachrow(configs)))
 
-            # Process jobs!
+            # determine time limits and intervals
             println(" - time limit: $(prettytime(time_limits[problem]))")
+            checkpoint_duration = @elapsed checkpoint()
+            checkpoint_interval = max(300, 20 * checkpoint_duration)
+            println(" - checkpointing every $(prettytime(checkpoint_interval))")
+
+            # Process jobs!
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
             p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
@@ -926,14 +931,19 @@ function main()
 
                 # Result processing task
                 errormonitor(@async begin
+                    ## to avoid excessive checkpointing
                     t_checkpoint = 0
+                    ## for reporting purposes
                     nfinished = 0
+                    new_configs = similar(all_configs, 0)
+
                     while true
                         # process results
                         if isready(results)
                             while isready(results)
                                 worker, i = take!(results)
                                 config = all_configs[i, :]
+                                push!(new_configs, config)
                                 nfinished += 1
 
                                 # Update configuration
@@ -944,7 +954,7 @@ function main()
                             end
 
                             # save results every minute
-                            if time() - t_checkpoint > 60
+                            if time() - t_checkpoint > checkpoint_interval
                                 checkpoint()
                                 t_checkpoint = time()
                             end
@@ -973,7 +983,7 @@ function main()
 
                             # compilation timings
                             compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
-                            push!(vals, ("compilation tasks", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
+                            push!(vals, ("compilation times", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
                             if !isempty(compilation_times)
                                 for (k, v) in compilation_times
                                     v_rel = round(100 * v / compilation_time_worker; sigdigits=3)
@@ -985,7 +995,7 @@ function main()
 
                             # measurement timings
                             measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
-                            push!(vals, ("measuring tasks", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
+                            push!(vals, ("measuring times", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
                             if !isempty(measurement_times)
                                 for (k, v) in measurement_times
                                     v_rel = round(100 * v / measuring_time_worker; sigdigits=3)
@@ -996,14 +1006,18 @@ function main()
                             push!(vals, ("", ""))
 
                             # job state
-                            configs = select_configs(all_configs, problem)
-                            category_counters = Dict(counter(configs[!, "status"]))
+                            category_counters = Dict(counter(new_configs[!, "status"]))
+                            for k in keys(initial_category_counters)
+                                if !haskey(category_counters, k)
+                                    category_counters[k] = 0
+                                end
+                            end
                             for k in sort(collect(keys(category_counters));
                                           by=k->category_counters[k])
                                 initial = get(initial_category_counters, k, 0)
                                 current = category_counters[k]
-                                relative = round(100 * current / sum(values(category_counters)); sigdigits=3)
-                                push!(vals, (k, "$(current-initial) + $(initial) ($(relative)%)"))
+                                relative = round(100 * (current+initial) / (sum(values(category_counters))+sum(values(initial_category_counters))); sigdigits=3)
+                                push!(vals, (k, "$(current) + $(initial) ($(relative)%)"))
                             end
 
                             push!(vals, ("", ""))
