@@ -1057,24 +1057,26 @@ function main()
                     # Clean-up
                     close(initial_jobs, EOFError())
                     close(promising_jobs, EOFError())
-                    if workers() != [myid()]
-                        for worker in workers()
-                            try
-                                rmprocs(worker; waitfor=30)
-                            catch err
-                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
-                                @error "Failed to stop worker $worker\n$log"
-                            end
-                        end
-                    end
 
-                    # Printn a summary
+                    # Print a summary
                     final_count = size(configs, 1)
                     println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
                 end)
             end
         end
         checkpoint()
+
+        # Remove workers
+        if workers() != [myid()]
+            for worker in workers()
+                try
+                    rmprocs(worker; waitfor=30)
+                catch err
+                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                    @error "Failed to stop worker $worker\n$log"
+                end
+            end
+        end
     end
 
 
