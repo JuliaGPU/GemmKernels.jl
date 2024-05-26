@@ -675,6 +675,8 @@ function main()
         if njobs > 0
             # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
+            problem_cpu_memory_available = cpu_memory_available * memory_margin
+            problem_gpu_memory_available = gpu_memory_available * memory_margin
 
             # Spawn measurement workers
             measurement_workers, add_measurement_worker = let
@@ -682,8 +684,8 @@ function main()
                 gpu_mem_limit = gpu_mem_target + 1000*2^20      # size of (reasonable) CUDA context
                 cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
                 cpu_mem_limit = 3*sizeof(problem) + 1500*2^20   # headroom for CUPTI
-                cpu_memory_available -= cpu_mem_limit
-                gpu_memory_available -= gpu_mem_limit
+                problem_cpu_memory_available -= cpu_mem_limit
+                problem_gpu_memory_available -= gpu_mem_limit
 
                 1, (X) -> addworkers(X; gpu_mem_target, cpu_mem_target, tag="measurement")
             end
@@ -693,7 +695,7 @@ function main()
                 cpu_mem_target = 1500*2^20  # reasonable size of the heap
                 cpu_mem_limit = 2500*2^20   # compilation headroom
 
-                max_workers_cpu_mem = floor(Int, cpu_memory_available * memory_margin / cpu_mem_limit)
+                max_workers_cpu_mem = floor(Int, problem_cpu_memory_available / cpu_mem_limit)
                 max_workers_cpu_threads = Sys.CPU_THREADS
                 max_workers_njobs = njobs+1
 
