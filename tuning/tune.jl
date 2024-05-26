@@ -1064,8 +1064,8 @@ function main()
                     close(promising_jobs, EOFError())
 
                     # Print a summary
-                    final_count = size(configs, 1)
-                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(final_count-initial_count)/total_count; digits=2))% ($(final_count-initial_count)/$(total_count-initial_count)) additional configurations")
+                    new_count = size(new_configs, 1)
+                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
                 end)
             end
         end
