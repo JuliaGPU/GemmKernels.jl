@@ -625,9 +625,14 @@ function main()
     weights = Dict()
     for problem in problems
         weights[problem] = if baseline_performances[problem] > best_times[problem]
+            # fast enough already
             0
         else
-            length(config_iterator(problem))
+            # based on how many configs remain
+            total = length(config_iterator(problem))
+            configs = select_configs(all_configs, problem)
+            done = size(configs, 1)
+            total - done
         end
     end
     total_weight = sum(values(weights))
