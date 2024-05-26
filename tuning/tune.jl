@@ -761,8 +761,17 @@ function main()
                             master_t0 = time()
                             worker_elapsed = 0.0
 
+                            # get a job
+                            i = try
+                                take!(initial_jobs)
+                            catch err
+                                isa(err, EOFError) || rethrow()
+                                break
+                            end
+                            config = all_configs[i, :]
+
                             # ensure we still have a worker
-                            if worker === nothing
+                            while worker === nothing
                                 try
                                     startup = @elapsed begin
                                         worker = add_compile_worker(1)[1]
@@ -774,15 +783,6 @@ function main()
                                     break
                                 end
                             end
-
-                            # get a job
-                            i = try
-                                take!(initial_jobs)
-                            catch err
-                                isa(err, EOFError) || rethrow()
-                                break
-                            end
-                            config = all_configs[i, :]
 
                             status = try
                                 # prepare
@@ -841,8 +841,17 @@ function main()
                             master_t0 = time()
                             worker_elapsed = 0.0
 
+                            # get a job
+                            i = try
+                                take!(promising_jobs)
+                            catch err
+                                isa(err, EOFError) || rethrow()
+                                break
+                            end
+                            config = all_configs[i, :]
+
                             # ensure we still have a worker
-                            if worker === nothing
+                            while worker === nothing
                                 try
                                     startup = @elapsed begin
                                         worker = add_measurement_worker(1)[1]
@@ -854,15 +863,6 @@ function main()
                                     break
                                 end
                             end
-
-                            # get a job
-                            i = try
-                                take!(promising_jobs)
-                            catch err
-                                isa(err, EOFError) || rethrow()
-                                break
-                            end
-                            config = all_configs[i, :]
 
                             try
                                 # prepare
