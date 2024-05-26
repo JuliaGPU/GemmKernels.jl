@@ -621,16 +621,14 @@ function main()
         best_times[problem] = minimum(filter(x->x.status == "success", configs).time; init=Inf)
     end
 
-    # Process problems in order of current ratio, tackling the worst ones first
-    perf_ratio(problem) = baseline_performances[problem] / best_times[problem]
-    #sort!(problems, by=perf_ratio)
-
     # Determine per-problem time limits
     weights = Dict()
     for problem in problems
-        # start with the number of problems, and bias it towards problems with a bad ratio
-        bias(x) = 100 * exp(-5 * x)
-        weights[problem] = length(config_iterator(problem)) * bias(perf_ratio(problem))
+        weights[problem] = if baseline_performances[problem] > best_times[problem]
+            0
+        else
+            length(config_iterator(problem))
+        end
     end
     total_weight = sum(values(weights))
     time_limits = Dict()
