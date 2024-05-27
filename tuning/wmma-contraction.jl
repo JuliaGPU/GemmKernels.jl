@@ -247,7 +247,7 @@ function plot_best_configs(all_configs, best_configs)
          color=colors, ylims=(0,150),
         #  series_annotations=text.(annotations, :top, 6, rotation = 90),
          # xxx: work around title getting cut off
-         left_margin=1Plots.cm, bottom_margin=1.5Plots.cm)
+         left_margin=1Plots.cm, bottom_margin=1Plots.cm)
 
     # put the coverage percentage in the bar
     annotations = map(coverage) do pct
