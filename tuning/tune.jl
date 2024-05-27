@@ -1119,23 +1119,12 @@ function main()
             end
         end
 
-        # Add coverage to best configs
-        best_configs.coverage .= 0.0
-        for problem in problems
-            configs = select_configs(all_configs, problem)
-            nconfigs = length(config_iterator(problem))
-            nmeasured = size(configs, 1)
-
-            best_config = select_configs(best_configs, problem)
-            best_config.coverage .= nmeasured / nconfigs
-        end
-
         serialize(best_configs_path, best_configs)
     end
 
     # Plotting results
     @info "Plotting results..."
-    plot_best_configs(best_configs)
+    plot_best_configs(all_configs, best_configs)
 end
 
 # Write logging messages to file for persistence.

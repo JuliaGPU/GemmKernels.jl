@@ -184,7 +184,7 @@ end
 
 ## output
 
-function plot_best_configs(df)
+function plot_best_configs(all_configs, best_configs)
     markershapes = Dict(
         "NN" => :circle,
         "NT" => :dtriangle,
@@ -197,17 +197,36 @@ function plot_best_configs(df)
     xlabel!("Tensor contraction")
     ylabel!("Performance relative to cuTENSOR [%]")
 
-    idx = 1:nrow(df)
-    labels = map(eachrow(df)) do row
-        name_idx = findfirst(el -> el["parseableName"] == row.name, jsonData)
-        if name_idx == nothing
-            error("Unknown parseable name: $(row.name)")
+    problems = generate_problems()
+    idx = 1:length(problems)
+
+    labels = []
+    ratios = []
+    ratios_lo = []
+    ratios_hi = []
+    coverage = []
+
+    for problem in problems
+        name_idx = findfirst(el -> el["parseableName"] == problem.name, jsonData)
+        name_idx == nothing && error("Unknown parseable name: $(problem.name)")
+        push!(labels, jsonData[name_idx]["name"])
+
+        best_config = select_configs(best_configs, problem)
+        if isempty(best_config)
+            push!(coverage, 0)
+            push!(ratios, 0)
+            push!(ratios_lo, 0)
+            push!(ratios_hi, 0)
+            continue
         end
-        jsonData[name_idx]["name"]
+        best_config = best_config[1, :]
+        configs = select_configs(all_configs, problem)
+
+        push!(ratios, 100 * perf_ratio(best_config.gemmkernels_times, best_config.baseline_times))
+        push!(ratios_lo, 100 * perf_ratio_lo(best_config.gemmkernels_times, best_config.baseline_times))
+        push!(ratios_hi, 100 * perf_ratio_hi(best_config.gemmkernels_times, best_config.baseline_times))
+        push!(coverage, 100 * size(configs, 1) / length(config_iterator(problem)))
     end
-    ratios = @. 100 * perf_ratio(df.gemmkernels_times, df.baseline_times)
-    ratios_lo = @. 100 * perf_ratio_lo(df.gemmkernels_times, df.baseline_times)
-    ratios_hi = @. 100 * perf_ratio_hi(df.gemmkernels_times, df.baseline_times)
 
     # determine colors based on a gradient: 100 is white, over 100 becomes green, below 100 becomes red
     colors = map(ratios) do ratio
@@ -231,8 +250,8 @@ function plot_best_configs(df)
          left_margin=1Plots.cm, bottom_margin=1.5Plots.cm)
 
     # put the coverage percentage in the bar
-    annotations = map(eachrow(df)) do row
-        "   $(round(Int, 100*row.coverage))%"
+    annotations = map(coverage) do pct
+        "   $(round(Int, pct))%"
     end
     annotate!(p, idx, 0, text.(annotations, 5, rotation=90, :left))
 
