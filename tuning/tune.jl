@@ -213,8 +213,10 @@ end
 
 ############################################################################################
 
-# allocate data and compile kernels
 const prepared_state = Ref{Any}(nothing)
+cached_data = nothing
+
+# allocate data and compile kernels
 function prepare_config(problem, config, fake=false)
     @info "Preparing $(repr_row(config))"
     state = prepared_state[]
@@ -275,13 +277,7 @@ function prepare_config(problem, config, fake=false)
     return "success"
 end
 
-const prepared_results = Ref{Any}(nothing)
-function set_results(problem, results)
-    prepared_results[] = results
-end
-
 # take time measurements
-const measured_results = Ref{Any}(nothing)
 function measure_config(problem, config, max_time)
     @info "Measuring $(repr_row(config))"
     state = prepared_state[]
@@ -303,12 +299,12 @@ function measure_config(problem, config, max_time)
             # determine the cause of the error
             if isa(err, GemmKernels.ConfigError)
                 @warn "Configuration is invalid\n$log"
-                return "config_error", Float64[], ()
+                return "config_error", Float64[], nothing, ()
             end
 
             log *= sprint(Base.show_backtrace, catch_backtrace())
             @error "Unknown error\n$log"
-            return "unknown_error", Float64[], ()
+            return "unknown_error", Float64[], nothing, ()
         end
         synchronize()
     end
@@ -322,14 +318,13 @@ function measure_config(problem, config, max_time)
     push!(measurements, cur_time)
     if cur_time > max_time
         @info "Configuration is too slow"
-        return "slow", measurements, (; measuring)
+        return "slow", measurements, nothing, (; measuring)
     end
 
     # make sure we're starting with an idle device
     settling = @elapsed wait_if_throttling()
 
     # second measurement: fetch results to verify
-    result = nothing
     initializing = @elapsed CUDA.@sync initialize_data(problem, data...; params...)
     settling += @elapsed wait_if_throttling()
     measuring += @elapsed begin
@@ -342,7 +337,7 @@ function measure_config(problem, config, max_time)
     copying = @elapsed begin
         # NOTE: we adapt, since the result may be a non-contiguous view,
         #       and copying those allocates GPU memory.
-        measured_results[] = adapt(Array, result)
+        result = adapt(Array, result)
     end
 
     # subsequent measurements: keep going until time doesn't improve
@@ -355,14 +350,7 @@ function measure_config(problem, config, max_time)
     end
 
     @info "Measured $(prettytime(minimum(measurements))) in $(length(measurements)) measurements"
-    return "success", measurements, (; warmup, initializing, settling, measuring, copying)
-end
-
-function verify_results(problem, config)
-    @info "Verifying $(repr_row(config))"
-    @assert prepared_results[] !== nothing
-    @assert measured_results[] !== nothing
-    verify(problem, prepared_results[], measured_results[])
+    return "success", measurements, result, (; warmup, initializing, settling, measuring, copying)
 end
 
 function benchmark_configs(all_configs)
@@ -879,11 +867,6 @@ function main()
                                     @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
                                     break
                                 end
-
-                                @something(
-                                    remotecall_until(set_results, worker, problem, reference_result),
-                                    error("Time-out uploading reference results")
-                                )
                             end
 
                             try
@@ -900,7 +883,7 @@ function main()
 
                                 # measure
                                 max_time = 3 * target_time
-                                measuring, (status, measurements, times) = @something(
+                                measuring, (status, measurements, result, times) = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
                                     error("Time-out measuring configuration")
                                 )
@@ -918,7 +901,7 @@ function main()
 
                                 # verify results
                                 verifying, verified = @something(
-                                    remotecall_until(verify_results, worker, problem, config),
+                                    remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
                                 )
                                 worker_elapsed += note_time(measurement_times, :verifying, verifying)
