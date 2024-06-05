@@ -1068,8 +1068,9 @@ function main()
                     println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
                 end)
             end
+
+            checkpoint()
         end
-        checkpoint()
 
         # Remove workers
         if workers() != [myid()]
