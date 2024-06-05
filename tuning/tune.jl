@@ -655,6 +655,9 @@ function main()
         configs = select_configs(all_configs, problem)
         sweep_start = time()
 
+        num_compilation_workers_started = 0
+        num_measurement_workers_started = 0
+
         # See if there's anything we need to do
         best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
         target_time = baseline_performances[problem]
@@ -687,7 +690,10 @@ function main()
                 problem_cpu_memory_available -= cpu_mem_limit
                 problem_gpu_memory_available -= gpu_mem_limit
 
-                1, (X) -> addworkers(X; gpu_mem_target, cpu_mem_target, tag="measurement")
+                1, (X) -> begin
+                    num_measurement_workers_started += X
+                    addworkers(X; gpu_mem_target, cpu_mem_target, tag="measurement")
+                end
             end
 
             # Spawn compilation workers
@@ -710,7 +716,10 @@ function main()
                 println("   limit determined by #CPU threads: $max_workers_cpu_threads")
                 println("   limit determined by #jobs: $max_workers_njobs")
 
-                max_workers, (X) -> addworkers(X; cpu_mem_target, tag="compilation")
+                max_workers, (X) -> begin
+                    num_compilation_workers_started += X
+                    addworkers(X; cpu_mem_target, tag="compilation")
+                end
             end
 
             # Functionality to quickly detect already seen configurations, by hashing
@@ -1024,6 +1033,12 @@ function main()
                                 relative = round(100 * (current+initial) / (sum(values(category_counters))+sum(values(initial_category_counters))); sigdigits=3)
                                 push!(vals, (k, "$(current) + $(initial) ($(relative)%)"))
                             end
+
+                            push!(vals, ("", ""))
+
+                            # num workers started
+                            push!(vals, ("# of compilation workers started", num_compilation_workers_started))
+                            push!(vals, ("# of measurement workers started", num_measurement_workers_started))
 
                             push!(vals, ("", ""))
 
