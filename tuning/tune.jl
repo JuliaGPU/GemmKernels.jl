@@ -981,6 +981,7 @@ function main()
                             current_count = initial_count + nfinished
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
+                            push!(vals, ("sweep for problem started at", Dates.format(Dates.unix2datetime(sweep_start), "yyyy-mm-dd HH:MM:SS")))
                             push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
                             total_workers = compile_workers + measurement_workers
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
