@@ -16,6 +16,7 @@ using Profile
 using Adapt
 using Scratch
 using Profile
+using ProfileSVG
 
 if myid() == 1
     using Plots
@@ -35,12 +36,15 @@ end
 
 function custom_peek_report()
     tag = get(ENV, "GEMMKERNELS_WORKER_TAG", "main")
+
     open("profile.$tag.$(getpid()).log", "w") do io
         iob = IOBuffer()
         ioc = IOContext(IOContext(iob, io), :displaysize=>(99999, 99999))
         Profile.print(ioc, groupby = [:thread, :task], noisefloor = 3.)
         Base.print(io, String(take!(iob)))
     end
+
+    ProfileSVG.save("profile.$tag.$(getpid()).svg")
 end
 
 Profile.peek_report[] = custom_peek_report
