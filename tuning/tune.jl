@@ -34,7 +34,8 @@ else
 end
 
 function custom_peek_report()
-    open("profile.$(getpid()).log", "w") do io
+    tag = get(ENV, "GEMMKERNELS_WORKER_TAG", "main")
+    open("profile.$tag.$(getpid()).log", "w") do io
         iob = IOBuffer()
         ioc = IOContext(IOContext(iob, io), :displaysize=>(99999, 99999))
         Profile.print(ioc, groupby = [:thread, :task], noisefloor = 3.)
