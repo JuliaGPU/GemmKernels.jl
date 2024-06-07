@@ -627,7 +627,7 @@ function main()
     best_times = Dict()
     for problem in problems
         configs = select_configs(all_configs, problem)
-        best_times[problem] = minimum(filter(x->x.status == "success", configs).time; init=Inf)
+        best_times[problem] = minimum(filter(:status => ==("success"), configs; view=true).time; init=Inf)
     end
 
     # Determine per-problem time limits
@@ -672,7 +672,7 @@ function main()
         num_measurement_workers_started = 0
 
         # See if there's anything we need to do
-        best_time = minimum(filter(x->x.status == "success", configs).time; init=Inf)
+        best_time = minimum(filter(:status => ==("success"), configs, view=true).time; init=Inf)
         target_time = baseline_performances[problem]
         println(" - target time: $(prettytime(target_time))")
         if best_time != Inf

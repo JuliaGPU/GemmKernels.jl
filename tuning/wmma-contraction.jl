@@ -106,9 +106,7 @@ function config_iterator(problem)
 end
 
 function select_configs(configs, problem)
-    filter(configs) do config
-        config.name == problem.name && config.extents == [problem.extents...]
-    end
+    filter([:name, :extents] => (name, extents) -> name == problem.name && (length(extents) == length(problem.extents)) && all(extents .== problem.extents), configs; view=true)
 end
 
 function repr_row(row)
