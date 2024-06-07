@@ -480,6 +480,8 @@ function remotecall_until(f, worker, args...; timeout::Real=CONFIG_TIME_LIMIT)
 end
 
 function main()
+    @info "Started tuning script."
+
     #
     # Phase 1: Prepare
     #
@@ -613,13 +615,15 @@ function main()
         mv(temp_path, config_path; force=true)
     end
 
-    # Give configurations that ran into an unknown error another change
+    # Give configurations that ran into an unknown error another chance
     # (note that we don't retry them within a run)
+    @info "Deleting configurations that ran into an unknown error..."
     deleteat!(all_configs, in.(all_configs.status,
                                Ref([["unknown_error", "pending", "promising"];
                                     RETRY_STATUSSES])))
 
     # Find the best times so far
+    @info "Determining best times found so far for each problem..."
     best_times = Dict()
     for problem in problems
         configs = select_configs(all_configs, problem)
@@ -627,6 +631,7 @@ function main()
     end
 
     # Determine per-problem time limits
+    @info "Determining per-problem weights..."
     weights = Dict()
     for problem in problems
         weights[problem] = if baseline_performances[problem] > best_times[problem]
@@ -654,6 +659,8 @@ function main()
     #
     # Phase 2: Sweep parameters
     #
+
+    @info "Starting phase 2: Sweep parameters..."
 
     for (problem_idx, problem) in enumerate(problems)
         println("\nProcessing $problem [$problem_idx/$(length(problems))]...")
@@ -1087,7 +1094,8 @@ function main()
 
                     # Print a summary
                     new_count = size(new_configs, 1)
-                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
+                    perf_percentage = round(100 * target_time / best_time; digits=2)
+                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)) ($perf_percentage), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
                 end)
             end
 
@@ -1111,6 +1119,8 @@ function main()
     #
     # Phase 3: Process results
     #
+
+    @info "Starting phase 3: Process results..."
 
     # Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")
