@@ -625,8 +625,10 @@ function main()
     # Find the best times so far
     @info "Determining best times found so far for each problem..."
     best_times = Dict()
+    num_done = Dict()
     for problem in problems
         configs = select_configs(all_configs, problem)
+        num_done[problem] = size(configs, 1)
         best_times[problem] = minimum(filter(:status => ==("success"), configs; view=true).time; init=Inf)
     end
 
@@ -640,9 +642,7 @@ function main()
         else
             # based on how many configs remain
             total = length(config_iterator(problem))
-            configs = select_configs(all_configs, problem)
-            done = size(configs, 1)
-            total - done
+            total - num_done[problem]
         end
     end
     total_weight = sum(values(weights))
@@ -676,7 +676,8 @@ function main()
         target_time = baseline_performances[problem]
         println(" - target time: $(prettytime(target_time))")
         if best_time != Inf
-            println(" - best time so far: $(prettytime(best_time))")
+            perf_percentage = round(100 * target_time / best_time; digits=2)
+            println(" - best time so far: $(prettytime(best_time)) ($perf_percentage%)")
             if !EXHAUSTIVE && best_time < target_time
                 println("   fast enough already")
                 continue
@@ -1004,7 +1005,8 @@ function main()
                             # configuration times
                             push!(vals, ("target time", prettytime(target_time)))
                             if !isinf(best_time)
-                                push!(vals, ("best time", prettytime(best_time)))
+                                perf_percentage = round(100 * target_time / best_time; digits=2)
+                                push!(vals, ("best time", "$(prettytime(best_time)) ($perf_percentage%)"))
                             end
 
                             push!(vals, ("", ""))
@@ -1095,7 +1097,7 @@ function main()
                     # Print a summary
                     new_count = size(new_configs, 1)
                     perf_percentage = round(100 * target_time / best_time; digits=2)
-                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)) ($perf_percentage), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
+                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)) ($perf_percentage%), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
                 end)
             end
 
