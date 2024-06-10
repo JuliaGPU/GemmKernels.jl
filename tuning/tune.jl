@@ -1169,7 +1169,8 @@ end
 function log_filename()
     path = joinpath(@__DIR__, "tuning.log")
     if myid() != 1
-        path = "$(path).$(myid())"
+        tag = get(ENV, "GEMMKERNELS_WORKER_TAG", "main")
+        path = "$(path).$(myid()).$tag"
     end
     path
 end
