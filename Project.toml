@@ -29,6 +29,6 @@ cuTENSOR = "011b41b2-24ef-40a8-b3eb-fa098493e9e1"
 
 [compat]
 CUDA = "3.5, 4, 5"
-LLVM = "3, 4, 5, 6"
+LLVM = "3, 4, 5, 6, 7, 8, 9"
 LLVMLoopInfo = "1"
 julia = "1.8"
