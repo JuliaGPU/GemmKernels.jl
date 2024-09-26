@@ -7,6 +7,7 @@ cd $DIR
 GPU_ID=0
 GPU_CLOCK=-1
 MEM_CLOCK=-1
+UNPRIVILEGED=0
 
 usage()
 {
@@ -22,6 +23,7 @@ Options:
                            before benchmarking, in MHz (default the max frequency).
 -mc, --memory-clock speed  Change the frequency the GPU memory clock is locked to
                            before benchmarking, in MHz (default the max frequency).
+-u, --unprivileged         Skip the setup.sh script, which requires root privileges.
 EOF
 }
 
@@ -46,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             MEM_CLOCK=$1
             shift
             ;;
+        -u|--unprivileged)
+            shift
+            UNPRIVILEGED=1
+            ;;
         -*)
             echo "Unknown command-line option '$1'."
             echo "Try '$0 --help' for more information."
@@ -66,7 +72,9 @@ if [[ $# -ne 0 ]]; then
 fi
 
 # set-up GPUs
-sudo -b ./setup.sh $GPU_ID $GPU_CLOCK $MEM_CLOCK $$
+if [[ "$UNPRIVILEGED" != "1" ]]; then
+    sudo -b ./setup.sh $GPU_ID $GPU_CLOCK $MEM_CLOCK $$
+fi
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 
 echo "+++ :julia: Instantiating project"
