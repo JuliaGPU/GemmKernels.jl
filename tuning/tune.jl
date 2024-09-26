@@ -509,14 +509,16 @@ function main()
     ## the parent process uses some memory too
     cpu_memory_available -= 5000*2^20
     ## pool the remaining memory in a systemd slice
-    systemd_config = joinpath(homedir(), ".config", "systemd", "user")
-    mkpath(systemd_config)
-    write(joinpath(systemd_config, "gemmkernels.slice"),
-            """[Slice]
-                MemoryMax=$(floor(Int, cpu_memory_available * memory_margin))
-                MemorySwapMax=0""")
-    run(`systemctl --user daemon-reload`)
-    systemd_slice[] = "gemmkernels.slice"
+    if get(ENV, "GK_NO_SYSTEMD", 0) == 0
+        systemd_config = joinpath(homedir(), ".config", "systemd", "user")
+        mkpath(systemd_config)
+        write(joinpath(systemd_config, "gemmkernels.slice"),
+                """[Slice]
+                    MemoryMax=$(floor(Int, cpu_memory_available * memory_margin))
+                    MemorySwapMax=0""")
+        run(`systemctl --user daemon-reload`)
+        systemd_slice[] = "gemmkernels.slice"
+    end
 
     problems = generate_problems()
 

@@ -8,6 +8,7 @@ GPU_ID=0
 GPU_CLOCK=-1
 MEM_CLOCK=-1
 UNPRIVILEGED=0
+DISABLE_SYSTEMD=0
 
 usage()
 {
@@ -24,6 +25,7 @@ Options:
 -mc, --memory-clock speed  Change the frequency the GPU memory clock is locked to
                            before benchmarking, in MHz (default the max frequency).
 -u, --unprivileged         Skip the setup.sh script, which requires root privileges.
+--no-systemd               Do not use systemd.
 EOF
 }
 
@@ -52,6 +54,10 @@ while [[ $# -gt 0 ]]; do
             shift
             UNPRIVILEGED=1
             ;;
+        --no-systemd)
+            shift
+            DISABLE_SYSTEMD=1
+            ;;
         -*)
             echo "Unknown command-line option '$1'."
             echo "Try '$0 --help' for more information."
@@ -76,6 +82,10 @@ if [[ "$UNPRIVILEGED" != "1" ]]; then
     sudo -b ./setup.sh $GPU_ID $GPU_CLOCK $MEM_CLOCK $$
 fi
 export CUDA_VISIBLE_DEVICES=$GPU_ID
+
+if [[ "$DISABLE_SYSTEMD" == "1" ]]; then
+    export GK_NO_SYSTEMD=1
+fi
 
 echo "+++ :julia: Instantiating project"
 julia --project -e 'using Pkg; Pkg.develop(path=dirname(@__DIR__)); Pkg.instantiate(); Pkg.precompile()'
