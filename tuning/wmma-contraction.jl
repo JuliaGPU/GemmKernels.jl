@@ -3,6 +3,7 @@
 using JSON
 using Base.Iterators: product
 using Combinatorics: permutations
+using StatsBase
 
 const data_type = Float16
 const compute_type = Float16
@@ -247,11 +248,16 @@ function plot_best_configs(all_configs, best_configs)
          # xxx: work around title getting cut off
          left_margin=1Plots.cm, bottom_margin=1Plots.cm)
 
-    # put the coverage percentage in the bar
-    annotations = map(coverage) do pct
-        "   $(round(Int, pct))%"
+    # put the coverage percentage and relative performance in the bar
+    annotations = map(coverage, ratios) do cov_pct, perf_pct
+        "   $(round(Int, cov_pct))% | $(round(Int, perf_pct))%"
     end
-    annotate!(p, idx, 0, text.(annotations, 5, rotation=90, :left))
+    annotate!(p, idx, 0, text.(annotations, 4, rotation=90, :left))
+
+    # draw geometric mean of speedup factors
+    mean_speedup = geomean(ratios)
+    hline!([mean_speedup], color=:black, linestyle=:dash)
+    annotate!(p, last(idx) + 1, mean_speedup, text("geomean:\n$(round(Int, mean_speedup))%", 5, rotation=0, :left, :bottom))
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end
