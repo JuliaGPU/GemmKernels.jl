@@ -998,6 +998,7 @@ function main()
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             push!(vals, ("sweep for problem started at", Dates.format(sweep_start_date, "yyyy-mm-dd HH:MM:SS")))
+                            push!(vals, ("sweeping until at most", Dates.format(sweep_start_date + Second(time_limits[problem]), "yyyy-mm-dd HH:MM:SS")))
                             push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
                             total_workers = compile_workers + measurement_workers
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
