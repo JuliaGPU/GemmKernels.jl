@@ -378,11 +378,6 @@ function benchmark_configs(all_configs)
     select!(candidate_configs, Not(:time))
 
     # benchmark
-    nbenchmarks = size(candidate_configs, 1) + size(problems, 1)
-    p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking:", showspeed=true, output=PROGRESS_OUTPUT)
-    best_configs = similar(all_configs, 0)
-    best_configs.gemmkernels_times = Vector{Float64}[]
-    best_configs.baseline_times = Vector{Float64}[]
     for problem in problems
         select_configs(candidate_configs, problem) === nothing && continue
 
@@ -396,12 +391,7 @@ function benchmark_configs(all_configs)
             execute_baseline(problem, data...; args...)
             wait_if_throttling()
 
-            for i in 1:BENCHMARK_SAMPLES
-                prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-                push!(baseline_times, cur_time)
-                next!(p)
-            end
+            CUDA.@profile external=true execute_baseline(problem, data...; args...)
         end
 
         # measure gemmkernels
@@ -410,29 +400,9 @@ function benchmark_configs(all_configs)
             # warm-up
             params = create_params(config)
             args = prepare(problem, data...; params...)
-            execute(problem, data...; args...)
-            wait_if_throttling()
-
-            times = []
-            for i in 1:BENCHMARK_SAMPLES
-                prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-                push!(times, cur_time)
-                next!(p)
-            end
-
-            if best_config === nothing || minimum(times) < minimum(best_config.gemmkernels_times)
-                best_config = (; gemmkernels_times = times, copy(config)...)
-            end
-        end
-
-        if best_config !== nothing
-            best_config = (; baseline_times, best_config...)
-            push!(best_configs, best_config)
+            CUDA.@profile external=true execute(problem, data...; args...)
         end
     end
-
-    return best_configs
 end
 
 function need_more_measurements(times)
@@ -481,6 +451,37 @@ end
 
 function main()
     @info "Started tuning script."
+
+    config_path = joinpath(@__DIR__, "configs.arrow")
+    all_configs = create_configs()
+    if isfile(config_path)
+        @info "Loading configurations from disk..."
+        try
+            read_time = @elapsed begin
+                all_configs = copy(DataFrame(Arrow.Table(config_path)))
+            end
+
+            # for some reason Arrow converts nested vectors into subarrays.
+            # this complicates us pushing vectors later, so convert them back.
+            for col in names(all_configs)
+                if eltype(all_configs[!, col]) <: SubArray
+                    all_configs[!, col] = map(Vector, all_configs[!, col])
+                end
+            end
+
+            @info "Loaded $(size(all_configs, 1)) configurations in $(prettytime(read_time))."
+        catch err
+            @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
+            mv(config_path, "$(config_path).broken-$(Dates.format(now(), "yyyymmddHHMM"))")
+        end
+    else
+        all_configs.status = String[]
+        all_configs.time = Float64[]
+    end
+
+    benchmark_configs(all_configs)
+
+    return
 
     #
     # Phase 1: Prepare
