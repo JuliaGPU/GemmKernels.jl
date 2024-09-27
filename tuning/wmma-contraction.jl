@@ -255,7 +255,7 @@ function plot_best_configs(all_configs, best_configs)
     annotate!(p, idx, 0, text.(annotations, 4, rotation=90, :left))
 
     # draw geometric mean of speedup factors
-    mean_speedup = geomean(ratios)
+    mean_speedup = geomean(filter(>=(1e-6), ratios))
     hline!([mean_speedup], color=:black, linestyle=:dash)
     annotate!(p, last(idx) + 1, mean_speedup, text("geomean:\n$(round(Int, mean_speedup))%", 5, rotation=0, :left, :bottom))
 
