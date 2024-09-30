@@ -509,14 +509,16 @@ function main()
     ## the parent process uses some memory too
     cpu_memory_available -= 5000*2^20
     ## pool the remaining memory in a systemd slice
-    systemd_config = joinpath(homedir(), ".config", "systemd", "user")
-    mkpath(systemd_config)
-    write(joinpath(systemd_config, "gemmkernels.slice"),
-            """[Slice]
-                MemoryMax=$(floor(Int, cpu_memory_available * memory_margin))
-                MemorySwapMax=0""")
-    run(`systemctl --user daemon-reload`)
-    systemd_slice[] = "gemmkernels.slice"
+    if get(ENV, "GK_NO_SYSTEMD", 0) == 0
+        systemd_config = joinpath(homedir(), ".config", "systemd", "user")
+        mkpath(systemd_config)
+        write(joinpath(systemd_config, "gemmkernels.slice"),
+                """[Slice]
+                    MemoryMax=$(floor(Int, cpu_memory_available * memory_margin))
+                    MemorySwapMax=0""")
+        run(`systemctl --user daemon-reload`)
+        systemd_slice[] = "gemmkernels.slice"
+    end
 
     problems = generate_problems()
 
@@ -996,6 +998,7 @@ function main()
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             push!(vals, ("sweep for problem started at", Dates.format(sweep_start_date, "yyyy-mm-dd HH:MM:SS")))
+                            push!(vals, ("sweeping until at most", Dates.format(sweep_start_date + Second(trunc(time_limits[problem])), "yyyy-mm-dd HH:MM:SS")))
                             push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
                             total_workers = compile_workers + measurement_workers
                             push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
