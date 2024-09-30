@@ -205,10 +205,10 @@ function plot_best_configs(all_configs, best_configs)
     ratios_hi = []
     coverage = []
 
-    for problem in problems
+    for (i, problem) in enumerate(problems)
         name_idx = findfirst(el -> el["parseableName"] == problem.name, jsonData)
         name_idx == nothing && error("Unknown parseable name: $(problem.name)")
-        push!(labels, jsonData[name_idx]["name"])
+        push!(labels, "$(jsonData[name_idx]["name"]) ($i)")
 
         best_config = select_configs(best_configs, problem)
         if isempty(best_config)
