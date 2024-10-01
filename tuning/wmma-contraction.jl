@@ -240,10 +240,13 @@ function plot_best_configs(all_configs, best_configs)
         end
     end
 
+    mean_speedup = geomean(filter(>=(1e-6), ratios))
+    mean_speedup_combine = geomean(max.(ratios, 100))
+
     bar!(p, idx, legend=false,
          xticks=(idx, labels), xrotation=45, xtickfont=font(5),
          ratios, err=(ratios .- ratios_lo, ratios_hi .- ratios),
-         color=colors, ylims=(0,150),
+         color=colors, ylims=(0, max(mean_speedup + 10, mean_speedup_combine + 10, 150)),
         #  series_annotations=text.(annotations, :top, 6, rotation = 90),
          # xxx: work around title getting cut off
          left_margin=1Plots.cm, bottom_margin=1Plots.cm)
@@ -255,9 +258,11 @@ function plot_best_configs(all_configs, best_configs)
     annotate!(p, idx, 0, text.(annotations, 4, rotation=90, :left))
 
     # draw geometric mean of speedup factors
-    mean_speedup = geomean(filter(>=(1e-6), ratios))
     hline!([mean_speedup], color=:black, linestyle=:dash)
-    annotate!(p, last(idx) + 1, mean_speedup, text("geomean:\n$(round(Int, mean_speedup))%", 5, rotation=0, :left, :bottom))
+    annotate!(p, last(idx) + 1, mean_speedup, text("GM(r):\n$(round(Int, mean_speedup))%", 3, rotation=0, :left, :bottom, color=:black))
+
+    hline!([mean_speedup_combine], color=:red, linestyle=:dash)
+    annotate!(p, last(idx) + 1, mean_speedup_combine, text("GM(max(r, 100)):\n$(round(Int, mean_speedup_combine))%", 3, rotation=0, :left, :bottom, color=:red))
 
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
 end
