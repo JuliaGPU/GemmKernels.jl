@@ -24,8 +24,8 @@ struct Default end
     block_tile = Tile(conf.block_shape)
 
     # Cooperatively store a block_shape.M x block_shape.N tile of D from shared to global memory within one threadblock
-    @loopinfo unroll for warp_tile = parallelise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
-        @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
+    @loopinfo unroll for warp_tile = parallelise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block, conf.is_cd_col_major)
+        @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32, conf.is_cd_col_major)
             x = @inbounds Layout.load(conf.shared_d_layout, shmem_d, thread_tile)
             x = transform(x, thread_tile)
             @inbounds Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
