@@ -32,9 +32,10 @@ using GemmKernels: CTASwizzle
     #= Operator =#
     operator                    # which operator to use in the inner loop
 
-    #= Is A & B stored in Column major order? This determines the iteration order of the parallelisation =#
+    #= Are the matrices stored in Column major order? This determines the iteration order of the parallelisation =#
     is_a_col_major
     is_b_col_major
+    is_cd_col_major
 
     #= CTA Swizzling function =#
     cta_swizzle
@@ -71,6 +72,7 @@ function Base.show(io::IO, @nospecialize(config::Config))
 
     println(io, "is_a_col_major:   $(config.is_a_col_major)")
     println(io, "is_b_col_major:   $(config.is_b_col_major)")
+    println(io, "is_cd_col_major:  $(config.is_cd_col_major)")
 
     println(io, "cta_swizzle:      $(config.cta_swizzle)")
 end
@@ -305,9 +307,10 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         #= Operators =#
         operator,
 
-        #= Is A & B Col Major? =#
+        #= Are the matrices Col Major? =#
         is_a_col_major,
         is_b_col_major,
+        is_cd_col_major,
 
         #= CTA Swizzle function =#
         cta_swizzle,

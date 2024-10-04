@@ -69,7 +69,7 @@ function config_iterator(problem)
 
         [false, true],
         [false, true],
-        [true], # only true for is_D_col_major because of illegal memory accesses
+        [false, true],
         permutations(intersect(problem.modes[1], problem.modes[2])),
         permutations(intersect(problem.modes[1], problem.modes[3])),
         permutations(intersect(problem.modes[2], problem.modes[3])),
