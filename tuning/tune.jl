@@ -691,7 +691,7 @@ function main()
         println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
 
         njobs = total_count - initial_count
-        if njobs > 0
+        if (njobs > 0) && (parse(Int, get(ENV, "GK_PLOT_ONLY", 0)) == 0)
             # Determine memory requirement
             println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
             problem_cpu_memory_available = cpu_memory_available * memory_margin
