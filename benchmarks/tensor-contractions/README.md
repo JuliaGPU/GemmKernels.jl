@@ -17,3 +17,6 @@ If Nsight Compute throws a 'No kernels were profiled.' error, try adding this to
 ```bash
 LD_LIBRARY_PATH=$($PATH_TO_JULIA -e 'println(joinpath(Sys.BINDIR, Base.LIBDIR, "julia"))')
 ```
+
+- `benchmark-suite.json`: Original sizes from TCCG.
+- `benchmark-suite-32.json`: Original sizes from TCCG, rounded to the next multiple of 32. This reduces the need for padding.
