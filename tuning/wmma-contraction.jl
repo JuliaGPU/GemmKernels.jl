@@ -11,7 +11,7 @@ const accumulate_type = Float32
 
 const zero_c = true
 
-config_path = joinpath(@__DIR__, "../test/benchmark-suite-32.json")
+config_path = joinpath(@__DIR__, "../test/benchmark-suite.json")
 fp = open(config_path, "r")
 const jsonData = JSON.parse(read(fp, String))
 
@@ -192,7 +192,7 @@ function plot_best_configs(all_configs, best_configs)
     )
 
     p = plot()
-    title!("TTCG on $(name(device())) (rounded to 32)")
+    title!("TTCG on $(name(device()))")
     xlabel!("Tensor contraction")
     ylabel!("Performance relative to cuTENSOR [%]")
 
