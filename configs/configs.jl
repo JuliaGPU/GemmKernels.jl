@@ -770,7 +770,7 @@ function initialize_data(tc::TensorContraction, a, b, c, d; kwargs...)
         rng = CUDA.RNG(0)
         rand!(rng, a)
         rand!(rng, b)
-        rand!(rng, c)
+        fill!(c, 0)
         fill!(d, 0)
     else
         # use the params to get appropriately padded tensors
