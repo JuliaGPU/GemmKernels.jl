@@ -430,6 +430,10 @@ function benchmark_configs(all_configs)
             best_config = (; baseline_times, best_config...)
             push!(best_configs, best_config)
         end
+
+        for arr in data
+            CUDA.unsafe_free!(arr)
+        end
     end
 
     return best_configs
