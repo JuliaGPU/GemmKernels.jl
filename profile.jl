@@ -17,7 +17,7 @@ function main()
     problems = generate_problems()
 
     problem_id = parse(Int, ENV["GK_PROBLEM_ID"])
-    problems = problems[problem_id]
+    problems = problems[problem_id:problem_id]
 
     # gather the best configurations for each problem
     candidate_configs = similar(all_configs, 0)
