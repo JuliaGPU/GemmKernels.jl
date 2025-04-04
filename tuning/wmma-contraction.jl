@@ -192,7 +192,7 @@ function plot_best_configs(all_configs, best_configs)
     )
 
     p = plot()
-    title!("TTCG on $(name(device()))")
+    title!("TCCG on $(name(device()))")
     xlabel!("Tensor contraction")
     ylabel!("Performance relative to cuTENSOR [%]")
 
