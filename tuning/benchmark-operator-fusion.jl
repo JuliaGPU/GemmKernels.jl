@@ -6,7 +6,7 @@ using Printf
 using Statistics
 using NVTX
 
-const BENCHMARK_SAMPLES = 10
+const BENCHMARK_SAMPLES = 1
 
 isinteractive() || include("wmma-contraction.jl")
 
@@ -117,47 +117,25 @@ function generate_data()
         @assert size(configs, 1) == 1
         config = first(configs)
 
-        if ARGS[1] == "a"
-            (i == 40) || continue
-            benchmark_gemmkernels(problem, config; elementwise_op = "none")
-            benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
-        elseif ARGS[1] == "b"
-            (i == 43) || continue
-            benchmark_cutensor(problem; elementwise_op = "none")
-            benchmark_cutensor(problem; elementwise_op = "supported")
-        elseif ARGS[1] == "c"
-            (i == 40) || continue
-            benchmark_gemmkernels(problem, config; elementwise_op = "none")
-            benchmark_gemmkernels(problem, config; elementwise_op = "supported")
-        elseif ARGS[1] == "d"
-            (i == 35) || continue
-            benchmark_cutensor(problem; elementwise_op = "none")
-            benchmark_cutensor(problem; elementwise_op = "supported")
-        elseif ARGS[1] == "e"
-            (i == 46) || continue
-            benchmark_cutensor(problem; elementwise_op = "none")
-            benchmark_cutensor(problem; elementwise_op = "supported")
-        else
-            @error "UNKNOWN"
-        end
+        (i == parse(Int, ARGS[1])) || continue
 
-        # # (1.1)
-        # cut_base = benchmark_cutensor(problem; elementwise_op = "none")
+        # (1.1)
+        cut_base = benchmark_cutensor(problem; elementwise_op = "none")
 
-        # # (1.2)
-        # gk_base = benchmark_gemmkernels(problem, config; elementwise_op = "none")
+        # (1.2)
+        gk_base = benchmark_gemmkernels(problem, config; elementwise_op = "none")
 
-        # # (2.1)
-        # cut_supported = benchmark_cutensor(problem; elementwise_op = "supported")
+        # (2.1)
+        cut_supported = benchmark_cutensor(problem; elementwise_op = "supported")
 
-        # # (2.2)
-        # gk_supported = benchmark_gemmkernels(problem, config; elementwise_op = "supported")
+        # (2.2)
+        gk_supported = benchmark_gemmkernels(problem, config; elementwise_op = "supported")
 
-        # # (3.1)
-        # cut_unsupported = benchmark_cutensor(problem; elementwise_op = "unsupported")
+        # (3.1)
+        cut_unsupported = benchmark_cutensor(problem; elementwise_op = "unsupported")
 
-        # # (3.2)
-        # gk_unsupported = benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
+        # (3.2)
+        gk_unsupported = benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
 
         # pretty_percent(result, base) = @sprintf "%+.0f\\%%" 100*(minimum(result)/minimum(base)-1)
 
