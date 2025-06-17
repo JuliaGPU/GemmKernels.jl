@@ -5,7 +5,7 @@ using DataFrames
 using Printf
 using Statistics
 
-const BENCHMARK_SAMPLES = 5
+const BENCHMARK_SAMPLES = 10
 
 isinteractive() || include("wmma-contraction.jl")
 
@@ -126,7 +126,7 @@ function generate_data()
         # (3.2)
         gk_unsupported = benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
 
-        pretty_percent(result, base) = @sprintf "%+.2f%%" 100*(minimum(result)/minimum(base)-1)
+        pretty_percent(result, base) = @sprintf "%+.0f\\%%" 100*(minimum(result)/minimum(base)-1)
 
         @info "Compared to best-configs cuTENSOR:    $(pretty_percent(cut_base, config["baseline_times"]))"
         @info "Compared to best-configs GemmKernels: $(pretty_percent(gk_base, config["gemmkernels_times"]))"
@@ -156,8 +156,11 @@ function pretty_print_data(data)
             cut_unsupported = row["cuTENSOR_unsupported_times"]
             gk_unsupported = row["GemmKernels_unsupported_times"]
 
-            res(actual) = @sprintf "%.2f" 1e6*minimum(actual)
-            rat(actual, base) = @sprintf "%.2f (%+3.1f%%)" 1e6*minimum(actual) 100*(minimum(actual)/minimum(base)-1)
+            summarise(x) = @sprintf "%f .. %f (avg: %f, std: %f, rel std: %.2f%%)" minimum(x) maximum(x) mean(x) std(x) 100*std(x)/mean(x)
+            res(actual) = @sprintf "%.0f" 1e6*minimum(actual)
+            rat(actual, base) = @sprintf "%+3.1f\\%%" 100*(minimum(actual)/minimum(base)-1)
+            # rat(actual, base) = @sprintf "%+3.1f\\%% %s" 100*(minimum(actual)/minimum(base)-1) summarise(actual)
+            # rat(actual, base) = @sprintf "rel std: %.2f%%" 100*std(actual)/mean(actual)
 
             println(io, "$i & $name & $(res(cut_base)) & $(res(gk_base)) & $(rat(cut_supported, cut_base)) & $(rat(gk_supported, gk_base)) & $(rat(cut_unsupported, cut_base)) & $(rat(gk_unsupported, gk_base)) \\\\")
         end
