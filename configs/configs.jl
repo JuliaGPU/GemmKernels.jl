@@ -853,23 +853,58 @@ function prepare_baseline(tc::TensorContraction, a, b, c, d)
     end
 end
 
-function execute_baseline(tc::TensorContraction, a, b, c, d; plan)
+function execute_baseline(tc::TensorContraction, a, b, c, d; plan, elementwise_op="none")
     # use unpadded buffers
     let a = padded_view(a, tc.extents[tc.modes[2]]),
         b = padded_view(b, tc.extents[tc.modes[3]]),
         c = padded_view(c, tc.extents[tc.modes[1]]),
         d = padded_view(d, tc.extents[tc.modes[1]])
 
-        cuTENSOR.contract!(
-            tc.alpha,
-            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
-            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
-            tc.beta,
-            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
-            cuTENSOR.CUTENSOR_OP_IDENTITY;
-            compute_type=tc.accumulate_type,
-            plan
-        )
+        if elementwise_op == "none"
+            cuTENSOR.contract!(
+                tc.alpha,
+                a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                tc.beta,
+                d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                cuTENSOR.CUTENSOR_OP_IDENTITY;
+                compute_type=tc.accumulate_type,
+                plan
+            )
+        elseif elementwise_op == "supported"
+            # ReLU
+            cuTENSOR.contract!(
+                tc.alpha,
+                a, tc.modes[2], cuTENSOR.CUTENSOR_OP_RELU,
+                b, tc.modes[3], cuTENSOR.CUTENSOR_OP_RELU,
+                tc.beta,
+                d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                cuTENSOR.CUTENSOR_OP_RELU;
+                compute_type=tc.accumulate_type,
+                plan
+            )
+        elseif elementwise_op == "unsupported"
+            # Leaky ReLU
+            leaky_relu(x) = (x > 0) ? x : convert(typeof(x), 0.01) * x
+
+            a = leaky_relu.(a)
+            b = leaky_relu.(b)
+
+            cuTENSOR.contract!(
+                tc.alpha,
+                a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                tc.beta,
+                d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                cuTENSOR.CUTENSOR_OP_IDENTITY;
+                compute_type=tc.accumulate_type,
+                plan
+            )
+
+            d = leaky_relu.(d)
+        else
+            @error "Unknown elementwise operation for cuTENSOR baseline."
+        end
     end
 end
 
@@ -908,7 +943,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
                                         OP_M, OP_N, OP_K,
                                         kernel,
                                         is_A_col_major, is_B_col_major, is_D_col_major,
-                                        PERM_M, PERM_N, PERM_K, cta_swizzle)
+                                        PERM_M, PERM_N, PERM_K, cta_swizzle, elementwise_op="none")
     @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
     data_type = tc.a_type
 
@@ -922,17 +957,30 @@ function prepare(tc::TensorContraction, a, b, c, d;
     # get underlying output data to return to the caller
     data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
 
+    relu(x) = (x > 0) ? x : zero(x)
+    leaky_relu(x) = (x > 0) ? x : convert(typeof(x), 0.01) * x
+
+    op_function = if elementwise_op == "none"
+        identity
+    elseif elementwise_op == "supported"
+        relu
+    elseif elementwise_op == "unsupported"
+        leaky_relu
+    else
+        @error "Unknown elementwise operation for baseline."
+    end
+
     a_extent = padded_extents[tc.modes[2]]
     a_desc = Tensors.TensorDescriptor(
-        length(a_extent), collect(Int, a_extent), collect(Int, cumprod((1, a_extent...))[1:end-1]), data_type, identity
+        length(a_extent), collect(Int, a_extent), collect(Int, cumprod((1, a_extent...))[1:end-1]), data_type, op_function
     )
     b_extent = padded_extents[tc.modes[3]]
     b_desc = Tensors.TensorDescriptor(
-        length(b_extent), collect(Int, b_extent), collect(Int, cumprod((1, b_extent...))[1:end-1]), data_type, identity
+        length(b_extent), collect(Int, b_extent), collect(Int, cumprod((1, b_extent...))[1:end-1]), data_type, op_function
     )
     c_extent = padded_extents[tc.modes[1]]
     c_desc = Tensors.TensorDescriptor(
-        length(c_extent), collect(Int, c_extent), collect(Int, cumprod((1, c_extent...))[1:end-1]), data_type, identity
+        length(c_extent), collect(Int, c_extent), collect(Int, cumprod((1, c_extent...))[1:end-1]), data_type, op_function
     )
 
     GemmKernels.Tensors.OVERRIDE_do_override = true
@@ -963,7 +1011,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
 end
 
 function execute(tc::TensorContraction, a, b, c, d; plan,
-                                        padded_a, padded_b, padded_c, padded_d, data_d)
+                                        padded_a, padded_b, padded_c, padded_d, data_d, elementwise_op="none")
     Tensors.contraction!(plan, tc.alpha, padded_a, padded_b, tc.beta, padded_c, padded_d)
     return data_d
 end
