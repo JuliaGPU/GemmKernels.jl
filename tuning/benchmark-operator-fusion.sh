@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${positional[@]}"
 
-if [[ $# -ne 0 ]]; then
+if [[ $# -ne 1 ]]; then
     echo "Expected 0 positional arguments, but got $#."
     echo "Try '$0 --help' for more information."
     exit 1

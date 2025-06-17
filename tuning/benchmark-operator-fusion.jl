@@ -4,6 +4,7 @@ using Serialization
 using DataFrames
 using Printf
 using Statistics
+using NVTX
 
 const BENCHMARK_SAMPLES = 10
 
@@ -29,13 +30,17 @@ function benchmark_cutensor(problem; elementwise_op)
 
     data = allocate_data(problem)
     args = prepare_baseline(problem, data...)
-    execute_baseline(problem, data...; args..., elementwise_op)
+    NVTX.@range "cutensor $elementwise_op" begin
+        for i=1:BENCHMARK_SAMPLES
+            execute_baseline(problem, data...; args..., elementwise_op)
+        end
+    end
     wait_if_throttling()
 
     for i in 1:BENCHMARK_SAMPLES
-        prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args..., elementwise_op)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-        push!(times, cur_time)
+        # prof = CUDA.@profile execute_baseline(problem, data...; args..., elementwise_op)
+        # cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        # push!(times, cur_time)
     end
 
     return times
@@ -49,13 +54,17 @@ function benchmark_gemmkernels(problem, config; elementwise_op)
     data = allocate_data(problem)
     params = create_params(config)
     args = prepare(problem, data...; params..., elementwise_op)
-    execute(problem, data...; args...)
+    NVTX.@range "gemmkernels $elementwise_op" begin
+        for i = 1:BENCHMARK_SAMPLES
+            execute(problem, data...; args...)
+        end
+    end
     wait_if_throttling()
 
     for i in 1:BENCHMARK_SAMPLES
-        prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-        push!(times, cur_time)
+        # prof = CUDA.@profile execute(problem, data...; args...)
+        # cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        # push!(times, cur_time)
     end
 
     return times
@@ -108,38 +117,62 @@ function generate_data()
         @assert size(configs, 1) == 1
         config = first(configs)
 
-        # (1.1)
-        cut_base = benchmark_cutensor(problem; elementwise_op = "none")
+        if ARGS[1] == "a"
+            (i == 40) || continue
+            benchmark_gemmkernels(problem, config; elementwise_op = "none")
+            benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
+        elseif ARGS[1] == "b"
+            (i == 43) || continue
+            benchmark_cutensor(problem; elementwise_op = "none")
+            benchmark_cutensor(problem; elementwise_op = "supported")
+        elseif ARGS[1] == "c"
+            (i == 40) || continue
+            benchmark_gemmkernels(problem, config; elementwise_op = "none")
+            benchmark_gemmkernels(problem, config; elementwise_op = "supported")
+        elseif ARGS[1] == "d"
+            (i == 35) || continue
+            benchmark_cutensor(problem; elementwise_op = "none")
+            benchmark_cutensor(problem; elementwise_op = "supported")
+        elseif ARGS[1] == "e"
+            (i == 46) || continue
+            benchmark_cutensor(problem; elementwise_op = "none")
+            benchmark_cutensor(problem; elementwise_op = "supported")
+        else
+            @error "UNKNOWN"
+        end
 
-        # (1.2)
-        gk_base = benchmark_gemmkernels(problem, config; elementwise_op = "none")
+        # # (1.1)
+        # cut_base = benchmark_cutensor(problem; elementwise_op = "none")
 
-        # (2.1)
-        cut_supported = benchmark_cutensor(problem; elementwise_op = "supported")
+        # # (1.2)
+        # gk_base = benchmark_gemmkernels(problem, config; elementwise_op = "none")
 
-        # (2.2)
-        gk_supported = benchmark_gemmkernels(problem, config; elementwise_op = "supported")
+        # # (2.1)
+        # cut_supported = benchmark_cutensor(problem; elementwise_op = "supported")
 
-        # (3.1)
-        cut_unsupported = benchmark_cutensor(problem; elementwise_op = "unsupported")
+        # # (2.2)
+        # gk_supported = benchmark_gemmkernels(problem, config; elementwise_op = "supported")
 
-        # (3.2)
-        gk_unsupported = benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
+        # # (3.1)
+        # cut_unsupported = benchmark_cutensor(problem; elementwise_op = "unsupported")
 
-        pretty_percent(result, base) = @sprintf "%+.0f\\%%" 100*(minimum(result)/minimum(base)-1)
+        # # (3.2)
+        # gk_unsupported = benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
 
-        @info "Compared to best-configs cuTENSOR:    $(pretty_percent(cut_base, config["baseline_times"]))"
-        @info "Compared to best-configs GemmKernels: $(pretty_percent(gk_base, config["gemmkernels_times"]))"
+        # pretty_percent(result, base) = @sprintf "%+.0f\\%%" 100*(minimum(result)/minimum(base)-1)
 
-        push!(data, Dict(
-            :name => "$name",
-            :cuTENSOR_base_times => cut_base,
-            :GemmKernels_base_times => gk_base,
-            :cuTENSOR_supported_times => cut_supported,
-            :GemmKernels_supported_times => gk_supported,
-            :cuTENSOR_unsupported_times => cut_unsupported,
-            :GemmKernels_unsupported_times => gk_unsupported,
-        ))
+        # @info "Compared to best-configs cuTENSOR:    $(pretty_percent(cut_base, config["baseline_times"]))"
+        # @info "Compared to best-configs GemmKernels: $(pretty_percent(gk_base, config["gemmkernels_times"]))"
+
+        # push!(data, Dict(
+        #     :name => "$name",
+        #     :cuTENSOR_base_times => cut_base,
+        #     :GemmKernels_base_times => gk_base,
+        #     :cuTENSOR_supported_times => cut_supported,
+        #     :GemmKernels_supported_times => gk_supported,
+        #     :cuTENSOR_unsupported_times => cut_unsupported,
+        #     :GemmKernels_unsupported_times => gk_unsupported,
+        # ))
     end
 
     data
@@ -170,8 +203,9 @@ end
 function main()
     data_path = joinpath(@__DIR__, "operator-fusion.bin")
 
-    if !isfile(data_path)
+    if true
         data = generate_data()
+        return
         serialize(data_path, data)
     else
         @info "Loading previous results from disk."
