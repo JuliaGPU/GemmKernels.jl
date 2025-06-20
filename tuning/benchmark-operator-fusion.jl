@@ -44,21 +44,26 @@ end
 function benchmark_gemmkernels(problem, config; elementwise_op)
     CUDA.reclaim()
 
-    times = []
+    try
+        times = []
 
-    data = allocate_data(problem)
-    params = create_params(config)
-    args = prepare(problem, data...; params..., elementwise_op)
-    execute(problem, data...; args...)
-    wait_if_throttling()
+        data = allocate_data(problem)
+        params = create_params(config)
+        args = prepare(problem, data...; params..., elementwise_op)
+        execute(problem, data...; args...)
+        wait_if_throttling()
 
-    for i in 1:BENCHMARK_SAMPLES
-        prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-        push!(times, cur_time)
+        for i in 1:BENCHMARK_SAMPLES
+            prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
+            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+            push!(times, cur_time)
+        end
+
+        return times
+    catch ex
+        @warn "$(problem) $(elementwise_op) gave error: $(ex)"
+        return [Inf]
     end
-
-    return times
 end
 
 function generate_data()
