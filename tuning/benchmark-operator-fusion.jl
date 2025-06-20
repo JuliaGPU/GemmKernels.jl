@@ -4,9 +4,8 @@ using Serialization
 using DataFrames
 using Printf
 using Statistics
-using NVTX
 
-const BENCHMARK_SAMPLES = 1
+const BENCHMARK_SAMPLES = 10
 
 isinteractive() || include("wmma-contraction.jl")
 
@@ -30,17 +29,13 @@ function benchmark_cutensor(problem; elementwise_op)
 
     data = allocate_data(problem)
     args = prepare_baseline(problem, data...)
-    NVTX.@range "cutensor $elementwise_op" begin
-        for i=1:BENCHMARK_SAMPLES
-            execute_baseline(problem, data...; args..., elementwise_op)
-        end
-    end
+    execute_baseline(problem, data...; args..., elementwise_op)
     wait_if_throttling()
 
     for i in 1:BENCHMARK_SAMPLES
-        # prof = CUDA.@profile execute_baseline(problem, data...; args..., elementwise_op)
-        # cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-        # push!(times, cur_time)
+        prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args..., elementwise_op)
+        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        push!(times, cur_time)
     end
 
     return times
@@ -49,25 +44,26 @@ end
 function benchmark_gemmkernels(problem, config; elementwise_op)
     CUDA.reclaim()
 
-    times = []
+    try
+        times = []
 
-    data = allocate_data(problem)
-    params = create_params(config)
-    args = prepare(problem, data...; params..., elementwise_op)
-    NVTX.@range "gemmkernels $elementwise_op" begin
-        for i = 1:BENCHMARK_SAMPLES
-            execute(problem, data...; args...)
+        data = allocate_data(problem)
+        params = create_params(config)
+        args = prepare(problem, data...; params..., elementwise_op)
+        execute(problem, data...; args...)
+        wait_if_throttling()
+
+        for i in 1:BENCHMARK_SAMPLES
+            prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
+            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+            push!(times, cur_time)
         end
-    end
-    wait_if_throttling()
 
-    for i in 1:BENCHMARK_SAMPLES
-        # prof = CUDA.@profile execute(problem, data...; args...)
-        # cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-        # push!(times, cur_time)
+        return times
+    catch ex
+        @warn "$(problem) $(elementwise_op) gave error: $(ex)"
+        return [Inf]
     end
-
-    return times
 end
 
 function generate_data()
@@ -117,8 +113,6 @@ function generate_data()
         @assert size(configs, 1) == 1
         config = first(configs)
 
-        (i == parse(Int, ARGS[1])) || continue
-
         # (1.1)
         cut_base = benchmark_cutensor(problem; elementwise_op = "none")
 
@@ -137,20 +131,20 @@ function generate_data()
         # (3.2)
         gk_unsupported = benchmark_gemmkernels(problem, config; elementwise_op = "unsupported")
 
-        # pretty_percent(result, base) = @sprintf "%+.0f\\%%" 100*(minimum(result)/minimum(base)-1)
+        pretty_percent(result, base) = @sprintf "%+.0f\\%%" 100*(minimum(result)/minimum(base)-1)
 
-        # @info "Compared to best-configs cuTENSOR:    $(pretty_percent(cut_base, config["baseline_times"]))"
-        # @info "Compared to best-configs GemmKernels: $(pretty_percent(gk_base, config["gemmkernels_times"]))"
+        @info "Compared to best-configs cuTENSOR:    $(pretty_percent(cut_base, config["baseline_times"]))"
+        @info "Compared to best-configs GemmKernels: $(pretty_percent(gk_base, config["gemmkernels_times"]))"
 
-        # push!(data, Dict(
-        #     :name => "$name",
-        #     :cuTENSOR_base_times => cut_base,
-        #     :GemmKernels_base_times => gk_base,
-        #     :cuTENSOR_supported_times => cut_supported,
-        #     :GemmKernels_supported_times => gk_supported,
-        #     :cuTENSOR_unsupported_times => cut_unsupported,
-        #     :GemmKernels_unsupported_times => gk_unsupported,
-        # ))
+        push!(data, Dict(
+            :name => "$name",
+            :cuTENSOR_base_times => cut_base,
+            :GemmKernels_base_times => gk_base,
+            :cuTENSOR_supported_times => cut_supported,
+            :GemmKernels_supported_times => gk_supported,
+            :cuTENSOR_unsupported_times => cut_unsupported,
+            :GemmKernels_unsupported_times => gk_unsupported,
+        ))
     end
 
     data
@@ -181,9 +175,8 @@ end
 function main()
     data_path = joinpath(@__DIR__, "operator-fusion.bin")
 
-    if true
+    if !isfile(data_path)
         data = generate_data()
-        return
         serialize(data_path, data)
     else
         @info "Loading previous results from disk."
