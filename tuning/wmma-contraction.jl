@@ -251,9 +251,15 @@ function plot_best_configs(all_configs, best_configs)
          # xxx: work around title getting cut off
          left_margin=1Plots.cm, bottom_margin=1Plots.cm)
 
+    # # put the coverage percentage and relative performance in the bar
+    # annotations = map(coverage, ratios) do cov_pct, perf_pct
+    #     "   $(round(Int, cov_pct))% | $(round(Int, perf_pct))%"
+    # end
+    # annotate!(p, idx, 0, text.(annotations, 4, rotation=90, :left))
+
     # put the coverage percentage and relative performance in the bar
     annotations = map(coverage, ratios) do cov_pct, perf_pct
-        "   $(round(Int, cov_pct))% | $(round(Int, perf_pct))%"
+        "   $(round(Int, perf_pct))%"
     end
     annotate!(p, idx, 0, text.(annotations, 4, rotation=90, :left))
 
