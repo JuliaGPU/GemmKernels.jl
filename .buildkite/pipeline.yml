@@ -28,41 +28,42 @@ steps:
         matrix:
           setup:
             julia:
-              - "1.9"
               - "1.10"
+              - "1.11"
           #     - "nightly"
           # adjustments:
           #   - with:
           #       julia: "nightly"
           #     soft_fail: true
 
-  - group: ":racehorse: Benchmarks"
-    steps:
-      - label: "Benchmarks on Julia {{matrix.julia}}"
-        plugins:
-          - JuliaCI/julia#v1:
-              version: "{{matrix.julia}}"
-        command: |
-          julia --project -e '
-            println("--- :julia: Instantiating project")
-            using Pkg
-            Pkg.instantiate()
-            Pkg.activate("benchmarks")
-            Pkg.instantiate()
-            push!(LOAD_PATH, @__DIR__)
+  # TODO: Re-enable benchmarks
+  # - group: ":racehorse: Benchmarks"
+  #   steps:
+  #     - label: "Benchmarks on Julia {{matrix.julia}}"
+  #       plugins:
+  #         - JuliaCI/julia#v1:
+  #             version: "{{matrix.julia}}"
+  #       command: |
+  #         julia --project -e '
+  #           println("--- :julia: Instantiating project")
+  #           using Pkg
+  #           Pkg.instantiate()
+  #           Pkg.activate("benchmarks")
+  #           Pkg.instantiate()
+  #           push!(LOAD_PATH, @__DIR__)
 
-            println("+++ :julia: Benchmarking")
-            include("benchmarks/runbenchmarks.jl")'
-        agents:
-          queue: "benchmark"
-          cuda: "*"
-          gpu: "rtx4070"
-        if: build.message !~ /\[skip benchmarks\]/
-        matrix:
-          setup:
-            julia:
-              - "1.10"
-        timeout_in_minutes: 180
+  #           println("+++ :julia: Benchmarking")
+  #           include("benchmarks/runbenchmarks.jl")'
+  #       agents:
+  #         queue: "benchmark"
+  #         cuda: "*"
+  #         gpu: "rtx4070"
+  #       if: build.message !~ /\[skip benchmarks\]/
+  #       matrix:
+  #         setup:
+  #           julia:
+  #             - "1.10"
+  #       timeout_in_minutes: 180
 
 env:
   SECRET_CODECOV_TOKEN: "mqW1qFfd8v23i8ulnEaJEZUJj70lCAFZonhVkARc1z3VbB/Z0MDDB5BCzM3Rrgq3DQdNwc+ZSMluTNT0H7QIWuUN49eLqtLVl7gs0Io2MlMXnaD892I3n0+v0cV5oShBtY8iErgdmlCAw4EzfLv3fsXR0hPJyL4DUfyewhe6lDvWCYb8cZzoNfIQ8gmQN6oyJnbm8CmCKsrdzrDcC9NRhMI6jMYL8ZD9ry/m059S2hReyIdNtVikXPz9NBBmN+DAlGmp+MqQfcIlTeXIj0/U9OCi04GjbnT0IBFdjW4lTaNDIdLDnaRdumfO0C2g1lFJk73F+dsf/7goK6GpyyD/dw==;U2FsdGVkX192PcTTM+mOwv2BFs5wDMjTHE11fxBvTJ98468YZ6nlosYl9drk9bbZpYXR3cg4fEr/mK/dkDCJBA=="
