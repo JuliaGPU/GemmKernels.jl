@@ -610,6 +610,7 @@ function main()
     else
         all_configs.status = String[]
         all_configs.time = Float64[]
+        all_configs.found_after = Float64[]
     end
     function checkpoint()
         temp_path = "$(config_path).$(getpid())"
@@ -669,6 +670,10 @@ function main()
         configs = select_configs(all_configs, problem)
         sweep_start = time()
         sweep_start_date = now()
+
+        # Determine time we already spent on this problem on previous runs.
+        time_spent_for_problem = maximum(configs.found_after; init=0)
+        println(" - already spent $time_spent_for_problem seconds on this problem in previous runs")
 
         num_compilation_workers_started = 0
         num_measurement_workers_started = 0
@@ -739,8 +744,8 @@ function main()
             end
 
             # Functionality to quickly detect already seen configurations, by hashing
-            # all columns except the status/time ones added by the tuning script.
-            problem_cols = Symbol.(filter(!in(["status", "time"]), names(all_configs)))
+            # all columns except the status/time/found_after ones added by the tuning script.
+            problem_cols = Symbol.(filter(!in(["status", "time", "found_after"]), names(all_configs)))
             hash_config(config) = hash(((getproperty(config, col) for col in problem_cols)...,))
             seen_configs = Set(hash_config.(eachrow(configs)))
 
@@ -770,7 +775,7 @@ function main()
                         try
                             # only process new configurations
                             if !in(hash_config(config), seen_configs)
-                                push!(all_configs, (config..., "pending", Inf))
+                                push!(all_configs, (config..., "pending", Inf, NaN))
                                 put!(initial_jobs, size(all_configs, 1))
                             end
                         catch err
@@ -973,6 +978,7 @@ function main()
                             while isready(results)
                                 worker, i = take!(results)
                                 config = all_configs[i, :]
+                                config.found_after = time_spent_for_problem + time() - sweep_start
                                 push!(new_configs, config)
                                 nfinished += 1
 
@@ -980,7 +986,7 @@ function main()
                                 if config.status == "success"
                                     best_time = min(best_time, config.time)
                                 end
-                                @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time))"
+                                @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time)) (found after $(config.found_after) seconds of sweeping)"
                             end
 
                             # save results every minute
