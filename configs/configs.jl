@@ -360,7 +360,7 @@ end
 Base.show(io::IO, gemm::MatrixMultiplication{BiasedWMMA}) =
     print(io, "WMMA GEMM+bias $(gemm.a_type)*$(gemm.b_type)+$(gemm.c_type)=$(gemm.d_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
 
-function verify(gemm::MatrixMultiplication{BiasedWMMA}, A::AbstractArray{T}, dB::AbstractArray{T}) where T
+function verify(gemm::MatrixMultiplication{BiasedWMMA}, A::AbstractArray{T}, B::AbstractArray{T}) where T
     all(compare.(A .+ gemm.bias, B, T))
 end
 
