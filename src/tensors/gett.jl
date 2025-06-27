@@ -294,7 +294,8 @@ end
 
 export setUpGETTKernel
 function setUpGETTKernel(desc::ContractionDescriptor, operator,
-                         blockShape, warpsPerBlock, computeWarp)
+                         blockShape, warpsPerBlock, computeWarp,
+                         α, β)
     (
         gemmShape,
         TensorLayoutA, isColMajorA,
@@ -325,6 +326,20 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
         operator = operator{8, 8, 1, 4, 8, 1, desc.computeType, desc.accumulateType}
     end
 
+    global_c_layout = if iszero(β)
+                        Layout.Zero{desc.descC.dataType}
+                    else
+                        TensorLayoutC
+                    end
+
+    shared_c_layout = if iszero(β)
+                            Layout.Zero{desc.accumulateType}
+                        elseif isColMajorD
+                            Layout.UnsafeAlignedColMajor{desc.accumulateType}
+                        else
+                            Layout.UnsafeAlignedRowMajor{desc.accumulateType}
+                        end
+
     # TODO: conditionally use blockShape and other things.
     gemmConf = GemmKernels.get_config(
         gemm_shape = gemmShape,
@@ -337,16 +352,12 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
 
         global_a_layout = TensorLayoutA,
         global_b_layout = TensorLayoutB,
-        # XXX: How to do this properly? We don't have access to beta here...
-        # global_c_layout = TensorLayoutC,
-        global_c_layout = Layout.Zero{desc.descC.dataType},
+        global_c_layout = global_c_layout,
         global_d_layout = TensorLayoutD,
 
         shared_a_layout = SharedLayoutA,
         shared_b_layout = SharedLayoutB,
-        # XXX: How to do this properly? We don't have access to beta here...
-        # shared_c_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
-        shared_c_layout = Layout.Zero{desc.accumulateType},
+        shared_c_layout = shared_c_layout,
         shared_d_layout = isColMajorD ? Layout.UnsafeAlignedColMajor{desc.accumulateType} : Layout.UnsafeAlignedRowMajor{desc.accumulateType},
 
         is_a_col_major = isColMajorA,

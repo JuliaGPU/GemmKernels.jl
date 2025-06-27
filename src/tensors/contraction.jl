@@ -20,7 +20,7 @@ mutable struct ContractionPlan
                              kernel=Kernel.matmul_singlestage)
         if algo == ALGO_GETT
             algorithmPlan =
-                setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp)
+                setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp, α, β)
 
             unaryOpA = desc.descA.unaryOp
             unaryOpB = desc.descB.unaryOp
