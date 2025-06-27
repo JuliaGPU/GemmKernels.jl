@@ -217,12 +217,12 @@ function TropicalMatrixMultiplication(; M, N, K, A_type, B_type, CD_type, transp
         CD_type,
         CD_type,
         transpose_a,
-        transpose_b,
-
-        get_custom_mul!((a, b, c) -> max(a + b, c)))
+        transpose_b)
 end
 
 function calculate_reference(gemm::MatrixMultiplication{TropicalFPU}, a, b, c, d)
+    element_update = (a, b, c) -> max(a + b, c)
+
     Ah = Array(a)
     Bh = Array(b)
     Ch = Array(c)

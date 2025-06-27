@@ -11,10 +11,10 @@ end
 t0 = now()
 try
     @testset runner=DistributedTestRunner() "GemmKernels.jl" begin
-        # include("tiling.jl")
-        # include("matmul.jl")
-        # include("blas.jl")
-        # include("examples.jl")
+        include("tiling.jl")
+        include("matmul.jl")
+        include("blas.jl")
+        include("examples.jl")
         include("contraction.jl")
     end
 finally
