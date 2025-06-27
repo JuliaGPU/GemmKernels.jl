@@ -15,7 +15,7 @@ usage()
     cat <<EOF >&2
 Usage: $0 [OPTIONS]
 
-Tune WMMA Parameters.
+Benchmark operator fusion.
 
 Options:
 -h, --help                 Show this help.
@@ -90,4 +90,4 @@ fi
 echo "+++ :julia: Instantiating project"
 julia --project -e 'using Pkg; Pkg.develop(path=dirname(@__DIR__)); Pkg.instantiate(); Pkg.precompile()'
 
-julia --project --heap-size-hint=5G tune.jl "$@"
+julia --project --heap-size-hint=5G benchmark-operator-fusion.jl "$@"

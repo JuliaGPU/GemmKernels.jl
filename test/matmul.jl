@@ -7,24 +7,22 @@ using Random
 include("../configs/configs.jl")
 
 @testset "Matrix multiplication" begin
-    @testcase "$( cf.name )" for cf in get_configs()
-        try
-            reference_mul!, a, b, c, d = generate_inputs(cf)
-            rand!(a)
-            rand!(b)
-            rand!(c)
-            d .= 0
+    @testcase "$( problem )" for (problem, params...) in get_configs()
+        f = Base.retry(delays=ExponentialBackOff(first_delay=1, max_delay=120, n=5), check=(s,err) -> isa(err, CUDA.OutOfGPUMemoryError)) do
+            try
+                data = allocate_data(problem)
+                initialize_data(problem, data...)
 
-            run_gemm(cf, a, b, c, d)
-            reference_mul!(c, a, b)
-            @test verify(cf, c, d)
-        catch err
-            # Count tests with config errors as "broken".
-            if isa(err, GemmKernels.ConfigError)
-                @test true skip=true
-            else
-                rethrow()
+                reference_result = calculate_reference(problem, data...)
+                result = execute(problem, data...; params...)
+
+                @test verify(problem, reference_result, result)
+            catch err
+                # Ignore Config Errors.
+                isa(err, GemmKernels.ConfigError) || rethrow()
             end
         end
+
+        f()
     end
 end

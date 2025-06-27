@@ -2,16 +2,14 @@
 
 module Configs
 
-export Configuration, get_configs, generate_inputs, run_gemm, run_baseline, verify,
-       @get_fpu_config, @get_tropical_config, @get_wmma_config, @get_wmma_bias_config,
-       @get_wmma_diagonal_config, @get_wmma_complex_config, @get_wmma_dual_config,
-       get_configs
 
 ## lazy module loading
 
 using CUDA
+using cuTENSOR
 using GemmKernels
 using LinearAlgebra
+using Random
 
 struct LazyModule
     pkg::Base.PkgId
@@ -28,466 +26,998 @@ end
 
 const ForwardDiff = LazyModule("ForwardDiff", Base.UUID("f6369f11-7733-5829-9624-2563aa707210"))
 
-struct Configuration
-    name           # Human-readable name of the configuration.
-    config         # GemmKernels.Config instance to use.
-    alpha          # Value of alpha
-    beta           # Value of beta
-    a_type         # Type of the A matrix on host and in GMEM.
-    b_type         # Type of the B matrix on host and in GMEM.
-    c_type         # Type of the C matrix on host and in GMEM.
-    d_type         # Type of the D matrix on host and in GMEM.
-    transpose_a    # Whether or not A is transposed
-    transpose_b    # Whether or not B is transposed
-    calc_reference # mul!-like function to calculate the reference
-    epilogue       # The epilogue to use.
-    verify         # Verify function to use.
-    kernel         # The kernel function to use.
-    baseline       # Baseline implementation to compare performance against
-end
 
-function get_custom_mul!(element_update)
-    (C, A, B, alpha, beta) -> begin
-        M = size(C, 1)
-        N = size(C, 2)
-        K = size(A, 2)
+## interface
 
-        # XXX: this assumes CPU execution
-        Ah = Array(A)
-        Bh = Array(B)
-        Ch = Array(C)
+export allocate_data, initialize_data,
+       prepare, execute,
+       prepare_baseline, execute_baseline,
+       calculate_reference, verify,
+       get_configs
 
-        for i in 1:M
-            for j in 1:N
-                res = beta * Ch[i, j]
-
-                for k in 1:K
-                    res = alpha * element_update(Ah[i, k], Bh[k, j], res)
-                end
-
-                Ch[i, j] = res
-            end
-        end
-
-        copyto!(C, Ch)
-    end
-end
-
-# Generate input matrices.
-function generate_inputs(cf::Configuration)
-    M = cf.config.matmul_shape.M
-    N = cf.config.matmul_shape.N
-    K = cf.config.matmul_shape.K
-
-    a = CuArray{cf.a_type}(undef, cf.transpose_a ? (K, M) : (M, K))
-    b = CuArray{cf.b_type}(undef, cf.transpose_b ? (N, K) : (K, N))
-    c = CuArray{cf.c_type}(undef, (M, N))
-    d = CuArray{cf.c_type}(undef, (M, N))
-
-    function reference_mul!(c, a, b)
-        # mul! determines transpose from the type of the matrix
-        (cf.calc_reference)(c,
-                            cf.transpose_a ? transpose(a) : a,
-                            cf.transpose_b ? transpose(b) : b,
-                            cf.alpha, cf.beta)
-    end
-
-    return reference_mul!, a, b, c, d
-end
-
-# Run the GEMM.
-function run_gemm(cf::Configuration, a, b, c, d)
-    alpha = cf.alpha
-    beta = cf.beta
-    a_transf = (alpha == one(alpha)) ? Transform.Elementwise(identity) : Transform.Elementwise(x -> x * alpha)
-    c_transf = (beta == one(beta)) ? Transform.Elementwise(identity) : Transform.Elementwise(x -> x * beta)
-
-    GemmKernels.matmul(cf.config, a, b, c, d;
-                       transform_shared_to_regs_a = a_transf,
-                       transform_shared_to_regs_c = c_transf,
-                       epilogue = cf.epilogue,
-                       kernel = cf.kernel)
-end
-
-# Run the baseline.
-function run_baseline(cf::Configuration, a, b, c, d)
-    @assert !isnothing(cf.baseline)
-    cf.baseline(a, b, c, d, cf.alpha, cf.beta, cf.transpose_a, cf.transpose_b)
-end
-
-# Verify results.
-function verify(cf::Configuration, c_ref, d)
-    cf.verify(c_ref, d, cf.a_type)
-end
+abstract type AbstractProblem end
 
 compare(x, y, T) = error("Unimplemented compare(x, y, T) function for type $T")
 compare(x, y, T::Type{<:AbstractFloat}) = isapprox(x, y; rtol=sqrt(eps(T)))
 compare(x, y, T::Type{<:Integer}) = (x == y)
 compare(x, y, T::Type{Complex{U}}) where {U} = compare(x, y, U)
 
-function verify_default(c_ref, d, T)
-    all(compare.(c_ref, d, T))
+function verify(prob::AbstractProblem, A::AbstractArray{T}, B::AbstractArray{T}) where T
+    all(compare.(A, B, T))
 end
 
-function verify_bias(c_ref, d, bias, T)
-    all(compare.(c_ref .+ bias, d, T))
+prepare_baseline(prob::AbstractProblem, args...) = error("No baseline function available for $gemm")
+baseline(prob::AbstractProblem, args...) = error("No baseline function available for $gemm")
+
+
+## matrix multiplication
+
+export MatrixMultiplication, FPUMatrixMultiplication, TropicalMatrixMultiplication,
+       WMMAMatrixMultiplication, BiasedWMMAMatrixMultiplication,
+       DiagonalWMMAMatrixMultiplication, ComplexWMMAMatrixMultiplication, DualWMMAMatrixMultiplication
+
+abstract type MatrixMultiplicationKind end
+
+struct FPU <: MatrixMultiplicationKind end
+struct TropicalFPU <: MatrixMultiplicationKind end
+
+struct WMMA <: MatrixMultiplicationKind end
+struct BiasedWMMA <: MatrixMultiplicationKind end
+struct DiagonalWMMA <: MatrixMultiplicationKind end
+struct ComplexWMMA <: MatrixMultiplicationKind end
+struct DualWMMA <: MatrixMultiplicationKind end
+
+struct MatrixMultiplication{K} <: AbstractProblem
+    shape          # Named tuple containing M, N, K
+    alpha          # Value of alpha
+    beta           # Value of beta
+    bias           # Bias vector: 1 element per column of the result matrix.
+    a_type         # Type of the A matrix on host and in GMEM.
+    b_type         # Type of the B matrix on host and in GMEM.
+    c_type         # Type of the C matrix on host and in GMEM.
+    d_type         # Type of the D matrix on host and in GMEM.
+    transpose_a    # Whether or not A is transposed
+    transpose_b    # Whether or not B is transposed
 end
 
-function verify_dual(c_ref, d, T)
-    c_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, c_ref)
-    d_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, d)
-    all(compare.(c_dual, d_dual, T))
+function Base.sizeof(gemm::MatrixMultiplication)
+    M, N, K = gemm.shape
+
+    return sizeof(gemm.a_type) * M * K +
+           sizeof(gemm.b_type) * K * N +
+           sizeof(gemm.c_type) * M * N +
+           sizeof(gemm.d_type) * M * N
 end
 
-function fpu_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
+function allocate_data(gemm::MatrixMultiplication)
+    M, N, K = gemm.shape
+
+    a = CuArray{gemm.a_type}(undef, gemm.transpose_a ? (K, M) : (M, K))
+    b = CuArray{gemm.b_type}(undef, gemm.transpose_b ? (N, K) : (K, N))
+    c = CuArray{gemm.c_type}(undef, (M, N))
+    d = CuArray{gemm.c_type}(undef, (M, N))
+
+    return a, b, c, d
+end
+
+function initialize_data(gemm::MatrixMultiplication, a, b, c, d; seed=0)
+    rng = MersenneTwister(seed)
+    copy!(a, rand(rng, eltype(a), size(a)))
+    copy!(b, rand(rng, eltype(b), size(b)))
+    copy!(c, rand(rng, eltype(c), size(c)))
+    fill!(d, zero(eltype(d)))
+end
+
+function execute(gemm::MatrixMultiplication, a, b, c, d; config, kernel)
+    alpha = gemm.alpha
+    beta = gemm.beta
+    a_transf = (alpha == one(alpha)) ? Transform.Elementwise(identity) : Transform.Elementwise(x -> x * alpha)
+    c_transf = (beta == one(beta)) ? Transform.Elementwise(identity) : Transform.Elementwise(x -> x * beta)
+
+    epilogue = if gemm.bias === nothing
+        Epilogue.Default()
+    else
+        Epilogue.Bias(pointer(gemm.bias))
+    end
+
+    GemmKernels.matmul(config, a, b, c, d;
+                       transform_shared_to_regs_a = a_transf,
+                       transform_shared_to_regs_c = c_transf,
+                       epilogue, kernel)
+    return d
+end
+
+function calculate_reference(gemm::MatrixMultiplication, a, b, c, d)
+    copy!(d, c)
+    LinearAlgebra.mul!(d,
+                       gemm.transpose_a ? transpose(a) : a,
+                       gemm.transpose_b ? transpose(b) : b,
+                       gemm.alpha, gemm.beta)
+    return d
+end
+
+function FPUMatrixMultiplication(; M, N, K, A_type, B_type, CD_type, transpose_a, transpose_b)
+    compute_type = promote_type(A_type, B_type)
+
+    MatrixMultiplication{FPU}(
+        (; M, N, K),
+        convert(compute_type, 2),
+        convert(compute_type, 3),
+        nothing,
+        A_type,
+        B_type,
+        CD_type,
+        CD_type,
+        transpose_a,
+        transpose_b)
+end
+
+Base.show(io::IO, gemm::MatrixMultiplication{FPU}) =
+    print(io, "FPU GEMM $(gemm.a_type)*$(gemm.b_type)=$(gemm.c_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
+
+function prepare_baseline(gemm::MatrixMultiplication{FPU}, a, b, c, d)
+    supported_types = Set([
+            (Float16, Float16, Float32),
+            (Float32, Float32, Float32),
+            (Float32, Float32, Float64),
+            (Float64, Float64, Float64),
+            (Int16, Int16, Int16),
+            (Int32, Int32, Int32),
+            (Int64, Int64, Int64),
+        ])
+    if !haskey(supported_types, (gemm.a_type, gemm.b_type, gemm.c_type))
+        error("No baseline function available for $gemm")
+    end
+
+    copyto!(d, c)
+
     CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_DEFAULT_MATH)
-    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+    return ()
 end
 
-function wmma_baseline(a, b, c, d, alpha, beta, transpose_a, transpose_b)
+function execute_baseline(gemm::MatrixMultiplication{FPU}, a, b, c, d)
+    CUBLAS.gemmEx!(gemm.transpose_a ? 'T' : 'N',
+                   gemm.transpose_b ? 'T' : 'N',
+                   gemm.alpha, a, b, gemm.beta, d)
+end
+
+function prepare(gemm::MatrixMultiplication{FPU}; BLOCK_M, BLOCK_N, BLOCK_K, OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB)
+    compute_type = promote_type(gemm.a_type, gemm.b_type)
+    cd_type = gemm.c_type
+
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        block_shape = (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+        operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, cd_type},
+        global_a_layout = gemm.transpose_a ? Layout.UnsafeAlignedRowMajor{gemm.a_type} : Layout.UnsafeAlignedColMajor{gemm.a_type},
+        global_b_layout = gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type},
+
+        global_c_layout = Layout.UnsafeAlignedColMajor{cd_type},
+        global_d_layout = Layout.UnsafeAlignedColMajor{cd_type},
+
+        is_a_col_major = !gemm.transpose_a,
+        is_b_col_major = !gemm.transpose_b,
+    )
+
+    kernel = Kernel.matmul_pipelined
+
+    (; config, kernel)
+end
+
+function TropicalMatrixMultiplication(; M, N, K, A_type, B_type, CD_type, transpose_a, transpose_b)
+    compute_type = promote_type(A_type, B_type)
+
+    MatrixMultiplication{TropicalFPU}(
+        (; M, N, K),
+        convert(compute_type, 1),
+        convert(compute_type, 1),
+        nothing,
+        A_type,
+        B_type,
+        CD_type,
+        CD_type,
+        transpose_a,
+        transpose_b)
+end
+
+function calculate_reference(gemm::MatrixMultiplication{TropicalFPU}, a, b, c, d)
+    element_update = (a, b, c) -> max(a + b, c)
+
+    Ah = Array(a)
+    Bh = Array(b)
+    Ch = Array(c)
+
+    if gemm.transpose_a
+        Ah = transpose(Ah)
+    end
+    if gemm.transpose_b
+        Bh = transpose(Bh)
+    end
+
+    for i in 1:gemm.shape.M
+        for j in 1:gemm.shape.N
+            res = gemm.beta * Ch[i, j]
+
+            for k in 1:gemm.shape.K
+                res = gemm.alpha * element_update(Ah[i, k], Bh[k, j], res)
+            end
+
+            Ch[i, j] = res
+        end
+    end
+
+    copyto!(d, Ch)
+    return d
+end
+
+Base.show(io::IO, gemm::MatrixMultiplication{TropicalFPU}) =
+    print(io, "Tropical GEMM $(gemm.a_type)*$(gemm.b_type)=$(gemm.c_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
+
+function prepare(gemm::MatrixMultiplication{TropicalFPU}; OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB)
+    compute_type = promote_type(gemm.a_type, gemm.b_type)
+    cd_type = gemm.c_type
+
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        block_shape = (M = 64, N = 64, K = 32),
+        operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, cd_type},
+        global_a_layout = gemm.transpose_a ? Layout.UnsafeAlignedRowMajor{gemm.a_type} : Layout.UnsafeAlignedColMajor{gemm.a_type},
+        global_b_layout = gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type},
+
+        global_c_layout = Layout.UnsafeAlignedColMajor{cd_type},
+        global_d_layout = Layout.UnsafeAlignedColMajor{cd_type},
+
+        is_a_col_major = !gemm.transpose_a,
+        is_b_col_major = !gemm.transpose_b,
+    )
+
+    kernel = Kernel.matmul_pipelined
+
+    (; config, kernel)
+end
+
+function WMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b, zero_c)
+    MatrixMultiplication{WMMA}(
+        (; M, N, K),
+        convert(AB_type, 2),
+        convert(AB_type, zero_c ? 0 : 3),
+        nothing,
+        AB_type,
+        AB_type,
+        CD_type,
+        CD_type,
+        transpose_a,
+        transpose_b)
+end
+
+Base.show(io::IO, gemm::MatrixMultiplication{WMMA}) =
+    print(io, "WMMA GEMM $(gemm.a_type)*$(gemm.b_type)=$(gemm.c_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
+
+function prepare_baseline(gemm::MatrixMultiplication{WMMA}, a, b, c, d)
     CUBLAS.cublasSetMathMode(CUBLAS.handle(), CUBLAS.CUBLAS_TENSOR_OP_MATH)
-    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T', alpha, a, b, beta, c)
+    copyto!(d, c)
+    return ()
 end
 
-function cublas_mul!(c, a, b, alpha, beta)
-    # minimalistic version of mul!, without ever falling back to GPUCompiler.jl
-    transpose_a = a isa Adjoint || a isa Transpose
-    transpose_b = b isa Adjoint || b isa Transpose
-    CUBLAS.gemmEx!(!transpose_a ? 'N' : 'T', !transpose_b ? 'N' : 'T',
-                    alpha, parent(a), parent(b), beta, c)
-    c
+function execute_baseline(gemm::MatrixMultiplication{WMMA}, a, b, c, d)
+    CUBLAS.gemmEx!(gemm.transpose_a ? 'T' : 'N',
+                   gemm.transpose_b ? 'T' : 'N',
+                   gemm.alpha, a, b, gemm.beta, d)
 end
 
-macro get_fpu_config()
-    esc(quote let
-        baseline_func = Dict(
-                (Float16, Float16, Float32) => $fpu_baseline,
-                (Float32, Float32, Float32) => $fpu_baseline,
-                (Float32, Float32, Float64) => nothing,
-                (Float64, Float64, Float64) => $fpu_baseline,
-                (Int16, Int16, Int16) => nothing,
-                (Int32, Int32, Int32) => nothing,
-                (Int64, Int64, Int64) => nothing,
-            )[(A_type, B_type, CD_type)]
+function prepare(gemm::MatrixMultiplication{WMMA}; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, zero_c, kernel)
+    @assert gemm.a_type == gemm.b_type
+    ab_type = gemm.a_type
+    @assert gemm.c_type == gemm.d_type
+    cd_type = gemm.c_type
 
-        compute_type = promote_type(A_type, B_type)
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        block_shape = (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+        warps_per_block = WARPS_M * WARPS_N,
 
-        conf = GemmKernels.get_config(
-                gemm_shape = (M = M, N = N, K = K),
-                block_shape = (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
-                operator = Operator.FPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
-                global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
-                global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
+        compute_warp = (M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
 
-                global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
-                global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
+        global_a_layout = gemm.transpose_a ? Layout.UnsafeAlignedRowMajor{gemm.a_type} : Layout.UnsafeAlignedColMajor{gemm.a_type},
+        global_b_layout = gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type},
+        global_c_layout = zero_c ? Layout.Zero{gemm.c_type} : Layout.UnsafeAlignedColMajor{gemm.c_type},
+        global_d_layout = Layout.UnsafeAlignedColMajor{gemm.d_type},
 
-                is_a_col_major = !transpose_a,
-                is_b_col_major = !transpose_b,
-        )
+        shared_a_layout = Layout.Padded{gemm.transpose_a ? Layout.UnsafeAlignedRowMajor{gemm.a_type} : Layout.UnsafeAlignedColMajor{gemm.a_type}, 16 ÷ sizeof(gemm.a_type)},
+        shared_b_layout = Layout.Padded{gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type}, 16 ÷ sizeof(gemm.b_type)},
+        shared_c_layout = zero_c ? Layout.Zero{gemm.c_type} : Layout.UnsafeAlignedColMajor{gemm.c_type},
+        shared_d_layout = Layout.UnsafeAlignedColMajor{gemm.d_type},
 
-        name = "FPU GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
+        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, ab_type, cd_type},
 
-        Configuration(name,
-                      conf,
-                      convert(compute_type, 2),
-                      convert(compute_type, 3),
-                      A_type,
-                      B_type,
-                      CD_type,
-                      CD_type,
-                      transpose_a,
-                      transpose_b,
-                      $LinearAlgebra.mul!,
-                      Epilogue.Default(),
-                      $verify_default,
-                      Kernel.matmul_pipelined,
-                      baseline_func)
-    end end)
+        is_a_col_major = !gemm.transpose_a,
+        is_b_col_major = !gemm.transpose_b,
+    )
+
+    (; config, kernel)
 end
 
-macro get_tropical_config()
-    esc(quote let
-        name = "Tropical GEMM $(A_type)*$(B_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K)), base shape ($(OP_MB), $(OP_NB), $(OP_KB))"
-        compute_type = promote_type(A_type, B_type)
+function BiasedWMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+    # Bias vector: this vector contains 1 element per column of the result matrix.
+    # This bias element is added to all elements in one column of the D matrix.
+    # D is a M x N matrix, so the bias is an N-element vector.
+    bias = CuArray(rand(CD_type, (1, N)))
 
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        block_shape = (M = 64, N = 64, K = 32),
-                                        operator = Operator.TropicalFPUOp{OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB, compute_type, CD_type},
-                                        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{A_type} : Layout.UnsafeAlignedColMajor{A_type},
-                                        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{B_type} : Layout.UnsafeAlignedColMajor{B_type},
-
-                                        global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
-                                        global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
-
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b,
-                                        )
-
-        Configuration(name,
-                      conf,
-                      convert(compute_type, 1),
-                      convert(compute_type, 1),
-                      A_type,
-                      B_type,
-                      CD_type,
-                      CD_type,
-                      transpose_a,
-                      transpose_b,
-                      get_custom_mul!((a, b, c) -> max(a + b, c)),
-                      Epilogue.Default(),
-                      $verify_default,
-                      Kernel.matmul_pipelined,
-                      nothing)
-    end end)
+    MatrixMultiplication{BiasedWMMA}(
+        (; M, N, K),
+        convert(AB_type, 1),
+        convert(AB_type, 1),
+        bias,
+        AB_type,
+        AB_type,
+        CD_type,
+        CD_type,
+        transpose_a,
+        transpose_b
+    )
 end
 
-macro get_wmma_config()
-    esc(quote let
-                name = "WMMA GEMM $(AB_type)*$(AB_type)$(zero_c ? "" : "+$(CD_type)")=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) Block ($BLOCK_M, $BLOCK_N, $BLOCK_K) Warps ($WARPS_M, $WARPS_N) OP ($(OP_M), $(OP_N), $(OP_K))"
+Base.show(io::IO, gemm::MatrixMultiplication{BiasedWMMA}) =
+    print(io, "WMMA GEMM+bias $(gemm.a_type)*$(gemm.b_type)+$(gemm.c_type)=$(gemm.d_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
 
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        block_shape = (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
-                                        warps_per_block = WARPS_M * WARPS_N,
-
-                                        compute_warp = (M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
-
-                                        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
-                                        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
-                                        global_c_layout = zero_c ? Layout.Zero{CD_type} : Layout.UnsafeAlignedColMajor{CD_type},
-                                        global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
-
-                                        shared_a_layout = Layout.Padded{transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type}, 16 ÷ sizeof(AB_type)},
-                                        shared_b_layout = Layout.Padded{transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type}, 16 ÷ sizeof(AB_type)},
-                                        shared_c_layout = zero_c ? Layout.Zero{CD_type} : Layout.UnsafeAlignedColMajor{CD_type},
-                                        shared_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
-
-                                        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, AB_type, CD_type},
-
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b,
-                                        )
-
-        Configuration(name,
-                      conf,
-                      convert(AB_type, 2),
-                      convert(AB_type, zero_c ? 0 : 3),
-                      AB_type,
-                      AB_type,
-                      CD_type,
-                      CD_type,
-                      transpose_a,
-                      transpose_b,
-                      $LinearAlgebra.mul!,
-                      Epilogue.Default(),
-                      $verify_default,
-                      kernel,
-                      $wmma_baseline)
-    end end)
+function verify(gemm::MatrixMultiplication{BiasedWMMA}, A::AbstractArray{T}, dB::AbstractArray{T}) where T
+    all(compare.(A .+ gemm.bias, B, T))
 end
 
-macro get_wmma_bias_config()
-    esc(quote let
-        name = "WMMA GEMM+bias $(AB_type)*$(AB_type)+$(CD_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+function prepare(gemm::MatrixMultiplication{BiasedWMMA}; OP_M, OP_N, OP_K)
+    @assert gemm.a_type == gemm.b_type
+    ab_type = gemm.a_type
+    @assert gemm.c_type == gemm.d_type
+    cd_type = gemm.c_type
 
-        # Bias vector: this vector contains 1 element per column of the result matrix.
-        # This bias element is added to all elements in one column of the D matrix.
-        # D is a M x N matrix, so the bias is an N-element vector.
-        bias = CuArray(rand(CD_type, (1, N)))
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, ab_type, cd_type},
+        global_a_layout = gemm.transpose_a ? Layout.UnsafeAlignedRowMajor{gemm.a_type} : Layout.UnsafeAlignedColMajor{gemm.a_type},
+        global_b_layout = gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type},
 
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, AB_type, CD_type},
-                                        global_a_layout = transpose_a ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
-                                        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
+        global_c_layout = Layout.UnsafeAlignedColMajor{gemm.c_type},
+        global_d_layout = Layout.UnsafeAlignedColMajor{gemm.d_type},
 
-                                        global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
-                                        global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
+        is_a_col_major = !gemm.transpose_a,
+        is_b_col_major = !gemm.transpose_b,
+    )
 
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b,
-                                        )
+    kernel = Kernel.matmul_pipelined
 
-        Configuration(name,
-                      conf,
-                      convert(AB_type, 1),
-                      convert(AB_type, 1),
-                      AB_type,
-                      AB_type,
-                      CD_type,
-                      CD_type,
-                      transpose_a,
-                      transpose_b,
-                      mul!,
-                      Epilogue.Bias(pointer(bias)),
-                      (c_h, d, T) -> $verify_bias(c_h, d, bias, T),
-                      Kernel.matmul_pipelined,
-                      nothing)
-    end end)
+    (; config, kernel)
 end
 
-macro get_wmma_diagonal_config()
-    esc(quote let
-        @assert M == K "Diagonal only supports square A matrix (A == M)"
+function DiagonalWMMA(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+    @assert transpose_a == false
+    @assert M == K "Diagonal only supports square A matrix (A == M)"
 
-        transpose_a = false
-        name = "WMMA diagonal GEMM diag($(AB_type))*$(AB_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+    MatrixMultiplication{DiagonalWMMA}(
+        (; M, N, K),
+        convert(AB_type, 1),
+        convert(AB_type, 1),
+        nothing,
+        AB_type,
+        AB_type,
+        CD_type,
+        CD_type,
+        transpose_a,
+        transpose_b)
+end
 
-        # NOTE: the testing framework will generate an MxK A matrix,
-        # but we only use the first M elements in the first column,
-        # and interpret that as the diagonal elements.
+function calculate_reference(gemm::MatrixMultiplication{DiagonalWMMA}, a, b, c, d)
+    Ah = Array(a)
+    Bh = Array(b)
+    Ch = Array(c)
 
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, AB_type, CD_type},
-                                        global_a_layout = Layout.Diagonal{AB_type},
-                                        global_b_layout = transpose_b ? Layout.UnsafeAlignedRowMajor{AB_type} : Layout.UnsafeAlignedColMajor{AB_type},
+    if gemm.transpose_a
+        Ah = transpose(Ah)
+    end
+    if gemm.transpose_b
+        Bh = transpose(Bh)
+    end
 
-                                        global_c_layout = Layout.UnsafeAlignedColMajor{CD_type},
-                                        global_d_layout = Layout.UnsafeAlignedColMajor{CD_type},
+    # NOTE: the testing framework will generate an MxK A matrix,
+    # but we only use the first M elements in the first column,
+    # and interpret that as the diagonal elements.
+    mul!(Ch, Diagonal(Ah[1:gemm.shape.M,1]), Bh, gemm.alpha, gemm.beta)
 
-                                        shared_a_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float16}, 8},
+    copyto!(d, Ch)
+    return d
+end
 
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b,
-                                        )
+Base.show(io::IO, gemm::MatrixMultiplication{DiagonalWMMA}) =
+    print(io, "WMMA Diagonal GEMM diag($(gemm.a_type))*$(gemm.b_type)=$(gemm.c_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
 
-        # XXX: perform this on the GPU
-        function reference_mul!(C, A, B, alpha, beta)
-            # XXX: alpha/beta ignored, and not used by other configs?
-            Ah = Array(A)
-            Bh = Array(B)
-            Ch = Array(C)
-            mul!(Ch, Diagonal(Ah[1:M,1]), Bh, true, true)
-            copyto!(C, Ch)
+function prepare(gemm::MatrixMultiplication{DiagonalWMMA}; OP_M, OP_N, OP_K)
+    @assert gemm.a_type == gemm.b_type
+    ab_type = gemm.a_type
+    @assert gemm.c_type == gemm.d_type
+    cd_type = gemm.c_type
+
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        operator = Operator.WMMAOp{OP_M, OP_N, OP_K, ab_type, cd_type},
+        global_a_layout = Layout.Diagonal{gemm.a_type},
+        global_b_layout = gemm.transpose_b ? Layout.UnsafeAlignedRowMajor{gemm.b_type} : Layout.UnsafeAlignedColMajor{gemm.b_type},
+
+        global_c_layout = Layout.UnsafeAlignedColMajor{gemm.c_type},
+        global_d_layout = Layout.UnsafeAlignedColMajor{gemm.d_type},
+
+        shared_a_layout = Layout.Padded{Layout.UnsafeAlignedColMajor{Float16}, 8},
+
+        is_a_col_major = !gemm.transpose_a,
+        is_b_col_major = !gemm.transpose_b,
+    )
+
+    kernel = Kernel.matmul_singlestage
+
+    (; config, kernel)
+end
+
+function ComplexWMMA(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+    MatrixMultiplication{ComplexWMMA}(
+        (; M, N, K),
+        convert(Complex{AB_type}, 1),
+        convert(Complex{AB_type}, 1),
+        nothing,
+        Complex{AB_type},
+        Complex{AB_type},
+        Complex{CD_type},
+        Complex{CD_type},
+        transpose_a,
+        transpose_b
+    )
+end
+
+Base.show(io::IO, gemm::MatrixMultiplication{ComplexWMMA}) =
+    print(io, "WMMA Complex GEMM $(gemm.a_type)*$(gemm.b_type)=$(gemm.c_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
+
+function prepare(gemm::MatrixMultiplication{ComplexWMMA}; OP_M, OP_N, OP_K)
+    @assert gemm.a_type == gemm.b_type
+    ab_type = gemm.a_type
+    @assert gemm.c_type == gemm.d_type
+    cd_type = gemm.c_type
+
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        operator = Operator.WMMAComplexOp{OP_M, OP_N, OP_K, ab_type, cd_type},
+
+        global_a_layout = gemm.transpose_a ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
+        global_b_layout = gemm.transpose_b ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
+        global_c_layout = Layout.InterleavedColMajor{Float32},
+        global_d_layout = Layout.InterleavedColMajor{Float32},
+
+        shared_a_layout = gemm.transpose_a ? Layout.Padded{Layout.SplitRowMajor{Float16}, 8} : Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+        shared_b_layout = gemm.transpose_b ? Layout.Padded{Layout.SplitRowMajor{Float16}, 8} : Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+        shared_c_layout = Layout.SplitColMajor{Float32},
+        shared_d_layout = Layout.SplitColMajor{Float32},
+
+        warps_per_block = 8,
+
+        compute_warp = (M = 16, N = 32, K = 16),
+
+        block_shape = (M = 64, N = 64, K = 32),
+
+        mem_a_warp = gemm.transpose_a ? (M = 4, K = 32) : (M = 64, K = 2),
+        mem_b_warp = gemm.transpose_b ? (K = 2, N = 64) : (K = 32, N = 4),
+        mem_cd_warp = (M = 64, N = 1),
+
+        mem_a_thread = gemm.transpose_a ? (M = 1, K = 4) : (M = 4, K = 1),
+        mem_b_thread = gemm.transpose_b ? (K = 1, N = 4) : (K = 4, N = 1),
+        mem_cd_thread = (M = 2, N = 1),
+
+        is_a_col_major = !gemm.transpose_a,
+        is_b_col_major = !gemm.transpose_b
+    )
+
+    kernel = Kernel.matmul_pipelined
+
+    (; config, kernel)
+end
+
+function DualWMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+    MatrixMultiplication{DualWMMA}(
+        (; M, N, K),
+        convert(Complex{AB_type}, 1),
+        convert(Complex{AB_type}, 1),
+        nothing,
+        Complex{AB_type},
+        Complex{AB_type},
+        Complex{CD_type},
+        Complex{CD_type},
+        transpose_a,
+        transpose_b,
+    )
+end
+
+function calculate_reference(gemm::MatrixMultiplication{DualWMMA}, a, b, c, d)
+    dual_conv(M) = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, M)
+
+    copy!(d, c)
+
+    mul!(dual_conv(d), dual_conv(Complex{Float32}.(a)), dual_conv(Complex{Float32}.(b)),
+         gemm.alpha, gemm.beta)
+    return d
+end
+
+Base.show(io::IO, gemm::MatrixMultiplication{DualWMMA}) =
+    print(io, "WMMA Dual GEMM $(gemm.a_type)*$(gemm.b_type)=$(gemm.c_type) ($(gemm.shape.M)×$(gemm.shape.K)) · ($(gemm.shape.K)×$(gemm.shape.N)) ($( !gemm.transpose_a ? 'N' : 'T' )$( !gemm.transpose_b ? 'N' : 'T' ))")
+
+function verify(gemm::MatrixMultiplication{DualWMMA}, A::AbstractArray{T}, B::AbstractArray{T}) where T
+    A_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, A)
+    B_dual = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, B)
+    all(compare.(A_dual, B_dual, T))
+end
+
+function prepare(gemm::MatrixMultiplication{DualWMMA}; OP_M, OP_N, OP_K)
+    @assert gemm.a_type == gemm.b_type
+    ab_type = gemm.a_type
+    @assert gemm.c_type == gemm.d_type
+    cd_type = gemm.c_type
+
+    config = GemmKernels.get_config(
+        gemm_shape = gemm.shape,
+        operator = Operator.WMMADualOp{OP_M, OP_N, OP_K, ab_type, cd_type},
+
+        global_a_layout = Layout.InterleavedColMajor{Float16},
+        global_b_layout = Layout.InterleavedColMajor{Float16},
+        global_c_layout = Layout.InterleavedColMajor{Float32},
+        global_d_layout = Layout.InterleavedColMajor{Float32},
+
+        shared_a_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+        shared_b_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
+        shared_c_layout = Layout.SplitColMajor{Float32},
+        shared_d_layout = Layout.SplitColMajor{Float32},
+
+        warps_per_block = 8,
+
+        compute_warp = (M = 16, N = 32, K = 16),
+
+        block_shape = (M = 64, N = 64, K = 32),
+
+        mem_a_warp = (M = 64, K = 2),
+        mem_b_warp = (K = 32, N = 4),
+        mem_cd_warp = (M = 64, N = 1),
+
+        mem_a_thread = (M = 4, K = 1),
+        mem_b_thread = (K = 4, N = 1),
+        mem_cd_thread = (M = 2, N = 1)
+    )
+
+    kernel = Kernel.matmul_pipelined
+
+    (; config, kernel)
+end
+
+
+## tensor contraction
+
+export TensorContraction, WMMATensorContraction
+
+struct TensorContraction{K} <: AbstractProblem
+    name             # A parseable name for the configuration.
+    modes            # The modes of the input tensors.
+    extents          # The extents of the input tensors.
+
+    alpha            # Value of alpha
+    beta             # Value of beta
+    a_type           # Type of the A tensor on host and in GMEM.
+    b_type           # Type of the B tensor on host and in GMEM.
+    c_type           # Type of the C tensor on host and in GMEM.
+    d_type           # Type of the D tensor on host and in GMEM.
+    compute_type     # The type to compute in.
+    accumulate_type  # The type to accumulate into.
+end
+
+Base.show(io::IO, tc::TensorContraction) = print(io, "TC $(tc.name)")
+
+function old_pad_extents(extents, modes, multiple=512)
+    padded_extents = [extents...]
+    for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
+        intersection = intersect(modes[idx1], modes[idx2])
+
+        if prod(extents[intersection]) % multiple == 0
+            continue
         end
 
-        Configuration(name,
-                      conf,
-                      convert(AB_type, 1),
-                      convert(AB_type, 1),
-                      AB_type,
-                      AB_type,
-                      CD_type,
-                      CD_type,
-                      transpose_a,
-                      transpose_b,
-                      reference_mul!,
-                      Epilogue.Default(),
-                      $verify_default,
-                      Kernel.matmul_singlestage,
-                      nothing)
-    end end)
+        extent_to_pad = argmax(extents[intersection] .% multiple)
+
+        padded_extents[intersection[extent_to_pad]] =
+            Int64(ceil(extents[intersection[extent_to_pad]] / multiple) *
+            multiple)
+    end
+    return Tuple(padded_extents)
 end
 
-macro get_wmma_complex_config()
-    esc(quote let
-        name = "WMMA Complex GEMM $(AB_type)*$(AB_type)=$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
+# Exponent of 2 in the prime factorisation of n.
+function number_of_two_factors_in_prime_fact(n::Integer)
+    rv = 0
 
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMAComplexOp{OP_M, OP_N, OP_K, AB_type, CD_type},
+    while n % 2 == 0
+        rv += 1
+        n /= 2
+    end
 
-                                        global_a_layout = transpose_a ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
-                                        global_b_layout = transpose_b ? Layout.InterleavedRowMajor{Float16} : Layout.InterleavedColMajor{Float16},
-                                        global_c_layout = Layout.InterleavedColMajor{Float32},
-                                        global_d_layout = Layout.InterleavedColMajor{Float32},
-
-                                        shared_a_layout = transpose_a ? Layout.Padded{Layout.SplitRowMajor{Float16}, 8} : Layout.Padded{Layout.SplitColMajor{Float16}, 8},
-                                        shared_b_layout = transpose_b ? Layout.Padded{Layout.SplitRowMajor{Float16}, 8} : Layout.Padded{Layout.SplitColMajor{Float16}, 8},
-                                        shared_c_layout = Layout.SplitColMajor{Float32},
-                                        shared_d_layout = Layout.SplitColMajor{Float32},
-
-                                        warps_per_block = 8,
-
-                                        compute_warp = (M = 16, N = 32, K = 16),
-
-                                        block_shape = (M = 64, N = 64, K = 32),
-
-                                        mem_a_warp = transpose_a ? (M = 4, K = 32) : (M = 64, K = 2),
-                                        mem_b_warp = transpose_b ? (K = 2, N = 64) : (K = 32, N = 4),
-                                        mem_cd_warp = (M = 64, N = 1),
-
-                                        mem_a_thread = transpose_a ? (M = 1, K = 4) : (M = 4, K = 1),
-                                        mem_b_thread = transpose_b ? (K = 1, N = 4) : (K = 4, N = 1),
-                                        mem_cd_thread = (M = 2, N = 1),
-
-                                        is_a_col_major = !transpose_a,
-                                        is_b_col_major = !transpose_b
-                                        )
-
-        Configuration(name,
-                      conf,
-                      convert(Complex{AB_type}, 1),
-                      convert(Complex{AB_type}, 1),
-                      Complex{AB_type},
-                      Complex{AB_type},
-                      Complex{CD_type},
-                      Complex{CD_type},
-                      transpose_a,
-                      transpose_b,
-                      mul!,
-                      Epilogue.Default(),
-                      $verify_default,
-                      Kernel.matmul_pipelined,
-                      nothing)
-    end end)
+    rv
 end
 
-macro get_wmma_dual_config()
-    esc(quote let
-        name = "WMMA Dual GEMM d$(AB_type)*d$(AB_type)=d$(CD_type) ($(M)×$(K)) · ($(K)×$(N)) ($( !transpose_a ? 'N' : 'T' )$( !transpose_b ? 'N' : 'T' )) OP ($(OP_M), $(OP_N), $(OP_K))"
-
-        conf = GemmKernels.get_config(
-                                        gemm_shape = (M = M, N = N, K = K),
-                                        operator = Operator.WMMADualOp{OP_M, OP_N, OP_K, AB_type, CD_type},
-
-                                        global_a_layout = Layout.InterleavedColMajor{Float16},
-                                        global_b_layout = Layout.InterleavedColMajor{Float16},
-                                        global_c_layout = Layout.InterleavedColMajor{Float32},
-                                        global_d_layout = Layout.InterleavedColMajor{Float32},
-
-                                        shared_a_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
-                                        shared_b_layout = Layout.Padded{Layout.SplitColMajor{Float16}, 8},
-                                        shared_c_layout = Layout.SplitColMajor{Float32},
-                                        shared_d_layout = Layout.SplitColMajor{Float32},
-
-                                        warps_per_block = 8,
-
-                                        compute_warp = (M = 16, N = 32, K = 16),
-
-                                        block_shape = (M = 64, N = 64, K = 32),
-
-                                        mem_a_warp = (M = 64, K = 2),
-                                        mem_b_warp = (K = 32, N = 4),
-                                        mem_cd_warp = (M = 64, N = 1),
-
-                                        mem_a_thread = (M = 4, K = 1),
-                                        mem_b_thread = (K = 4, N = 1),
-                                        mem_cd_thread = (M = 2, N = 1)
-                                        )
-
-        dual_conv(M) = reinterpret(ForwardDiff.Dual{Float32,Float32,1}, M)
-
-        Configuration(name,
-                      conf,
-                      convert(Complex{AB_type}, 1),
-                      convert(Complex{AB_type}, 1),
-                      Complex{AB_type},
-                      Complex{AB_type},
-                      Complex{CD_type},
-                      Complex{CD_type},
-                      transpose_a,
-                      transpose_b,
-                      (C, A, B, alpha, beta) -> mul!(dual_conv(C), dual_conv(Complex{Float32}.(A)), dual_conv(Complex{Float32}.(B)), true, true),
-                      Epilogue.Default(),
-                      $verify_dual,
-                      Kernel.matmul_pipelined,
-                      nothing)
-    end end)
+# Increase number to introduce an extra factor of 2 in the prime factorisation.
+function increment_to_increase_power_of_two_in_fact(n::Integer)
+    round_to_multiple_of = 2 ^ (number_of_two_factors_in_prime_fact(n) + 1)
+    Int(ceil(n / round_to_multiple_of) * round_to_multiple_of)
 end
+
+# Sequence that increases the exponent of power of two starting from given number, and continuing until the point where we have at least a multiple of multiple_to_stop_at.
+function sequence_increasing_power_two(start::Integer, multiple_to_stop_at::Int)
+    sequence = [start]
+
+    while sequence[end] % multiple_to_stop_at != 0
+        push!(sequence, increment_to_increase_power_of_two_in_fact(sequence[end]))
+    end
+
+    sequence
+end
+
+# Pad (extents_1, extents_2, ...) to (extents_1 + padding_1, extents_2 + padding_2, ...)
+# such that (extents_1 + padding_1) * (extents_2 + padding_2) * ... is a multiple of multiple.
+function find_minimal_padding(extents, multiple)
+    # For now, let's do a "smart" brute force search. I think we can do this
+    # iteratively, by increasing a particular extent to the next multiple of
+    # the smallest power of two that does not divide the extent. e.g. a
+    # dimension 72 (which is a multiple of 8, but not 16), will be padded to
+    # the next multiple of 16, i.e. 96. In each iteration, we choose the extent
+    # that requires the least amount of padding. I'm not convinced yet of the
+    # optimality of that approach, though, and since the search space is small,
+    # anyway, we'll just exhaustively search all options, albeit in a smart
+    # way.
+
+    # It only makes sense to increase the extent to a value that increases the
+    # power of 2 in the prime factorisation of the extent. We also only need to
+    # do this up to the smallest power of two that ensures that the product is
+    # a multiple regardless of the choice of the padding for the other
+    # dimensions. E.g. to pad (72, 72) to a multiple of 512, we only need to
+    # consider increasing the padding up to multiples of 2^6, since 72 is a
+    # multiple of 2^3, so whatever we choose for the padding of the second
+    # dimension, it will be a multiple of 2^3, so we need at most 6 other
+    # 2-factors for the first dimension to get a multiple of 512=2^9.
+
+    res = collect(Iterators.filter(x -> prod(x) % multiple == 0, Iterators.product(Configs.sequence_increasing_power_two.(extents, multiple)...)));
+    _, idx = findmin(prod, res)
+    res[idx]
+end
+
+function pad_extents(extents, modes, multiples=(M=512,N=512,K=128))
+    padded_extents = [extents...]
+
+    for (idx1, idx2, multiple) in [(1, 2, multiples.M), (3, 2, multiples.K), (1, 3, multiples.N)]
+        # Set of dimensions that contribute to e.g. M
+        intersection = intersect(modes[idx1], modes[idx2])
+
+        # Pad those dimensions
+        padded_extents[intersection] .= find_minimal_padding(padded_extents[intersection], multiple)
+    end
+
+    Tuple(padded_extents)
+end
+
+function padded_view(x::AbstractArray, dims)
+    # first, get a contiguous view with the destination size
+    y = view(x, 1:prod(dims))
+
+    # then, reshape into ND
+    return reshape(y, dims)
+end
+
+function Base.sizeof(tc::TensorContraction)
+    padded_extents = pad_extents(tc.extents, tc.modes)
+    return sizeof(tc.a_type) * prod(padded_extents[tc.modes[2]]) +
+           sizeof(tc.b_type) * prod(padded_extents[tc.modes[3]]) +
+           sizeof(tc.c_type) * prod(padded_extents[tc.modes[1]]) +
+           sizeof(tc.d_type) * prod(padded_extents[tc.modes[1]])
+end
+
+function allocate_data(tc::TensorContraction; fake::Bool=false)
+    padded_extents = pad_extents(tc.extents, tc.modes)
+    if fake
+        a = unsafe_wrap(CuArray{tc.a_type, length(tc.modes[2]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.a_type}, CU_NULL), padded_extents[tc.modes[2]])
+        b = unsafe_wrap(CuArray{tc.b_type, length(tc.modes[3]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.b_type}, CU_NULL), padded_extents[tc.modes[3]])
+        c = unsafe_wrap(CuArray{tc.c_type, length(tc.modes[1]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.c_type}, CU_NULL), padded_extents[tc.modes[1]])
+        d = unsafe_wrap(CuArray{tc.d_type, length(tc.modes[1]), CUDA.DeviceMemory},
+                        convert(CuPtr{tc.d_type}, CU_NULL), padded_extents[tc.modes[1]])
+    else
+        a = CuArray{tc.a_type}(undef, padded_extents[tc.modes[2]])
+        b = CuArray{tc.b_type}(undef, padded_extents[tc.modes[3]])
+        c = CuArray{tc.c_type}(undef, padded_extents[tc.modes[1]])
+        d = CuArray{tc.d_type}(undef, padded_extents[tc.modes[1]])
+    end
+
+    return a, b, c, d
+end
+
+# fill a tensor with a pattern
+function pattern!(a::AbstractArray{T}, start=1, increment=1) where T
+    function pattern_kernel(start, increment)
+        i = threadIdx().x + (blockIdx().x - 1)*blockDim().x
+        stride = blockDim().x * gridDim().x
+        val = start + (i-1) * increment
+        while i <= length(a)
+            a[i] = val
+            i += stride
+            val += increment * stride
+        end
+        return
+    end
+
+    start = convert(T, start)
+    increment = convert(T, increment)
+
+    kernel = @cuda launch=false pattern_kernel(start, increment)
+    config = launch_configuration(kernel.fun)
+    threads = min(config.threads, length(a))
+    blocks = min(config.blocks, cld(length(a), threads))
+    kernel(start, increment; threads, blocks)
+end
+
+function initialize_data(tc::TensorContraction, a, b, c, d; kwargs...)
+    if isempty(kwargs)
+        # initialize data
+        # XXX: using the CUDA RNG here results in verification errors on Volta GPUs.
+        #      using a CPU RNG works, however, copying into a non-contiguous view allocates.
+        rng = CUDA.RNG(0)
+        rand!(rng, a)
+        rand!(rng, b)
+        rand!(rng, c)
+        fill!(d, 0)
+    else
+        # use the params to get appropriately padded tensors
+        padding_multiple = max(kwargs[:BLOCK_M], kwargs[:BLOCK_N], kwargs[:BLOCK_K])
+        padded_extents = pad_extents(tc.extents, tc.modes, (M = kwargs[:BLOCK_M], N = kwargs[:BLOCK_N], K = kwargs[:BLOCK_K]))
+        padded_a = padded_view(a, padded_extents[tc.modes[2]])
+        padded_b = padded_view(b, padded_extents[tc.modes[3]])
+        padded_c = padded_view(c, padded_extents[tc.modes[1]])
+        padded_d = padded_view(d, padded_extents[tc.modes[1]])
+
+        # set the padding to 0
+        fill!(padded_a, 0)
+        fill!(padded_b, 0)
+        fill!(padded_c, 0)
+
+        # initialize the actual data
+        data_a = view(padded_a, ntuple(i->1:tc.extents[tc.modes[2]][i], ndims(a))...)
+        data_b = view(padded_b, ntuple(i->1:tc.extents[tc.modes[3]][i], ndims(b))...)
+        data_c = view(padded_c, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(c))...)
+        data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
+        initialize_data(tc, data_a, data_b, data_c, data_d)
+    end
+end
+
+function calculate_reference(tc::TensorContraction, a, b, c, d)
+    # use unpadded buffers
+    let a = padded_view(a, tc.extents[tc.modes[2]]),
+        b = padded_view(b, tc.extents[tc.modes[3]]),
+        c = padded_view(c, tc.extents[tc.modes[1]]),
+        d = padded_view(d, tc.extents[tc.modes[1]])
+
+        # re-initialize the data; this is needed as we don't use the full buffer
+        initialize_data(tc, a, b, c, d)
+
+        copy!(d, c)
+
+        plan = cuTENSOR.plan_contraction(
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY,
+            algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+            compute_type=tc.accumulate_type
+        )
+
+        cuTENSOR.contract!(
+            tc.alpha,
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            tc.beta,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY;
+            compute_type=tc.accumulate_type,
+            plan
+        )
+
+        return d
+    end
+end
+
+function prepare_baseline(tc::TensorContraction, a, b, c, d)
+    # use unpadded buffers
+    let a = padded_view(a, tc.extents[tc.modes[2]]),
+        b = padded_view(b, tc.extents[tc.modes[3]]),
+        c = padded_view(c, tc.extents[tc.modes[1]]),
+        d = padded_view(d, tc.extents[tc.modes[1]])
+
+        copy!(d, c)
+
+        plan = cuTENSOR.plan_contraction(
+            a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+            cuTENSOR.CUTENSOR_OP_IDENTITY,
+            algo=cuTENSOR.CUTENSOR_ALGO_GETT,
+            compute_type=tc.accumulate_type
+        )
+
+        (; plan)
+    end
+end
+
+function execute_baseline(tc::TensorContraction, a, b, c, d; plan, elementwise_op="none")
+    # use unpadded buffers
+    let a = padded_view(a, tc.extents[tc.modes[2]]),
+        b = padded_view(b, tc.extents[tc.modes[3]]),
+        c = padded_view(c, tc.extents[tc.modes[1]]),
+        d = padded_view(d, tc.extents[tc.modes[1]])
+
+        if elementwise_op == "none"
+            cuTENSOR.contract!(
+                tc.alpha,
+                a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                tc.beta,
+                d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                cuTENSOR.CUTENSOR_OP_IDENTITY;
+                compute_type=tc.accumulate_type,
+                plan
+            )
+        elseif elementwise_op == "supported"
+            # ReLU
+            cuTENSOR.contract!(
+                tc.alpha,
+                a, tc.modes[2], cuTENSOR.CUTENSOR_OP_RELU,
+                b, tc.modes[3], cuTENSOR.CUTENSOR_OP_RELU,
+                tc.beta,
+                d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                cuTENSOR.CUTENSOR_OP_RELU;
+                compute_type=tc.accumulate_type,
+                plan
+            )
+        elseif elementwise_op == "unsupported"
+            # Leaky ReLU
+            leaky_relu(x) = (x > 0) ? x : convert(typeof(x), 0.01) * x
+
+            a = leaky_relu.(a)
+            b = leaky_relu.(b)
+
+            cuTENSOR.contract!(
+                tc.alpha,
+                a, tc.modes[2], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                b, tc.modes[3], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                tc.beta,
+                d, tc.modes[1], cuTENSOR.CUTENSOR_OP_IDENTITY,
+                cuTENSOR.CUTENSOR_OP_IDENTITY;
+                compute_type=tc.accumulate_type,
+                plan
+            )
+
+            d = leaky_relu.(d)
+        else
+            @error "Unknown elementwise operation for cuTENSOR baseline."
+        end
+    end
+end
+
+function WMMATensorContraction(; name, extents, data_type, compute_type, accumulate_type, zero_c)
+    # Parsing the name into a 3D vector of the modes of each tensor.
+    modes = Vector{Vector{Int}}(undef, 0)
+    for tensor in split(name, "-")
+        tensorMode = Vector{Int}(undef, 0)
+
+        for mode in split(tensor, ".")
+            push!(tensorMode, parse(Int, mode))
+        end
+
+        push!(modes, tensorMode)
+    end
+
+    TensorContraction{WMMA}(
+        name,
+        modes,
+        Tuple(extents),
+
+        convert(compute_type, 2),
+        convert(compute_type, zero_c ? 0 : 3),
+        data_type,
+        data_type,
+        data_type,
+        data_type,
+        compute_type,
+        accumulate_type
+    )
+end
+
+function prepare(tc::TensorContraction, a, b, c, d;
+                                        BLOCK_M, BLOCK_N, BLOCK_K,
+                                        WARPS_M, WARPS_N,
+                                        OP_M, OP_N, OP_K,
+                                        kernel,
+                                        is_A_col_major, is_B_col_major, is_D_col_major,
+                                        PERM_M, PERM_N, PERM_K, cta_swizzle, elementwise_op="none")
+    @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
+    data_type = tc.a_type
+
+    # get padded tensors
+    padded_extents = pad_extents(tc.extents, tc.modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+    padded_a = padded_view(a, padded_extents[tc.modes[2]])
+    padded_b = padded_view(b, padded_extents[tc.modes[3]])
+    padded_c = padded_view(c, padded_extents[tc.modes[1]])
+    padded_d = padded_view(d, padded_extents[tc.modes[1]])
+
+    # get underlying output data to return to the caller
+    data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
+
+    relu(x) = (x > 0) ? x : zero(x)
+    leaky_relu(x) = (x > 0) ? x : convert(typeof(x), 0.01) * x
+
+    op_function = if elementwise_op == "none"
+        identity
+    elseif elementwise_op == "supported"
+        relu
+    elseif elementwise_op == "unsupported"
+        leaky_relu
+    else
+        @error "Unknown elementwise operation for baseline."
+    end
+
+    a_extent = padded_extents[tc.modes[2]]
+    a_desc = Tensors.TensorDescriptor(
+        length(a_extent), collect(Int, a_extent), collect(Int, cumprod((1, a_extent...))[1:end-1]), data_type, op_function
+    )
+    b_extent = padded_extents[tc.modes[3]]
+    b_desc = Tensors.TensorDescriptor(
+        length(b_extent), collect(Int, b_extent), collect(Int, cumprod((1, b_extent...))[1:end-1]), data_type, op_function
+    )
+    c_extent = padded_extents[tc.modes[1]]
+    c_desc = Tensors.TensorDescriptor(
+        length(c_extent), collect(Int, c_extent), collect(Int, cumprod((1, c_extent...))[1:end-1]), data_type, op_function
+    )
+
+    GemmKernels.Tensors.OVERRIDE_do_override = true
+    GemmKernels.Tensors.OVERRIDE_is_A_col_major = is_A_col_major
+    GemmKernels.Tensors.OVERRIDE_is_B_col_major = is_B_col_major
+    GemmKernels.Tensors.OVERRIDE_is_D_col_major = is_D_col_major
+    GemmKernels.Tensors.OVERRIDE_perm_M = PERM_M
+    GemmKernels.Tensors.OVERRIDE_perm_N = PERM_N
+    GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
+    GemmKernels.Tensors.OVERRIDE_cta_swizzle = cta_swizzle
+
+    plan = Tensors.ContractionPlan(
+        tc.alpha,
+        padded_a, a_desc, tc.modes[2],
+        padded_b, b_desc, tc.modes[3],
+        tc.beta,
+        padded_c, c_desc, tc.modes[1],
+        padded_d, c_desc, tc.modes[1];
+        operator=Operator.WMMAOp{OP_M, OP_N, OP_K, tc.compute_type, tc.accumulate_type},
+        computeType=tc.compute_type,
+        accumulateType=tc.accumulate_type,
+        blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+        warpsPerBlock=WARPS_M * WARPS_N,
+        computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
+    )
+
+    (; plan, padded_a, padded_b, padded_c, padded_d, data_d)
+end
+
+function execute(tc::TensorContraction, a, b, c, d; plan,
+                                        padded_a, padded_b, padded_c, padded_d, data_d, elementwise_op="none")
+    Tensors.contraction!(plan, tc.alpha, padded_a, padded_b, tc.beta, padded_c, padded_d)
+    return data_d
+end
+
+
+## iterate all configs
 
 function get_configs()
     rv = []
@@ -503,17 +1033,22 @@ function get_configs()
             (Int64, Int64, Int64)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
-        (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 64, 32)],
         N in [128, 256, 2048]
 
         # XXX: Should we do non-square matrices as well?
         M = K = N
 
-        try
-            push!(rv, @get_fpu_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = FPUMatrixMultiplication(; M, N, K, A_type, B_type, CD_type, transpose_a, transpose_b)
+
+        for (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
+            (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 64, 32)]
+
+            try
+                params = prepare(gemm; BLOCK_M, BLOCK_N, BLOCK_K, OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
@@ -522,31 +1057,36 @@ function get_configs()
             (Float32, Float32, Float32)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
-            # First, test some shapes with the default base shape (4, 8, 1).
-            map(tup -> (tup..., 4, 8, 1),
-            [( 4, 8,  1),
-             ( 8, 8,  1),
-             ( 4, 16, 1),
-             ( 4, 8,  2),
-             ( 8, 16, 2)]),
-            # Then, test some different combinations of op shape + base shape.
-            [(4,  32, 1, 1,  32, 1),
-             (4,  32, 1, 2,  16, 1),
-             (16, 16, 1, 4,  8,  1),
-             (16, 16, 1, 8,  4,  1),
-             (32, 4,  1, 16, 2,  1),
-             (32, 4,  1, 32, 1,  1)]),
-        (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 64, 32)],
         N in [128]
 
         # We'll only test square matrices.
         M = K = N
 
-        try
-            push!(rv, @get_fpu_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = FPUMatrixMultiplication(; M, N, K, A_type, B_type, CD_type, transpose_a, transpose_b)
+
+        for (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in vcat(
+                # First, test some shapes with the default base shape (4, 8, 1).
+                map(tup -> (tup..., 4, 8, 1),
+                [( 4, 8,  1),
+                ( 8, 8,  1),
+                ( 4, 16, 1),
+                ( 4, 8,  2),
+                ( 8, 16, 2)]),
+                # Then, test some different combinations of op shape + base shape.
+                [(4,  32, 1, 1,  32, 1),
+                (4,  32, 1, 2,  16, 1),
+                (16, 16, 1, 4,  8,  1),
+                (16, 16, 1, 8,  4,  1),
+                (32, 4,  1, 16, 2,  1),
+                (32, 4,  1, 32, 1,  1)]),
+            (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 64, 32)]
+
+            try
+                params = prepare(gemm; BLOCK_M, BLOCK_N, BLOCK_K, OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
@@ -555,17 +1095,22 @@ function get_configs()
             (Float32, Float32, Float32, 128)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)],
         (M, N, K) in min_dimension .* [
             [1, 1, 1],
             [2, 2, 1],
             [1, 1, 2],
             [2, 2, 2]]
 
-        try
-            push!(rv, @get_tropical_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = TropicalMatrixMultiplication(; M, N, K, A_type, B_type, CD_type, transpose_a, transpose_b)
+
+        for (OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB) in [(8, 16, 2, 4, 8, 1)]
+
+            try
+                params = prepare(gemm; OP_M, OP_N, OP_K, OP_MB, OP_NB, OP_KB)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
@@ -575,22 +1120,27 @@ function get_configs()
         (Float16, Float32, 128)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
-        (WARPS_M, WARPS_N) in [(4, 2)],
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 1],
             [1, 1, 2],
             [2, 2, 2]], [[2048, 2048, 2048]]),
-        zero_c in [false],
-        kernel in [Kernel.matmul_pipelined]
+        zero_c in [false]
 
-        push!(rv, @get_wmma_config)
+        gemm = WMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b, zero_c)
+
+        for (BLOCK_M, BLOCK_N, BLOCK_K) in [(128, 128, 64)],
+            (WARPS_M, WARPS_N) in [(4, 2)],
+            (OP_M, OP_N, OP_K) in [
+                (16, 16, 16),
+                (8, 32, 16),
+                (32, 8, 16),
+            ],
+            kernel in [Kernel.matmul_pipelined]
+
+            params = prepare(gemm; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, zero_c, kernel)
+            push!(rv, (; gemm, params...))
+        end
     end
 
     # WMMA GEMM parameters
@@ -598,16 +1148,21 @@ function get_configs()
         (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a in [false, true],
         transpose_b in [false, true],
-        (BLOCK_M, BLOCK_N, BLOCK_K) in filter(x -> prod(x[1:2]) <= 128*128, collect(Iterators.product([64, 128, 256], [64, 128, 256], [16, 32, 64]))[:]),
-        (WARPS_M, WARPS_N) in filter(x -> prod(x) >= 4, collect(Iterators.product([1, 2, 4], [1, 2, 4]))[:]),
-        zero_c in [false, true],
-        (OP_M, OP_N, OP_K) in [(16, 16, 16)],
-        kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined]
+        zero_c in [false, true]
 
-        try
-            push!(rv, @get_wmma_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = WMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b, zero_c)
+
+        for (BLOCK_M, BLOCK_N, BLOCK_K) in filter(x -> prod(x[1:2]) <= 128*128, collect(Iterators.product([64, 128, 256], [64, 128, 256], [16, 32, 64]))[:]),
+            (WARPS_M, WARPS_N) in filter(x -> prod(x) >= 4, collect(Iterators.product([1, 2, 4], [1, 2, 4]))[:]),
+            (OP_M, OP_N, OP_K) in [(16, 16, 16)],
+            kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined]
+
+            try
+                params = prepare(gemm; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, zero_c, kernel)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
@@ -616,39 +1171,50 @@ function get_configs()
         (Float16, Float32, 128)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
 
-        try
-            push!(rv, @get_wmma_bias_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = BiasedWMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+
+        for (OP_M, OP_N, OP_K) in [
+                (16, 16, 16),
+                (8, 32, 16),
+                (32, 8, 16),
+            ]
+
+            try
+                params = prepare(gemm; OP_M, OP_N, OP_K)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
     # WMMA Diagonal GEMM
     for (AB_type, CD_type, min_dimension) in [
         (Float16, Float32, 128)],
+        transpose_a = [false],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
         (M, N, K) in vcat(min_dimension .* [
             [1, 1, 1],
             [2, 2, 2]], [[4096, 4096, 4096]])
 
-        try
-            push!(rv, @get_wmma_diagonal_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = DiagonalWMMA(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+
+        for (OP_M, OP_N, OP_K) in [
+                (16, 16, 16),
+                (8, 32, 16),
+                (32, 8, 16),
+            ]
+
+            try
+                params = prepare(gemm; OP_M, OP_N, OP_K)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
@@ -656,20 +1222,25 @@ function get_configs()
     for (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a = [false, true],
         transpose_b = [false, true],
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
         (M, N, K) in [
             (128, 128, 128),
             (256, 256, 256),
             (2048, 2048, 2048)]
 
-        try
-            push!(rv, @get_wmma_complex_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        gemm = ComplexWMMA(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
+
+        for (OP_M, OP_N, OP_K) in [
+                (16, 16, 16),
+                (8, 32, 16),
+                (32, 8, 16),
+            ]
+
+            try
+                params = prepare(gemm; OP_M, OP_N, OP_K)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 
@@ -677,20 +1248,24 @@ function get_configs()
     for (AB_type, CD_type) in [(Float16, Float32)],
         transpose_a = [false],
         transpose_b = [false],
-        (OP_M, OP_N, OP_K) in [
-            (16, 16, 16),
-            (8, 32, 16),
-            (32, 8, 16),
-        ],
         (M, N, K) in [
             (128, 128, 128),
             (256, 256, 256),
             (2048, 2048, 2048)]
+        gemm = DualWMMAMatrixMultiplication(; M, N, K, AB_type, CD_type, transpose_a, transpose_b)
 
-        try
-            push!(rv, @get_wmma_dual_config)
-        catch err
-            isa(err, GemmKernels.ConfigError) || rethrow()
+        for (OP_M, OP_N, OP_K) in [
+                (16, 16, 16),
+                (8, 32, 16),
+                (32, 8, 16),
+            ]
+
+            try
+                params = prepare(gemm; OP_M, OP_N, OP_K)
+                push!(rv, (; gemm, params...))
+            catch err
+                isa(err, GemmKernels.ConfigError) || rethrow()
+            end
         end
     end
 

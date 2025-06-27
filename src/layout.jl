@@ -33,19 +33,19 @@ end
     Int(ptr) % alignment == 0
 end
 
-@inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}) where {N, T, AS}
+Base.@propagate_inbounds @inline @generated function vloada(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS}, i::Integer = 1) where {N, T, AS}
     alignment = sizeof(T) * N
 
     return quote
         $(Expr(:meta, :inline))
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
         @boundscheck checkalignment(vec_ptr, $alignment)
-        return unsafe_load(vec_ptr, 1, Val($alignment))
+        return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
     end
 end
 
-@inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
-                                     x::NTuple{M,<:Any}) where {N, T, AS, M}
+Base.@propagate_inbounds @inline @generated function vstorea!(::Type{Vec{N, T}}, ptr::Core.LLVMPtr{T, AS},
+                                     x::NTuple{M,<:Any}, i::Integer = 1) where {N, T, AS, M}
     alignment = sizeof(T) * N
 
     ex = quote
@@ -59,7 +59,7 @@ end
             y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
             @boundscheck checkalignment(vec_ptr, $alignment)
-            unsafe_store!(vec_ptr, y, $offset ÷ N + 1, Val($alignment))
+            unsafe_store!(vec_ptr, y, $offset ÷ N + (i - 1) ÷ N + 1, Val($alignment))
         end).args)
     end
 
@@ -173,7 +173,7 @@ end
     @loopinfo unroll for i = 1 : tile.size[1]
         @loopinfo unroll for j = 1 : tile.size[2]
             t = translate_offset(tile, (i - 1, j - 1))
-            @inbounds val = value[(i - 1) * tile.size[2] + j]
+            @inbounds val = values[(i - 1) * tile.size[2] + j]
             if checkbounds(Bool, workspace, t.index[2] + 1, t.index[1] + 1)
                 @inbounds workspace[t.index[2] + 1, t.index[1] + 1] = val
             end

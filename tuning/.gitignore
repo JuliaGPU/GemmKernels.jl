@@ -1,4 +1,6 @@
 tuning.log
 tuning.log.*
-*.bin
+*.bin*
 *.pdf
+*.tex
+configs.arrow

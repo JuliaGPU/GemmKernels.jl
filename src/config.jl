@@ -32,15 +32,16 @@ using GemmKernels: CTASwizzle
     #= Operator =#
     operator                    # which operator to use in the inner loop
 
-    #= Is A & B stored in Column major order? This determines the iteration order of the parallelisation =#
+    #= Are the matrices stored in Column major order? This determines the iteration order of the parallelisation =#
     is_a_col_major
     is_b_col_major
+    is_cd_col_major
 
     #= CTA Swizzling function =#
     cta_swizzle
 end
 
-function Base.show(io::IO, config::Config)
+function Base.show(io::IO, @nospecialize(config::Config))
     println(io, "matmul_shape:     $(config.matmul_shape)")
     println(io, "block_shape:      $(config.block_shape)")
     println(io, "warps_per_block:  $(config.warps_per_block)")
@@ -71,6 +72,7 @@ function Base.show(io::IO, config::Config)
 
     println(io, "is_a_col_major:   $(config.is_a_col_major)")
     println(io, "is_b_col_major:   $(config.is_b_col_major)")
+    println(io, "is_cd_col_major:  $(config.is_cd_col_major)")
 
     println(io, "cta_swizzle:      $(config.cta_swizzle)")
 end
@@ -275,8 +277,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     require_tile_sized_global(global_d_layout) && check_tile_multiple(gemm_shape, block_shape, [:M, :N], "gemm_shape.MN must be a multiple of block_shape.MN!")
 
     # CTA swizzling function.
-    # TODO: Use a better swizzling function (e.g. HorizontallyTiled{8}) if it's allowed.
-    cta_swizzle = CTASwizzle.Identity
+    cta_swizzle = get(params, :cta_swizzle, CTASwizzle.Identity)
 
     return Config(
         #= Params =#
@@ -306,9 +307,10 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         #= Operators =#
         operator,
 
-        #= Is A & B Col Major? =#
+        #= Are the matrices Col Major? =#
         is_a_col_major,
         is_b_col_major,
+        is_cd_col_major,
 
         #= CTA Swizzle function =#
         cta_swizzle,

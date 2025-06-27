@@ -128,7 +128,7 @@ function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
     return
 end
 
-function shmem_size(conf::GemmKernels.Config, ::typeof(matmul_singlestage))
+function shmem_size(@nospecialize(conf::GemmKernels.Config), ::typeof(matmul_singlestage))
     size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
              prod(Layout.physical_size(conf.shared_a_layout,
                   (; conf.block_shape.M, conf.block_shape.K)))
@@ -349,7 +349,7 @@ function matmul_pipelined(conf::GemmKernels.Config, a, b, c, d,
     return
 end
 
-function shmem_size(conf::GemmKernels.Config, ::typeof(matmul_pipelined))
+function shmem_size(@nospecialize(conf::GemmKernels.Config), ::typeof(matmul_pipelined))
     size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
              prod(Layout.physical_size(conf.shared_a_layout,
                   (; conf.block_shape.M, conf.block_shape.K)))
@@ -573,7 +573,7 @@ function matmul_pipelined_ng(conf::GemmKernels.Config, a, b, c, d,
     return
 end
 
-function shmem_size(conf::GemmKernels.Config, ::typeof(matmul_pipelined_ng))
+function shmem_size(@nospecialize(conf::GemmKernels.Config), ::typeof(matmul_pipelined_ng))
     size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
              prod(Layout.physical_size(conf.shared_a_layout,
                   (; conf.block_shape.M, conf.block_shape.K)))

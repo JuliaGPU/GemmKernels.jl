@@ -15,6 +15,7 @@ try
         include("matmul.jl")
         include("blas.jl")
         include("examples.jl")
+        include("contraction.jl")
     end
 finally
     if myid() == 1
