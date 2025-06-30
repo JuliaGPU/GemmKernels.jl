@@ -69,7 +69,7 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
     source = CUDA.GPUCompiler.methodinstance(F, tt)
     #config = CUDA.compiler_config(device())
     cap = @something OVERRIDE_cap[] CUDA.capability(device())
-    config = CUDA.compiler_config(nothing; cap)
+    config = CUDA.compiler_config(nothing; cap, maxthreads=threads)
     job = CUDA.GPUCompiler.CompilerJob(source, config)
 
     # compile or load from disk
