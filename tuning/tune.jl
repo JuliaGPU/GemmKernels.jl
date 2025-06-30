@@ -775,7 +775,7 @@ function main()
                         try
                             # only process new configurations
                             if !in(hash_config(config), seen_configs)
-                                push!(all_configs, (config..., "pending", Inf, NaN))
+                                push!(all_configs, (config..., "pending", Inf, -Inf))
                                 put!(initial_jobs, size(all_configs, 1))
                             end
                         catch err
