@@ -2,4 +2,5 @@
 *.pdf
 *.json
 !gemm-configs.json
+!benchmark-suite.json
 Manifest.toml
