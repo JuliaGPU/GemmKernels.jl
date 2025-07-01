@@ -100,7 +100,7 @@ if [[ "$PERPETUAL" == "1" ]]; then
     while true; do
         julia --project --heap-size-hint=5G tune.jl "$@"
 
-        "Sweep finished at $(date). Restarting sweep after 10 seconds..."
+        echo "Sweep finished at $(date). Restarting sweep after 10 seconds..."
         sleep 10
     done
 else
