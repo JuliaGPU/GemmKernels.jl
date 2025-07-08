@@ -192,7 +192,8 @@ function addworkers(X; gpu_mem_target=nothing, cpu_mem_target=nothing, tag="")
     env = [
         "JULIA_NUM_THREADS" => "1",
         "OPENBLAS_NUM_THREADS" => "1",
-        "GEMMKERNELS_WORKER_TAG" => tag
+        "GEMMKERNELS_WORKER_TAG" => tag,
+        "GK_TARGET_PERFS" => get(ENV, "GK_TARGET_PERFS", "")
     ]
     if gpu_mem_target !== nothing
         push!(env, "JULIA_CUDA_HARD_MEMORY_LIMIT" => string(gpu_mem_target))
@@ -383,24 +384,39 @@ function benchmark_configs(all_configs)
     best_configs = similar(all_configs, 0)
     best_configs.gemmkernels_times = Vector{Float64}[]
     best_configs.baseline_times = Vector{Float64}[]
-    for problem in problems
+    for (problem_idx, problem) in enumerate(problems)
         select_configs(candidate_configs, problem) === nothing && continue
 
         data = allocate_data(problem)
 
         # measure baseline
         baseline_times = []
-        let
-            # warm-up
-            args = prepare_baseline(problem, data...)
-            execute_baseline(problem, data...; args...)
-            wait_if_throttling()
 
-            for i in 1:BENCHMARK_SAMPLES
-                prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
-                push!(baseline_times, cur_time)
-                next!(p)
+        # Override baseline in plot.
+        TARGET_PERF_FILE = get(ENV, "GK_TARGET_PERFS", "")
+        @assert (TARGET_PERF_FILE === "") || isfile(TARGET_PERF_FILE)
+        if TARGET_PERF_FILE !== ""
+            println("! Using reference times from old run instead of cuTENSOR times as baseline.")
+            best_configs_reference = open(TARGET_PERF_FILE) do io
+                deserialize(io)
+            end
+
+            best_configs_reference_times = minimum.(best_configs_reference.gemmkernels_times)
+
+            push!(baseline_times, best_configs_reference_times[problem_idx])
+        else
+            let
+                # warm-up
+                args = prepare_baseline(problem, data...)
+                execute_baseline(problem, data...; args...)
+                wait_if_throttling()
+
+                for i in 1:BENCHMARK_SAMPLES
+                    prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
+                    cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                    push!(baseline_times, cur_time)
+                    next!(p)
+                end
             end
         end
 
@@ -576,6 +592,23 @@ function main()
     end
     serialize(joinpath(@__DIR__, "baseline-data.bin"), baseline_data)
 
+    # Override baseline_performances.
+    TARGET_PERF_FILE = get(ENV, "GK_TARGET_PERFS", "")
+    @assert (TARGET_PERF_FILE === "") || isfile(TARGET_PERF_FILE)
+    if TARGET_PERF_FILE !== ""
+        println("! Using reference times from old run instead of cuTENSOR times as baseline.")
+
+        best_configs_reference = open(TARGET_PERF_FILE) do io
+            deserialize(io)
+        end
+
+        best_configs_reference_times = minimum.(best_configs_reference.gemmkernels_times)
+
+        for (i, problem) in enumerate(problems)
+            baseline_performances[problem] = best_configs_reference_times[i]
+        end
+    end
+
     # Load previous results from disk
     config_path = joinpath(@__DIR__, "configs.arrow")
     ## transition from Serialization to Arrow
@@ -639,14 +672,23 @@ function main()
     @info "Determining per-problem weights..."
     weights = Dict()
     for problem in problems
-        weights[problem] = if baseline_performances[problem] > best_times[problem]
-            # fast enough already
-            0
-        else
-            # based on how many configs remain
-            total = length(config_iterator(problem))
-            total - num_done[problem]
-        end
+        # Total search space size.
+        S = length(config_iterator(problem))
+
+        # Number of tried configurations.
+        T = num_done[problem]
+
+        # Best performance found so far.
+        Pbest = 1 / best_times[problem]
+
+        # Target performance
+        Ptarget = 1 / baseline_performances[problem]
+
+        weights[problem] = if Pbest >= Ptarget
+                                0
+                            else
+                                (S - T) * (1 - Pbest / Ptarget)
+                            end
     end
     total_weight = sum(values(weights))
     time_limits = Dict()
