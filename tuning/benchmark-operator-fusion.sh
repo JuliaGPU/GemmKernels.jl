@@ -9,14 +9,13 @@ GPU_CLOCK=-1
 MEM_CLOCK=-1
 UNPRIVILEGED=0
 DISABLE_SYSTEMD=0
-PERPETUAL=0
 
 usage()
 {
     cat <<EOF >&2
 Usage: $0 [OPTIONS]
 
-Tune WMMA Parameters.
+Benchmark operator fusion.
 
 Options:
 -h, --help                 Show this help.
@@ -27,7 +26,6 @@ Options:
                            before benchmarking, in MHz (default the max frequency).
 -u, --unprivileged         Skip the setup.sh script, which requires root privileges.
 --no-systemd               Do not use systemd.
--p, --perpetual            Restart sweep when it is finished.
 EOF
 }
 
@@ -59,10 +57,6 @@ while [[ $# -gt 0 ]]; do
         --no-systemd)
             shift
             DISABLE_SYSTEMD=1
-            ;;
-        -p|--perpetual)
-            shift
-            PERPETUAL=1
             ;;
         -*)
             echo "Unknown command-line option '$1'."
@@ -96,13 +90,4 @@ fi
 echo "+++ :julia: Instantiating project"
 julia --project -e 'using Pkg; Pkg.develop(path=dirname(@__DIR__)); Pkg.instantiate(); Pkg.precompile()'
 
-if [[ "$PERPETUAL" == "1" ]]; then
-    while true; do
-        julia --project --heap-size-hint=5G tune.jl "$@"
-
-        echo "Sweep finished at $(date). Restarting sweep after 10 seconds..."
-        sleep 10
-    done
-else
-    julia --project --heap-size-hint=5G tune.jl "$@"
-fi
+julia --project --heap-size-hint=5G benchmark-operator-fusion.jl "$@"

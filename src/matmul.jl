@@ -1,31 +1,47 @@
 using GemmKernels: CTASwizzle
+using Serialization, Scratch
 
 #
 # low-level
 #
 
-function matmul(conf::Config, a, b, c, d;
-                transform_global_to_shared_a = Transform.Elementwise(),
-                transform_global_to_shared_b = Transform.Elementwise(),
-                transform_global_to_shared_c = Transform.Elementwise(),
-                transform_shared_to_global_d = Transform.Elementwise(),
-                transform_shared_to_regs_a = Transform.Elementwise(),
-                transform_shared_to_regs_b = Transform.Elementwise(),
-                transform_shared_to_regs_c = Transform.Elementwise(),
-                transform_regs_to_shared_d = Transform.Elementwise(),
-                epilogue = Epilogue.Default(),
-                kernel = Kernel.matmul_singlestage)
+mutable struct MatmulPlan
+    const conf::Config
 
-    args = [conf, a, b, c, d,
-            transform_global_to_shared_a, transform_global_to_shared_b, transform_global_to_shared_c, transform_shared_to_global_d,
-            transform_shared_to_regs_a, transform_shared_to_regs_b, transform_shared_to_regs_c, transform_regs_to_shared_d,
-            epilogue]
+    #hostkernel::CUDA.HostKernel
+    const job
+    const compiled
+    linked
 
+    const threads::CuDim
+    const blocks::CuDim
+    const shmem::Int
+
+    const kernel
+    const args
+end
+
+# cache some device properties so that we can plan without a context
+OVERRIDE_max_shmem = Ref{Any}(nothing)
+OVERRIDE_cap = Ref{Any}(nothing)
+
+function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
+                     transform_global_to_shared_a = Transform.Elementwise(),
+                     transform_global_to_shared_b = Transform.Elementwise(),
+                     transform_global_to_shared_c = Transform.Elementwise(),
+                     transform_shared_to_global_d = Transform.Elementwise(),
+                     transform_shared_to_regs_a = Transform.Elementwise(),
+                     transform_shared_to_regs_b = Transform.Elementwise(),
+                     transform_shared_to_regs_c = Transform.Elementwise(),
+                     transform_regs_to_shared_d = Transform.Elementwise(),
+                     epilogue = Epilogue.Default(),
+                     kernel = Kernel.matmul_singlestage)
     threads = conf.warps_per_block * 32
     blocks = CTASwizzle.number_of_blocks(conf.cta_swizzle, conf.block_shape, conf.matmul_shape)
 
     shmem = Kernel.shmem_size(conf, kernel)
-    max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
+    #max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
+    max_shmem = @something OVERRIDE_max_shmem[] attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
     if shmem > max_shmem
         throw(ConfigError("Requested too much shared memory: The current GPU can use at most $(Base.format_bytes(max_shmem)), while this configuration required $(Base.format_bytes(shmem))"))
     end
@@ -35,12 +51,74 @@ function matmul(conf::Config, a, b, c, d;
         conf.block_shape.K ≥ 2 * conf.compute_op_shape.K || throw(ConfigError("Need at least two stages to use a pipelined kernel, i.e. BLOCK_K ≥ 2 * OPERATOR_K"))
     end
 
-    hostkernel = @cuda launch=false kernel(args...)
-    attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
+    args = [transform_global_to_shared_a, transform_global_to_shared_b,
+            transform_global_to_shared_c, transform_shared_to_global_d,
+            transform_shared_to_regs_a, transform_shared_to_regs_b,
+            transform_shared_to_regs_c, transform_regs_to_shared_d,
+            epilogue]
 
-    threads ≤ CUDA.maxthreads(hostkernel) || throw(ConfigError("Requested too many threads for this kernel: This kernel can be launched using at most $(CUDA.maxthreads(hostkernel)) threads, while this configuration required $(threads)"))
+    # XXX: to avoid the tuning process recompiling kernels, we load them from disk.
+    #      this relies on hashes being identical across processes, i.e., that the
+    #      hashed values are immutable or otherwise special (like type objects)
+    #@cuda launch=false kernel(conf, a, b, c, d, args...)
 
-    hostkernel(args...; threads, blocks, shmem)
+    # create a compiler job
+    kernel_args = map(cudaconvert, (conf, a, b, c, d, args...))
+    F = typeof(kernel)
+    tt = Tuple{map(Core.Typeof, kernel_args)...}
+    source = CUDA.GPUCompiler.methodinstance(F, tt)
+    #config = CUDA.compiler_config(device())
+    cap = @something OVERRIDE_cap[] CUDA.capability(device())
+    config = CUDA.compiler_config(nothing; cap, maxthreads=threads)
+    job = CUDA.GPUCompiler.CompilerJob(source, config)
+
+    # compile or load from disk
+    compiled = let
+        # generate a unique id/path for the kernel
+        id = hash((conf, typeof(a), typeof(b), typeof(c), typeof(d), args...))
+        tmpdir = get_scratch!(GemmKernels, "matmul_cache")
+        path = joinpath(tmpdir, "matmul_$(id).ptx")
+
+        # compile the kernel
+        if isfile(path)
+            deserialize(path)
+        else
+            compiled = CUDA.compile(job)
+            serialize(path, compiled)
+            compiled
+        end
+    end
+
+    return MatmulPlan(conf, job, compiled, nothing, threads, blocks, shmem, kernel, args)
+end
+
+function matmul(plan::MatmulPlan, a, b, c, d)
+    # only link the kernel when executing so that we can compile without a context
+    if plan.linked === nothing
+        fun = CUDA.link(plan.job, plan.compiled)
+
+        kernel_args = map(cudaconvert, (plan.conf, a, b, c, d, plan.args...))
+        F = typeof(plan.kernel)
+        tt = Tuple{map(Core.Typeof, kernel_args)...}
+
+        # mimic the rest of CUDA.jl compilation flow (see `cufunction`)
+        state = CUDA.KernelState(CUDA.create_exceptions!(fun.mod), UInt32(0))
+        hostkernel = CUDA.HostKernel{F,tt}(plan.kernel, fun, state)
+
+        attributes(hostkernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] =
+            plan.shmem
+
+        plan.threads ≤ CUDA.maxthreads(hostkernel) || throw(ConfigError("Requested too many threads for this kernel: This kernel can be launched using at most $(CUDA.maxthreads(hostkernel)) threads, while this configuration required $(plan.threads)"))
+
+        plan.linked = hostkernel
+    end
+
+    plan.linked(plan.conf, a, b, c, d, plan.args...; plan.threads, plan.blocks, plan.shmem)
+end
+
+function matmul(@nospecialize(conf::Config), a, b, c, d; kwargs...)
+    plan = plan_matmul(conf, a, b, c, d; kwargs...)
+    matmul(plan, a, b, c, d)
 end
 
 
