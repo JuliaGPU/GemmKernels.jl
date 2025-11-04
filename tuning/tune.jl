@@ -90,7 +90,7 @@ const CONFIG_TIME_LIMIT = 60
 const RETRY_STATUSSES = ["oom", "crashed"]
 
 # When benchmarking the best configurations, how many candidates to consider.
-const BENCHMARK_CANDIDATES = 3
+const BENCHMARK_CANDIDATES = 1
 
 # When benchmarking the best configurations, how many samples to take.
 const BENCHMARK_SAMPLES = 5
@@ -1175,6 +1175,8 @@ function main()
 
     @info "Starting phase 3: Process results..."
 
+    write_padding_data = true
+
     # Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")
     best_configs = nothing
@@ -1211,6 +1213,8 @@ function main()
     # Plotting results
     @info "Plotting results..."
     plot_best_configs(all_configs, best_configs)
+
+    write_padding_data = false
 end
 
 # Write logging messages to file for persistence.

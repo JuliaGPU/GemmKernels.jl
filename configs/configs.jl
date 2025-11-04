@@ -2,7 +2,6 @@
 
 module Configs
 
-
 ## lazy module loading
 
 using CUDA
@@ -10,6 +9,7 @@ using cuTENSOR
 using GemmKernels
 using LinearAlgebra
 using Random
+using Printf
 
 struct LazyModule
     pkg::Base.PkgId
@@ -937,6 +937,23 @@ function WMMATensorContraction(; name, extents, data_type, compute_type, accumul
     )
 end
 
+write_padding_data = false
+outfile = open("data-padding.csv", "w")
+write(outfile, "gpu,tc,extents,padded_extents,memory_overhead_percent\n")
+
+function friendly_name(name)
+    # example: 1.2.3.4.5.6-7.6.2.3-4.5.7.1
+    parts = split(name, '-')
+
+    converted_parts = map(parts) do part
+        numbers = parse.(Int, split(part, '.'))
+        letters = [Char('a' + n - 1) for n in numbers]
+        String(letters)
+    end
+
+    return join(converted_parts, '-')
+end
+
 function prepare(tc::TensorContraction, a, b, c, d;
                                         BLOCK_M, BLOCK_N, BLOCK_K,
                                         WARPS_M, WARPS_N,
@@ -953,6 +970,12 @@ function prepare(tc::TensorContraction, a, b, c, d;
     padded_b = padded_view(b, padded_extents[tc.modes[3]])
     padded_c = padded_view(c, padded_extents[tc.modes[1]])
     padded_d = padded_view(d, padded_extents[tc.modes[1]])
+
+    # write extra data
+    padding_memory_overhead = 100 * (prod(padded_extents) / prod(tc.extents) - 1)
+    padding_memory_overhead = @sprintf("+%.2f%%", padding_memory_overhead)
+
+    write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead)\n")
 
     # get underlying output data to return to the caller
     data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
