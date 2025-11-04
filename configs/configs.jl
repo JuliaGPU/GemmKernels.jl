@@ -979,7 +979,7 @@ function get_pad_time(tc, extents, padded_extents)
 
     measurements = Float64[]
 
-    for i = 1:50
+    for i = 1:51
         measurement = 0
 
         # Copy the actual data & fill the padding with zero.
@@ -1007,6 +1007,9 @@ function get_pad_time(tc, extents, padded_extents)
         push!(measurements, measurement)
     end
 
+    # remove the first warm-up measurement
+    popfirst!(measurements)
+
     join(measurements, ",")
 end
 
@@ -1023,7 +1026,7 @@ function get_unpad_time(tc, extents, padded_extents)
 
     measurements = Float64[]
 
-    for i = 1:50
+    for i = 1:51
         measurement = 0
 
         if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
@@ -1034,6 +1037,9 @@ function get_unpad_time(tc, extents, padded_extents)
 
         push!(measurements, measurement)
     end
+
+    # remove the first warm-up measurement
+    popfirst!(measurements)
 
     join(measurements, ",")
 end
