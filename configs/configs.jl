@@ -939,7 +939,7 @@ end
 
 write_padding_data = false
 outfile = open("data-padding.csv", "w")
-write(outfile, "gpu,tc,extents,padded_extents,memory_overhead_percent,pad_times,unpad_times\n")
+write(outfile, "gpu,tc,extents,padded_extents,memory_overhead,pad_times,unpad_times\n")
 
 function friendly_name(name)
     # example: 1.2.3.4.5.6-7.6.2.3-4.5.7.1
