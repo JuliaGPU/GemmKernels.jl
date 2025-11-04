@@ -939,7 +939,7 @@ end
 
 write_padding_data = false
 outfile = open("data-padding.csv", "w")
-write(outfile, "gpu,tc,extents,padded_extents,memory_overhead_percent\n")
+write(outfile, "gpu,tc,extents,padded_extents,memory_overhead_percent,pad_times,unpad_times\n")
 
 function friendly_name(name)
     # example: 1.2.3.4.5.6-7.6.2.3-4.5.7.1
@@ -952,6 +952,90 @@ function friendly_name(name)
     end
 
     return join(converted_parts, '-')
+end
+
+function get_pad_time(tc, extents, padded_extents)
+    A_unpadded = CuArray{tc.a_type}(undef, extents[tc.modes[2]])
+    B_unpadded = CuArray{tc.b_type}(undef, extents[tc.modes[3]])
+    C_unpadded = CuArray{tc.c_type}(undef, extents[tc.modes[1]])
+
+    A_padded = CuArray{tc.a_type}(undef, padded_extents[tc.modes[2]])
+    B_padded = CuArray{tc.b_type}(undef, padded_extents[tc.modes[3]])
+    C_padded = CuArray{tc.c_type}(undef, padded_extents[tc.modes[1]])
+
+    rng = CUDA.RNG(0)
+    rand!(rng, A_unpadded)
+    rand!(rng, B_unpadded)
+    rand!(rng, C_unpadded)
+
+    # Some views.
+    A_view_data = view(A_padded, ntuple(i->1:extents[tc.modes[2]][i], ndims(A_padded))...)
+    B_view_data = view(B_padded, ntuple(i->1:extents[tc.modes[3]][i], ndims(B_padded))...)
+    C_view_data = view(C_padded, ntuple(i->1:extents[tc.modes[1]][i], ndims(C_padded))...)
+
+    A_view_padding = view(A_padded, ntuple(i->extents[tc.modes[2]][i]+1:padded_extents[tc.modes[2]][i], ndims(A_padded))...)
+    B_view_padding = view(B_padded, ntuple(i->extents[tc.modes[3]][i]+1:padded_extents[tc.modes[3]][i], ndims(B_padded))...)
+    C_view_padding = view(C_padded, ntuple(i->extents[tc.modes[1]][i]+1:padded_extents[tc.modes[1]][i], ndims(C_padded))...)
+
+    measurements = Float64[]
+
+    for i = 1:50
+        measurement = 0
+
+        # Copy the actual data & fill the padding with zero.
+        if extents[tc.modes[2]] != padded_extents[tc.modes[2]]
+            measurement += @elapsed CUDA.@sync begin
+                A_view_data .= A_unpadded
+                A_view_padding .= 0
+            end
+        end
+
+        if extents[tc.modes[3]] != padded_extents[tc.modes[3]]
+            measurement += @elapsed CUDA.@sync begin
+                B_view_data .= B_unpadded
+                B_view_padding .= 0
+            end
+        end
+
+        if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
+            measurement += @elapsed CUDA.@sync begin
+                C_view_data .= C_unpadded
+                C_view_padding .= 0
+            end
+        end
+
+        push!(measurements, measurement)
+    end
+
+    join(measurements, ",")
+end
+
+function get_unpad_time(tc, extents, padded_extents)
+    D_padded = CuArray{tc.d_type}(undef, padded_extents[tc.modes[1]])
+    D_unpadded = CuArray{tc.d_type}(undef, extents[tc.modes[1]])
+
+    rng = CUDA.RNG(0)
+    rand!(rng, D_padded)
+
+    # Some views.
+    D_view_padding = view(D_padded, ntuple(i->extents[tc.modes[1]][i]+1:padded_extents[tc.modes[1]][i], ndims(D_padded))...)
+    D_view_data = view(D_padded, ntuple(i->1:extents[tc.modes[1]][i], ndims(D_padded))...)
+
+    measurements = Float64[]
+
+    for i = 1:50
+        measurement = 0
+
+        if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
+            measurement += @elapsed CUDA.@sync begin
+                D_unpadded .= D_view_data
+            end
+        end
+
+        push!(measurements, measurement)
+    end
+
+    join(measurements, ",")
 end
 
 function prepare(tc::TensorContraction, a, b, c, d;
@@ -974,7 +1058,10 @@ function prepare(tc::TensorContraction, a, b, c, d;
     # write extra data
     padding_memory_overhead = prod(padded_extents) / prod(tc.extents) - 1
 
-    write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead)\n")
+    pad_time = get_pad_time(tc, tc.extents, padded_extents)
+    unpad_time = get_unpad_time(tc, tc.extents, padded_extents)
+
+    write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead),\"$(pad_time)\",\"$(unpad_time)\"\n")
 
     # get underlying output data to return to the caller
     data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
