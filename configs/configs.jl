@@ -972,8 +972,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
     padded_d = padded_view(d, padded_extents[tc.modes[1]])
 
     # write extra data
-    padding_memory_overhead = 100 * (prod(padded_extents) / prod(tc.extents) - 1)
-    padding_memory_overhead = @sprintf("+%.2f%%", padding_memory_overhead)
+    padding_memory_overhead = prod(padded_extents) / prod(tc.extents) - 1
 
     write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead)\n")
 
