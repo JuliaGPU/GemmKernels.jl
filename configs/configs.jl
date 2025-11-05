@@ -937,10 +937,6 @@ function WMMATensorContraction(; name, extents, data_type, compute_type, accumul
     )
 end
 
-write_padding_data = false
-outfile = open("data-padding.csv", "w")
-write(outfile, "gpu,tc,extents,padded_extents,memory_overhead,pad_times,unpad_times\n")
-
 function friendly_name(name)
     # example: 1.2.3.4.5.6-7.6.2.3-4.5.7.1
     parts = split(name, '-')
@@ -977,40 +973,45 @@ function get_pad_time(tc, extents, padded_extents)
     B_view_padding = view(B_padded, ntuple(i->extents[tc.modes[3]][i]+1:padded_extents[tc.modes[3]][i], ndims(B_padded))...)
     C_view_padding = view(C_padded, ntuple(i->extents[tc.modes[1]][i]+1:padded_extents[tc.modes[1]][i], ndims(C_padded))...)
 
-    measurements = Float64[]
+    time_measurements = Float64[]
+    thruput_measurements = Float64[] # in GB/s
 
     for i = 1:51
+        num_bytes = 0
         measurement = 0
 
         # Copy the actual data & fill the padding with zero.
-        if extents[tc.modes[2]] != padded_extents[tc.modes[2]]
-            measurement += @elapsed CUDA.@sync begin
+        measurement += @elapsed CUDA.@sync begin
+            if extents[tc.modes[2]] != padded_extents[tc.modes[2]]
                 A_view_data .= A_unpadded
                 A_view_padding .= 0
+                num_bytes += length(A_unpadded) * sizeof(eltype(A_unpadded))
             end
-        end
 
-        if extents[tc.modes[3]] != padded_extents[tc.modes[3]]
-            measurement += @elapsed CUDA.@sync begin
+            if extents[tc.modes[3]] != padded_extents[tc.modes[3]]
                 B_view_data .= B_unpadded
                 B_view_padding .= 0
-            end
-        end
 
-        if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
-            measurement += @elapsed CUDA.@sync begin
+                num_bytes += length(B_unpadded) * sizeof(eltype(B_unpadded))
+            end
+
+            if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
                 C_view_data .= C_unpadded
                 C_view_padding .= 0
+
+                num_bytes += length(C_unpadded) * sizeof(eltype(C_unpadded))
             end
         end
 
-        push!(measurements, measurement)
+        push!(time_measurements, measurement)
+        push!(thruput_measurements, num_bytes / measurement / 1e9)
     end
 
     # remove the first warm-up measurement
-    popfirst!(measurements)
+    popfirst!(time_measurements)
+    popfirst!(thruput_measurements)
 
-    join(measurements, ",")
+    join(time_measurements, ","), maximum(thruput_measurements)
 end
 
 function get_unpad_time(tc, extents, padded_extents)
@@ -1024,25 +1025,35 @@ function get_unpad_time(tc, extents, padded_extents)
     D_view_padding = view(D_padded, ntuple(i->extents[tc.modes[1]][i]+1:padded_extents[tc.modes[1]][i], ndims(D_padded))...)
     D_view_data = view(D_padded, ntuple(i->1:extents[tc.modes[1]][i], ndims(D_padded))...)
 
-    measurements = Float64[]
+    time_measurements = Float64[]
+    thruput_measurements = Float64[] # in GB/s
 
     for i = 1:51
         measurement = 0
+        num_bytes = 0
 
-        if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
-            measurement += @elapsed CUDA.@sync begin
+        measurement += @elapsed CUDA.@sync begin
+            if extents[tc.modes[1]] != padded_extents[tc.modes[1]]
                 D_unpadded .= D_view_data
+
+                num_bytes += length(D_unpadded) * sizeof(eltype(D_unpadded))
             end
         end
 
-        push!(measurements, measurement)
+        push!(time_measurements, measurement)
+        push!(thruput_measurements, num_bytes / measurement / 1e9)
     end
 
     # remove the first warm-up measurement
-    popfirst!(measurements)
+    popfirst!(time_measurements)
+    popfirst!(thruput_measurements)
 
-    join(measurements, ",")
+    join(time_measurements, ","), maximum(thruput_measurements)
 end
+
+write_padding_data = false
+outfile = open("data-padding.csv", "w")
+write(outfile, "gpu,tc,extents,padded_extents,memory_overhead,pad_times,unpad_times,pad_throughput,unpad_throughput\n")
 
 function prepare(tc::TensorContraction, a, b, c, d;
                                         BLOCK_M, BLOCK_N, BLOCK_K,
@@ -1064,10 +1075,10 @@ function prepare(tc::TensorContraction, a, b, c, d;
     # write extra data
     padding_memory_overhead = prod(padded_extents) / prod(tc.extents) - 1
 
-    pad_time = get_pad_time(tc, tc.extents, padded_extents)
-    unpad_time = get_unpad_time(tc, tc.extents, padded_extents)
+    pad_time, pad_throughput = get_pad_time(tc, tc.extents, padded_extents)
+    unpad_time, unpad_throughput = get_unpad_time(tc, tc.extents, padded_extents)
 
-    write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead),\"$(pad_time)\",\"$(unpad_time)\"\n")
+    write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead),\"$(pad_time)\",\"$(unpad_time)\",$(pad_throughput),$(unpad_throughput)\n")
 
     # get underlying output data to return to the caller
     data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
