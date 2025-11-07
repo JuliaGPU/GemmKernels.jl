@@ -30,3 +30,6 @@ julia --project=tuning -e 'using InteractiveUtils; versioninfo()'
 
 # CUDA.jl
 julia --project=tuning -e 'using Pkg; Pkg.status("CUDA")'
+
+# RAM
+free -h
