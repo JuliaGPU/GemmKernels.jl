@@ -21,3 +21,12 @@ cat /proc/cpuinfo | grep -F 'model name' | uniq
 
 # GPU
 nvidia-smi -L
+
+# Julia
+julia --version
+
+# Julia detailed version
+julia --project=tuning -e 'using InteractiveUtils; versioninfo()'
+
+# CUDA.jl
+julia --project=tuning -e 'using Pkg; Pkg.status("CUDA")'
