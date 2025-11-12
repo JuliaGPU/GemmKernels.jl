@@ -359,6 +359,23 @@ function measure_config(problem, config, max_time)
     return "success", measurements, result, (; warmup, initializing, settling, measuring, copying)
 end
 
+function get_MNK(extents, modes)
+    MNK = []
+
+    # modes: [C_modes_MN, A_modes_MK, B_modes_KN]
+
+    for (idx1, idx2) in [(1, 2), # M
+                         (1, 3), # N
+                         (3, 2), # K
+                        ]
+        # Set of dimensions that contribute to M, N, or K.
+        intersection = intersect(modes[idx1], modes[idx2])
+        push!(MNK, prod(extents[intersection]))
+    end
+
+    return MNK
+end
+
 function benchmark_configs(all_configs)
     # we only care about successful configurations
     all_configs = all_configs[all_configs[!, "status"] .== "success", :]
@@ -382,8 +399,13 @@ function benchmark_configs(all_configs)
     nbenchmarks = size(candidate_configs, 1) + size(problems, 1)
     p = Progress(nbenchmarks * BENCHMARK_SAMPLES; desc="Benchmarking:", showspeed=true, output=PROGRESS_OUTPUT)
     best_configs = similar(all_configs, 0)
+
     best_configs.gemmkernels_times = Vector{Float64}[]
     best_configs.baseline_times = Vector{Float64}[]
+    best_configs.padded_extents = Vector{Int}[]
+    best_configs.padded_MNK = Vector{Int}[]
+    best_configs.unpadded_MNK = Vector{Int}[]
+
     for (problem_idx, problem) in enumerate(problems)
         select_configs(candidate_configs, problem) === nothing && continue
 
@@ -438,7 +460,16 @@ function benchmark_configs(all_configs)
             end
 
             if best_config === nothing || minimum(times) < minimum(best_config.gemmkernels_times)
-                best_config = (; gemmkernels_times = times, copy(config)...)
+                padded_extents = Configs.pad_extents(problem.extents, problem.modes, (M = config.BLOCK_M, N = config.BLOCK_N, K = config.BLOCK_K))
+
+                unpadded_MNK = get_MNK(problem.extents, problem.modes)
+                padded_MNK = get_MNK(padded_extents, problem.modes)
+
+                best_config = (; gemmkernels_times = times,
+                                 padded_extents = collect(padded_extents),
+                                 unpadded_MNK = unpadded_MNK,
+                                 padded_MNK = padded_MNK,
+                                 copy(config)...)
             end
         end
 
