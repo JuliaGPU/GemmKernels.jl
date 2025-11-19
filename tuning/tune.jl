@@ -671,6 +671,12 @@ function main()
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
             mv(config_path, "$(config_path).broken-$(Dates.format(now(), "yyyymmddHHMM"))")
         end
+
+        # Reorder the status, time, and found_after columns.
+        select!(all_configs, Not(["found_after", "status", "time"]), "status", "time", "found_after")
+
+        # Convert found_after data.
+        all_configs[!, :found_after] = Float64.(all_configs[!, :found_after])
     else
         all_configs.status = String[]
         all_configs.time = Float64[]
