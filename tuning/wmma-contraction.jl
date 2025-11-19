@@ -60,9 +60,9 @@ end
 
 function config_iterator(problem)
     param_product = shuffle_product(
-        2 .^ (6:9),
-        2 .^ (6:9),
-        2 .^ (5:7),
+        2 .^ (3:9),
+        2 .^ (3:9),
+        2 .^ (3:7),
         2 .^ (0:3),
         2 .^ (0:3),
         [(16, 16, 16), (8, 32, 16), (32, 8, 16)],
