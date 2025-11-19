@@ -118,6 +118,8 @@ end
 
 Base.length(iter::ShuffledProductIterator) = length(iter.indices)
 
+iterate_rng = MersenneTwister(1234)
+
 function Base.iterate(iter::ShuffledProductIterator,
                       state=(0, falses(prod(length, iter.components))))
     # num is the number of elements we have visited so far, used to terminate the iteration.
@@ -130,7 +132,7 @@ function Base.iterate(iter::ShuffledProductIterator,
     end
 
     while true
-        i = rand(1:length(seen))
+        i = rand(iterate_rng, 1:length(seen))
         if !seen[i]
             seen[i] = true
 
