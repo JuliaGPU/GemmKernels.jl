@@ -1212,7 +1212,7 @@ function main()
 
     @info "Starting phase 3: Process results..."
 
-    write_padding_data = true
+    write_padding_data = (get(ENV, "GK_WRITE_PADDING_DATA", "0") == "1")
 
     # Select best configurations, and benchmark.
     best_configs_path = joinpath(@__DIR__, "best-configs.bin")

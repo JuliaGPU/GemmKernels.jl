@@ -1072,13 +1072,15 @@ function prepare(tc::TensorContraction, a, b, c, d;
     padded_c = padded_view(c, padded_extents[tc.modes[1]])
     padded_d = padded_view(d, padded_extents[tc.modes[1]])
 
-    # write extra data
-    padding_memory_overhead = prod(padded_extents) / prod(tc.extents) - 1
+    if write_padding_data
+        # write extra data
+        padding_memory_overhead = prod(padded_extents) / prod(tc.extents) - 1
 
-    pad_time, pad_throughput = get_pad_time(tc, tc.extents, padded_extents)
-    unpad_time, unpad_throughput = get_unpad_time(tc, tc.extents, padded_extents)
+        pad_time, pad_throughput = get_pad_time(tc, tc.extents, padded_extents)
+        unpad_time, unpad_throughput = get_unpad_time(tc, tc.extents, padded_extents)
 
-    write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead),\"$(pad_time)\",\"$(unpad_time)\",$(pad_throughput),$(unpad_throughput)\n")
+        write(outfile, "$(name(device())),$(friendly_name(tc.name)),\"$(tc.extents)\",\"$(padded_extents)\",$(padding_memory_overhead),\"$(pad_time)\",\"$(unpad_time)\",$(pad_throughput),$(unpad_throughput)\n")
+    end
 
     # get underlying output data to return to the caller
     data_d = view(padded_d, ntuple(i->1:tc.extents[tc.modes[1]][i], ndims(d))...)
