@@ -77,7 +77,7 @@ isinteractive() || include("wmma-contraction.jl")
 ############################################################################################
 
 # Whether we stop after beating the baseline, or continue until we've tested every config.
-const EXHAUSTIVE = false
+const EXHAUSTIVE = true
 
 # The time limit for the entire sweep, in seconds.
 # This will be used to determine a per-problem time limit.
