@@ -967,7 +967,7 @@ function main()
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
                             worker_elapsed = 0.0
-                            wait_t0 = time()
+                            wait_t0 = master_t0
 
                             # get a job
                             i = try
