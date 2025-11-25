@@ -1022,12 +1022,12 @@ function main()
                                     note_time(measurement_times_worker, k, v)
                                 end
                                 config.time = minimum(measurements; init=Inf)
+                                note_time(measurement_times_master, :wait_for_worker_measuring, time() - wait_t0)
 
                                 if status != "success"
                                     config.status = status
                                     continue
                                 end
-                                note_time(measurement_times_master, :wait_for_worker_measuring, time() - wait_t0)
 
                                 # verify results
                                 wait_t0 = time()
@@ -1036,6 +1036,7 @@ function main()
                                     error("Time-out verifying results")
                                 )
                                 worker_elapsed += note_time(measurement_times_worker, :verifying, verifying)
+                                note_time(measurement_times_master, :wait_for_worker_verify, time() - wait_t0)
                                 if !verified
                                     @warn "Configuration produced invalid result: $(repr_row(config))"
                                     config.status = "invalid_result"
@@ -1043,7 +1044,6 @@ function main()
                                 end
 
                                 config.status = "success"
-                                note_time(measurement_times_master, :wait_for_worker_verify, time() - wait_t0)
                             catch err
                                 wait_t0 = time()
                                 config.status = "crashed"
