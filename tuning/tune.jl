@@ -838,8 +838,13 @@ function main()
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
             p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
-            compilation_times = Dict{Symbol, Float64}()
-            measurement_times = Dict{Symbol, Float64}()
+
+            compilation_times_worker = Dict{Symbol, Float64}()
+            measurement_times_worker = Dict{Symbol, Float64}()
+
+            compilation_times_master = Dict{Symbol, Float64}()
+            measurement_times_master = Dict{Symbol, Float64}()
+
             function note_time(collection, key, value)
                 collection[key] = get(collection, key, 0.0) + value
                 return value
@@ -874,14 +879,17 @@ function main()
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
                             worker_elapsed = 0.0
+                            wait_t0 = master_t0
 
                             # get a job
+                            wait_t0 = time()
                             i = try
                                 take!(initial_jobs)
                             catch err
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
+                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_take_initial_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                             config = all_configs[i, :]
 
                             # ensure we still have a worker
@@ -890,7 +898,7 @@ function main()
                                     startup = @elapsed begin
                                         worker = add_compile_worker(1)[1]
                                     end
-                                    worker_elapsed += note_time(compilation_times, :startup, startup)
+                                    worker_elapsed += note_time(compilation_times_worker, :startup, startup)
                                 catch err
                                     # give up for this problem
                                     @error "Failed to add compilation worker: $(sprint(Base.showerror, err))"
@@ -898,13 +906,16 @@ function main()
                                 end
                             end
 
+                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
+
                             status = try
                                 # prepare
                                 preparing, status = @something(
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
                                     error("Time-out preparing configuration")
                                 )
-                                worker_elapsed += note_time(compilation_times, :preparing, preparing)
+                                worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)
+                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                                 if status != "success"
                                     config.status = status
@@ -923,17 +934,22 @@ function main()
                                     @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
+                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
                             finally
                                 if config.status == "promising"
                                     # submit for further processing
                                     try
+                                        wait_t0 = time()
                                         put!(promising_jobs, i)
+                                        wait_t1 = time(); note_time(compilation_times_master, :wait_for_put_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                                     catch err
                                         isa(err, EOFError) || rethrow()
                                         break
                                     end
                                 else
+                                    wait_t0 = time()
                                     push!(results, (worker, i))
+                                    wait_t1 = time(); note_time(compilation_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
                                 end
 
                                 master_elapsed = time() - master_t0
@@ -954,6 +970,7 @@ function main()
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
                             worker_elapsed = 0.0
+                            wait_t0 = master_t0
 
                             # get a job
                             i = try
@@ -962,6 +979,7 @@ function main()
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
+                            wait_t1 = time(); note_time(measurement_times_master, :wait_for_take_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                             config = all_configs[i, :]
 
                             # ensure we still have a worker
@@ -970,13 +988,14 @@ function main()
                                     startup = @elapsed begin
                                         worker = add_measurement_worker(1)[1]
                                     end
-                                    worker_elapsed += note_time(measurement_times, :startup, startup)
+                                    worker_elapsed += note_time(measurement_times_worker, :startup, startup)
                                 catch err
                                     # give up for this problem
                                     @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
                                     break
                                 end
                             end
+                            wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                             try
                                 # prepare
@@ -984,7 +1003,9 @@ function main()
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
                                     error("Time-out preparing configuration")
                                 )
-                                worker_elapsed += note_time(measurement_times, :preparing, preparing)
+                                worker_elapsed += note_time(measurement_times_worker, :preparing, preparing)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
+
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -999,9 +1020,10 @@ function main()
                                 worker_elapsed += measuring
                                 ## measure_config returns subtimes
                                 for (k,v) in pairs(times)
-                                    note_time(measurement_times, k, v)
+                                    note_time(measurement_times_worker, k, v)
                                 end
                                 config.time = minimum(measurements; init=Inf)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_measuring, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                                 if status != "success"
                                     config.status = status
@@ -1013,7 +1035,8 @@ function main()
                                     remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
                                 )
-                                worker_elapsed += note_time(measurement_times, :verifying, verifying)
+                                worker_elapsed += note_time(measurement_times_worker, :verifying, verifying)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_verify, wait_t1 - wait_t0); wait_t0 = wait_t1
                                 if !verified
                                     @warn "Configuration produced invalid result: $(repr_row(config))"
                                     config.status = "invalid_result"
@@ -1032,10 +1055,13 @@ function main()
                                     @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
                             finally
                                 push!(results, (worker, i))
 
-                                master_elapsed = time() - master_t0
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
+
+                                master_elapsed = wait_t1 - master_t0
                                 measuring_time_master += master_elapsed
                                 measuring_time_worker += worker_elapsed
                             end
@@ -1083,6 +1109,7 @@ function main()
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             push!(vals, ("sweep for problem started at", Dates.format(sweep_start_date, "yyyy-mm-dd HH:MM:SS")))
+                            push!(vals, ("sweep has been running for", "$((now() - sweep_start_date) / Second(1)) s"))
                             push!(vals, ("sweeping until at most", Dates.format(sweep_start_date + Second(trunc(time_limits[problem])), "yyyy-mm-dd HH:MM:SS")))
                             push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
                             total_workers = compile_workers + measurement_workers
@@ -1099,29 +1126,70 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # compilation timings
+                            # helper functions to print subtimings
+                            function key_sort_order(key)
+                                order = [
+                                    # worker
+                                    :startup,
+                                    :preparing,
+                                    :warmup,
+                                    :initializing,
+                                    :settling,
+                                    :measuring,
+                                    :copying,
+                                    :verifying,
+
+                                    # master
+                                    :wait_for_take_promising_jobs,
+                                    :wait_for_take_initial_jobs,
+                                    :wait_for_worker_startup,
+                                    :wait_for_worker_preparing,
+                                    :wait_for_worker_measuring,
+                                    :wait_for_worker_verify,
+                                    :wait_for_removing_crashed_worker,
+                                    :wait_for_push_results,
+                                    :wait_for_put_promising_jobs,
+                                ]
+
+                                idx = findfirst(==(key), order)
+
+                                if idx === nothing
+                                    return (2, key)
+                                else
+                                    return (1, idx)
+                                end
+                            end
+                            function print_subtimings(header::Tuple{String, String}, subtimes::Dict, total_time::Number)
+                                push!(vals, header)
+
+                                if !isempty(subtimes)
+                                    for k in sort(collect(keys(subtimes)), by=key_sort_order)
+                                        v = subtimes[k]
+                                        v_rel = round(100 * v / total_time; sigdigits=3)
+                                        push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                    end
+                                end
+
+                                push!(vals, ("", ""))
+                            end
+
+                            # compilation timings on the worker
                             compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
-                            push!(vals, ("compilation times", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
-                            if !isempty(compilation_times)
-                                for (k, v) in compilation_times
-                                    v_rel = round(100 * v / compilation_time_worker; sigdigits=3)
-                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
-                                end
-                            end
+                            header = ("compilation times (worker)", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)")
+                            print_subtimings(header, compilation_times_worker, compilation_time_worker)
 
-                            push!(vals, ("", ""))
-
-                            # measurement timings
+                            # measurement timings on the worker
                             measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
-                            push!(vals, ("measuring times", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
-                            if !isempty(measurement_times)
-                                for (k, v) in measurement_times
-                                    v_rel = round(100 * v / measuring_time_worker; sigdigits=3)
-                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
-                                end
-                            end
+                            header = ("measuring times (worker)", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)")
+                            print_subtimings(header, measurement_times_worker, measuring_time_worker)
 
-                            push!(vals, ("", ""))
+                            # compilation timings on the master
+                            header = ("compilation times (master)", "$(prettytime(compilation_time_master)) master total")
+                            print_subtimings(header, compilation_times_master, compilation_time_master)
+
+                            # measuring timings on the master
+                            header = ("measuring times (master)", "$(prettytime(measuring_time_master)) master total")
+                            print_subtimings(header, measurement_times_master, measuring_time_master)
 
                             # job state
                             category_counters = Dict(counter(new_configs[!, "status"]))
