@@ -1055,9 +1055,10 @@ function main()
                                 wait_t1 = time(); note_time(measurement_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
                             finally
                                 push!(results, (worker, i))
+
                                 wait_t1 = time(); note_time(measurement_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
 
-                                master_elapsed = time() - master_t0
+                                master_elapsed = wait_t1 - master_t0
                                 measuring_time_master += master_elapsed
                                 measuring_time_worker += worker_elapsed
                             end
