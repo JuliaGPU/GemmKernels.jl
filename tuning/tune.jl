@@ -840,8 +840,13 @@ function main()
             reference_result = deserialize(reference_results[problem])
             initial_category_counters = Dict(counter(configs[!, "status"]))
             p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
-            compilation_times = Dict{Symbol, Float64}()
-            measurement_times = Dict{Symbol, Float64}()
+
+            compilation_times_worker = Dict{Symbol, Float64}()
+            measurement_times_worker = Dict{Symbol, Float64}()
+
+            compilation_times_master = Dict{Symbol, Float64}()
+            measurement_times_master = Dict{Symbol, Float64}()
+
             function note_time(collection, key, value)
                 collection[key] = get(collection, key, 0.0) + value
                 return value
@@ -878,12 +883,14 @@ function main()
                             worker_elapsed = 0.0
 
                             # get a job
+                            wait_t0 = time()
                             i = try
                                 take!(initial_jobs)
                             catch err
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
+                            note_time(compilation_times_master, :wait_for_take_initial_jobs, time() - wait_t0)
                             config = all_configs[i, :]
 
                             # ensure we still have a worker
@@ -892,7 +899,7 @@ function main()
                                     startup = @elapsed begin
                                         worker = add_compile_worker(1)[1]
                                     end
-                                    worker_elapsed += note_time(compilation_times, :startup, startup)
+                                    worker_elapsed += note_time(compilation_times_worker, :startup, startup)
                                 catch err
                                     # give up for this problem
                                     @error "Failed to add compilation worker: $(sprint(Base.showerror, err))"
@@ -906,7 +913,7 @@ function main()
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
                                     error("Time-out preparing configuration")
                                 )
-                                worker_elapsed += note_time(compilation_times, :preparing, preparing)
+                                worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)
 
                                 if status != "success"
                                     config.status = status
@@ -929,13 +936,17 @@ function main()
                                 if config.status == "promising"
                                     # submit for further processing
                                     try
+                                        wait_t0 = time()
                                         put!(promising_jobs, i)
+                                        note_time(compilation_times_master, :wait_for_put_promising_jobs, time() - wait_t0)
                                     catch err
                                         isa(err, EOFError) || rethrow()
                                         break
                                     end
                                 else
+                                    wait_t0 = time()
                                     push!(results, (worker, i))
+                                    note_time(compilation_times_master, :wait_for_push_results, time() - wait_t0)
                                 end
 
                                 master_elapsed = time() - master_t0
@@ -958,27 +969,31 @@ function main()
                             worker_elapsed = 0.0
 
                             # get a job
+                            wait_t0 = time()
                             i = try
                                 take!(promising_jobs)
                             catch err
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
+                            note_time(measurement_times_master, :wait_for_take_promising_jobs, time() - wait_t0)
                             config = all_configs[i, :]
 
                             # ensure we still have a worker
+                            wait_t0 = time()
                             while worker === nothing
                                 try
                                     startup = @elapsed begin
                                         worker = add_measurement_worker(1)[1]
                                     end
-                                    worker_elapsed += note_time(measurement_times, :startup, startup)
+                                    worker_elapsed += note_time(measurement_times_worker, :startup, startup)
                                 catch err
                                     # give up for this problem
                                     @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
                                     break
                                 end
                             end
+                            note_time(measurement_times_master, :wait_for_worker_startup, time() - wait_t0)
 
                             try
                                 # prepare
@@ -986,7 +1001,7 @@ function main()
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
                                     error("Time-out preparing configuration")
                                 )
-                                worker_elapsed += note_time(measurement_times, :preparing, preparing)
+                                worker_elapsed += note_time(measurement_times_worker, :preparing, preparing)
                                 if status != "success"
                                     config.status = status
                                     continue
@@ -1001,7 +1016,7 @@ function main()
                                 worker_elapsed += measuring
                                 ## measure_config returns subtimes
                                 for (k,v) in pairs(times)
-                                    note_time(measurement_times, k, v)
+                                    note_time(measurement_times_worker, k, v)
                                 end
                                 config.time = minimum(measurements; init=Inf)
 
@@ -1015,7 +1030,7 @@ function main()
                                     remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
                                 )
-                                worker_elapsed += note_time(measurement_times, :verifying, verifying)
+                                worker_elapsed += note_time(measurement_times_worker, :verifying, verifying)
                                 if !verified
                                     @warn "Configuration produced invalid result: $(repr_row(config))"
                                     config.status = "invalid_result"
@@ -1035,7 +1050,9 @@ function main()
                                 end
                                 worker = nothing
                             finally
+                                wait_t0 = time()
                                 push!(results, (worker, i))
+                                note_time(measurement_times_master, :wait_for_push_results, time() - wait_t0)
 
                                 master_elapsed = time() - master_t0
                                 measuring_time_master += master_elapsed
@@ -1085,6 +1102,7 @@ function main()
 
                             push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
                             push!(vals, ("sweep for problem started at", Dates.format(sweep_start_date, "yyyy-mm-dd HH:MM:SS")))
+                            push!(vals, ("sweep has been running for", "$((now() - sweep_start_date) / Second(1)) s"))
                             push!(vals, ("sweeping until at most", Dates.format(sweep_start_date + Second(trunc(time_limits[problem])), "yyyy-mm-dd HH:MM:SS")))
                             push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
                             total_workers = compile_workers + measurement_workers
@@ -1101,11 +1119,11 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # compilation timings
+                            # compilation timings on the worker
                             compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
-                            push!(vals, ("compilation times", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
-                            if !isempty(compilation_times)
-                                for (k, v) in compilation_times
+                            push!(vals, ("compilation times (worker)", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
+                            if !isempty(compilation_times_worker)
+                                for (k, v) in compilation_times_worker
                                     v_rel = round(100 * v / compilation_time_worker; sigdigits=3)
                                     push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
                                 end
@@ -1113,12 +1131,34 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # measurement timings
+                            # measurement timings on the worker
                             measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
-                            push!(vals, ("measuring times", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
-                            if !isempty(measurement_times)
-                                for (k, v) in measurement_times
+                            push!(vals, ("measuring times (worker)", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
+                            if !isempty(measurement_times_worker)
+                                for (k, v) in measurement_times_worker
                                     v_rel = round(100 * v / measuring_time_worker; sigdigits=3)
+                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                end
+                            end
+
+                            push!(vals, ("", ""))
+
+                            # compilation timings on the master
+                            push!(vals, ("compilation times (master)", "$(prettytime(compilation_time_master)) master total"))
+                            if !isempty(compilation_times_master)
+                                for (k, v) in compilation_times_master
+                                    v_rel = round(100 * v / compilation_time_master; sigdigits=3)
+                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                end
+                            end
+
+                            push!(vals, ("", ""))
+
+                            # measuring timings on the master
+                            push!(vals, ("measuring times (master)", "$(prettytime(measuring_time_master)) master total"))
+                            if !isempty(measurement_times_master)
+                                for (k, v) in measurement_times_master
+                                    v_rel = round(100 * v / measuring_time_master; sigdigits=3)
                                     push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
                                 end
                             end
