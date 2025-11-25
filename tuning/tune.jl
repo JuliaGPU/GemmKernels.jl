@@ -1003,11 +1003,12 @@ function main()
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(measurement_times_worker, :preparing, preparing)
+                                note_time(measurement_times_master, :wait_for_worker_preparing, time() - wait_t0)
+
                                 if status != "success"
                                     config.status = status
                                     continue
                                 end
-                                note_time(measurement_times_master, :wait_for_worker_preparing, time() - wait_t0)
 
                                 # measure
                                 wait_t0 = time()
