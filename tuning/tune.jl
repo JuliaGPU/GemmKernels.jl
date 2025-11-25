@@ -996,6 +996,7 @@ function main()
                             note_time(measurement_times_master, :wait_for_worker_startup, time() - wait_t0)
 
                             try
+                                wait_t0 = time()
                                 # prepare
                                 preparing, status = @something(
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
@@ -1006,8 +1007,10 @@ function main()
                                     config.status = status
                                     continue
                                 end
+                                note_time(measurement_times_master, :wait_for_worker_preparing, time() - wait_t0)
 
                                 # measure
+                                wait_t0 = time()
                                 max_time = 3 * target_time
                                 measuring, (status, measurements, result, times) = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
@@ -1024,8 +1027,10 @@ function main()
                                     config.status = status
                                     continue
                                 end
+                                note_time(measurement_times_master, :wait_for_worker_measuring, time() - wait_t0)
 
                                 # verify results
+                                wait_t0 = time()
                                 verifying, verified = @something(
                                     remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
@@ -1038,7 +1043,9 @@ function main()
                                 end
 
                                 config.status = "success"
+                                note_time(measurement_times_master, :wait_for_worker_verify, time() - wait_t0)
                             catch err
+                                wait_t0 = time()
                                 config.status = "crashed"
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
                                 @error "Unexpected exception on worker $worker\n$log"
@@ -1049,6 +1056,7 @@ function main()
                                     @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
+                                note_time(measurement_times_master, :wait_for_removing_crashed_worker, time() - wait_t0)
                             finally
                                 wait_t0 = time()
                                 push!(results, (worker, i))
