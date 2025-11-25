@@ -967,20 +967,19 @@ function main()
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
                             worker_elapsed = 0.0
+                            wait_t0 = time()
 
                             # get a job
-                            wait_t0 = time()
                             i = try
                                 take!(promising_jobs)
                             catch err
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
-                            note_time(measurement_times_master, :wait_for_take_promising_jobs, time() - wait_t0)
+                            wait_t1 = time(); note_time(measurement_times_master, :wait_for_take_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                             config = all_configs[i, :]
 
                             # ensure we still have a worker
-                            wait_t0 = time()
                             while worker === nothing
                                 try
                                     startup = @elapsed begin
@@ -993,17 +992,16 @@ function main()
                                     break
                                 end
                             end
-                            note_time(measurement_times_master, :wait_for_worker_startup, time() - wait_t0)
+                            wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                             try
-                                wait_t0 = time()
                                 # prepare
                                 preparing, status = @something(
                                     remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(measurement_times_worker, :preparing, preparing)
-                                note_time(measurement_times_master, :wait_for_worker_preparing, time() - wait_t0)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                                 if status != "success"
                                     config.status = status
@@ -1011,7 +1009,6 @@ function main()
                                 end
 
                                 # measure
-                                wait_t0 = time()
                                 max_time = 3 * target_time
                                 measuring, (status, measurements, result, times) = @something(
                                     remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
@@ -1023,7 +1020,7 @@ function main()
                                     note_time(measurement_times_worker, k, v)
                                 end
                                 config.time = minimum(measurements; init=Inf)
-                                note_time(measurement_times_master, :wait_for_worker_measuring, time() - wait_t0)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_measuring, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                                 if status != "success"
                                     config.status = status
@@ -1031,13 +1028,12 @@ function main()
                                 end
 
                                 # verify results
-                                wait_t0 = time()
                                 verifying, verified = @something(
                                     remotecall_until(verify, worker, problem, reference_result, result),
                                     error("Time-out verifying results")
                                 )
                                 worker_elapsed += note_time(measurement_times_worker, :verifying, verifying)
-                                note_time(measurement_times_master, :wait_for_worker_verify, time() - wait_t0)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_verify, wait_t1 - wait_t0); wait_t0 = wait_t1
                                 if !verified
                                     @warn "Configuration produced invalid result: $(repr_row(config))"
                                     config.status = "invalid_result"
@@ -1046,7 +1042,6 @@ function main()
 
                                 config.status = "success"
                             catch err
-                                wait_t0 = time()
                                 config.status = "crashed"
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
                                 @error "Unexpected exception on worker $worker\n$log"
@@ -1057,11 +1052,10 @@ function main()
                                     @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
-                                note_time(measurement_times_master, :wait_for_removing_crashed_worker, time() - wait_t0)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
                             finally
-                                wait_t0 = time()
                                 push!(results, (worker, i))
-                                note_time(measurement_times_master, :wait_for_push_results, time() - wait_t0)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                                 master_elapsed = time() - master_t0
                                 measuring_time_master += master_elapsed
