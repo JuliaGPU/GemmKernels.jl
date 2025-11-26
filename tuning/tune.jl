@@ -87,7 +87,7 @@ const SWEEP_TIME_LIMIT = 24*3600
 const CONFIG_TIME_LIMIT = 60
 
 # Retry configurations with these categories.
-const RETRY_STATUSSES = ["oom", "crashed"]
+const RETRY_STATUSSES = ["oom", "crashed_during_compile", "crashed_during_measure"]
 
 # When benchmarking the best configurations, how many candidates to consider.
 const BENCHMARK_CANDIDATES = 3
@@ -926,7 +926,7 @@ function main()
 
                                 config.status = "promising"
                             catch err
-                                config.status = "crashed"
+                                config.status = "crashed_during_compile"
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
                                 @error "Unexpected exception on worker $worker\n$log"
                                 try
@@ -1047,7 +1047,7 @@ function main()
 
                                 config.status = "success"
                             catch err
-                                config.status = "crashed"
+                                config.status = "crashed_during_measure"
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
                                 @error "Unexpected exception on worker $worker\n$log"
                                 try
