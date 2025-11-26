@@ -279,7 +279,7 @@ function prepare_config(problem, config, fake=false)
 
         log *= sprint(Base.show_backtrace, catch_backtrace())
         @error "Unknown error\n$log"
-        return "unknown_error"
+        return "unknown_error_during_prepare"
     end
 
     return "success"
@@ -312,7 +312,7 @@ function measure_config(problem, config, max_time)
 
             log *= sprint(Base.show_backtrace, catch_backtrace())
             @error "Unknown error\n$log"
-            return "unknown_error", Float64[], nothing, ()
+            return "unknown_error_during_measure", Float64[], nothing, ()
         end
         synchronize()
     end
@@ -694,7 +694,7 @@ function main()
     # (note that we don't retry them within a run)
     @info "Deleting configurations that ran into an unknown error..."
     deleteat!(all_configs, in.(all_configs.status,
-                               Ref([["unknown_error", "pending", "promising"];
+                               Ref([["unknown_error_during_prepare", "unknown_error_during_measure", "pending", "promising"];
                                     RETRY_STATUSSES])))
 
     # Find the best times so far
