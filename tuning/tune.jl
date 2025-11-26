@@ -881,6 +881,7 @@ function main()
                             # keep track of the time spend on the master, and on the workers
                             master_t0 = time()
                             worker_elapsed = 0.0
+                            wait_t0 = master_t0
 
                             # get a job
                             wait_t0 = time()
@@ -890,7 +891,7 @@ function main()
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
-                            note_time(compilation_times_master, :wait_for_take_initial_jobs, time() - wait_t0)
+                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_take_initial_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                             config = all_configs[i, :]
 
                             # ensure we still have a worker
@@ -907,6 +908,8 @@ function main()
                                 end
                             end
 
+                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
+
                             status = try
                                 # prepare
                                 preparing, status = @something(
@@ -914,6 +917,7 @@ function main()
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)
+                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
 
                                 if status != "success"
                                     config.status = status
@@ -932,13 +936,14 @@ function main()
                                     @error "Failed to stop worker $worker\n$log"
                                 end
                                 worker = nothing
+                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
                             finally
                                 if config.status == "promising"
                                     # submit for further processing
                                     try
                                         wait_t0 = time()
                                         put!(promising_jobs, i)
-                                        note_time(compilation_times_master, :wait_for_put_promising_jobs, time() - wait_t0)
+                                        wait_t1 = time(); note_time(compilation_times_master, :wait_for_put_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                                     catch err
                                         isa(err, EOFError) || rethrow()
                                         break
@@ -946,7 +951,7 @@ function main()
                                 else
                                     wait_t0 = time()
                                     push!(results, (worker, i))
-                                    note_time(compilation_times_master, :wait_for_push_results, time() - wait_t0)
+                                    wait_t1 = time(); note_time(compilation_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
                                 end
 
                                 master_elapsed = time() - master_t0
@@ -1138,12 +1143,14 @@ function main()
 
                                     # master
                                     :wait_for_take_promising_jobs,
+                                    :wait_for_take_initial_jobs,
                                     :wait_for_worker_startup,
                                     :wait_for_worker_preparing,
                                     :wait_for_worker_measuring,
                                     :wait_for_worker_verify,
                                     :wait_for_removing_crashed_worker,
                                     :wait_for_push_results,
+                                    :wait_for_put_promising_jobs,
                                 ]
 
                                 idx = findfirst(==(key), order)
