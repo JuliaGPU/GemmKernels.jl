@@ -87,7 +87,7 @@ const SWEEP_TIME_LIMIT = 24*3600
 const CONFIG_TIME_LIMIT = 60
 
 # Retry configurations with these categories.
-const RETRY_STATUSSES = ["oom", "crashed"]
+const RETRY_STATUSSES = ["oom", "crashed_during_compile", "crashed_during_measure"]
 
 # When benchmarking the best configurations, how many candidates to consider.
 const BENCHMARK_CANDIDATES = 3
@@ -268,7 +268,7 @@ function prepare_config(problem, config, fake=false)
         # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
             @warn "Configuration is invalid\n$log"
-            return "config_error"
+            return "config_error_during_prepare"
         end
         if isa(err, CUDA.InvalidIRError)
             @warn "Configuration failed to compile\n$log"
@@ -277,7 +277,7 @@ function prepare_config(problem, config, fake=false)
 
         log *= sprint(Base.show_backtrace, catch_backtrace())
         @error "Unknown error\n$log"
-        return "unknown_error"
+        return "unknown_error_during_prepare"
     end
 
     return "success"
@@ -305,12 +305,12 @@ function measure_config(problem, config, max_time)
             # determine the cause of the error
             if isa(err, GemmKernels.ConfigError)
                 @warn "Configuration is invalid\n$log"
-                return "config_error", Float64[], nothing, ()
+                return "config_error_during_measure", Float64[], nothing, ()
             end
 
             log *= sprint(Base.show_backtrace, catch_backtrace())
             @error "Unknown error\n$log"
-            return "unknown_error", Float64[], nothing, ()
+            return "unknown_error_during_measure", Float64[], nothing, ()
         end
         synchronize()
     end
@@ -692,7 +692,7 @@ function main()
     # (note that we don't retry them within a run)
     @info "Deleting configurations that ran into an unknown error..."
     deleteat!(all_configs, in.(all_configs.status,
-                               Ref([["unknown_error", "pending", "promising"];
+                               Ref([["unknown_error_during_prepare", "unknown_error_during_measure", "pending", "promising"];
                                     RETRY_STATUSSES])))
 
     # Find the best times so far
@@ -924,7 +924,7 @@ function main()
 
                                 config.status = "promising"
                             catch err
-                                config.status = "crashed"
+                                config.status = "crashed_during_compile"
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
                                 @error "Unexpected exception on worker $worker\n$log"
                                 try
@@ -1045,7 +1045,7 @@ function main()
 
                                 config.status = "success"
                             catch err
-                                config.status = "crashed"
+                                config.status = "crashed_during_measure"
                                 log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
                                 @error "Unexpected exception on worker $worker\n$log"
                                 try
