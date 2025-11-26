@@ -1123,51 +1123,68 @@ function main()
 
                             push!(vals, ("", ""))
 
-                            # compilation timings on the worker
-                            compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
-                            push!(vals, ("compilation times (worker)", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)"))
-                            if !isempty(compilation_times_worker)
-                                for (k, v) in compilation_times_worker
-                                    v_rel = round(100 * v / compilation_time_worker; sigdigits=3)
-                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                            # helper functions to print subtimings
+                            function key_sort_order(key)
+                                order = [
+                                    # worker
+                                    :startup,
+                                    :preparing,
+                                    :warmup,
+                                    :initializing,
+                                    :settling,
+                                    :measuring,
+                                    :copying,
+                                    :verifying,
+
+                                    # master
+                                    :wait_for_take_promising_jobs,
+                                    :wait_for_worker_startup,
+                                    :wait_for_worker_preparing,
+                                    :wait_for_worker_measuring,
+                                    :wait_for_worker_verify,
+                                    :wait_for_removing_crashed_worker,
+                                    :wait_for_push_results,
+                                ]
+
+                                idx = findfirst(==(key), order)
+
+                                if idx === nothing
+                                    return (2, key)
+                                else
+                                    return (1, idx)
                                 end
                             end
+                            function print_subtimings(header::Tuple{String, String}, subtimes::Dict, total_time::Number)
+                                push!(vals, header)
 
-                            push!(vals, ("", ""))
+                                if !isempty(subtimes)
+                                    for k in sort(collect(keys(subtimes)), by=key_sort_order)
+                                        v = subtimes[k]
+                                        v_rel = round(100 * v / total_time; sigdigits=3)
+                                        push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                    end
+                                end
+
+                                push!(vals, ("", ""))
+                            end
+
+                            # compilation timings on the worker
+                            compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
+                            header = ("compilation times (worker)", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)")
+                            print_subtimings(header, compilation_times_worker, compilation_time_worker)
 
                             # measurement timings on the worker
                             measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
-                            push!(vals, ("measuring times (worker)", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)"))
-                            if !isempty(measurement_times_worker)
-                                for (k, v) in measurement_times_worker
-                                    v_rel = round(100 * v / measuring_time_worker; sigdigits=3)
-                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
-                                end
-                            end
-
-                            push!(vals, ("", ""))
+                            header = ("measuring times (worker)", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)")
+                            print_subtimings(header, measurement_times_worker, measuring_time_worker)
 
                             # compilation timings on the master
-                            push!(vals, ("compilation times (master)", "$(prettytime(compilation_time_master)) master total"))
-                            if !isempty(compilation_times_master)
-                                for (k, v) in compilation_times_master
-                                    v_rel = round(100 * v / compilation_time_master; sigdigits=3)
-                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
-                                end
-                            end
-
-                            push!(vals, ("", ""))
+                            header = ("compilation times (master)", "$(prettytime(compilation_time_master)) master total")
+                            print_subtimings(header, compilation_times_master, compilation_time_master)
 
                             # measuring timings on the master
-                            push!(vals, ("measuring times (master)", "$(prettytime(measuring_time_master)) master total"))
-                            if !isempty(measurement_times_master)
-                                for (k, v) in measurement_times_master
-                                    v_rel = round(100 * v / measuring_time_master; sigdigits=3)
-                                    push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
-                                end
-                            end
-
-                            push!(vals, ("", ""))
+                            header = ("measuring times (master)", "$(prettytime(measuring_time_master)) master total")
+                            print_subtimings(header, measurement_times_master, measuring_time_master)
 
                             # job state
                             category_counters = Dict(counter(new_configs[!, "status"]))
