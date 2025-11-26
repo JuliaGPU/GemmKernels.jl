@@ -270,7 +270,7 @@ function prepare_config(problem, config, fake=false)
         # determine the cause of the error
         if isa(err, GemmKernels.ConfigError)
             @warn "Configuration is invalid\n$log"
-            return "config_error"
+            return "config_error_during_prepare"
         end
         if isa(err, CUDA.InvalidIRError)
             @warn "Configuration failed to compile\n$log"
@@ -307,7 +307,7 @@ function measure_config(problem, config, max_time)
             # determine the cause of the error
             if isa(err, GemmKernels.ConfigError)
                 @warn "Configuration is invalid\n$log"
-                return "config_error", Float64[], nothing, ()
+                return "config_error_during_measure", Float64[], nothing, ()
             end
 
             log *= sprint(Base.show_backtrace, catch_backtrace())
