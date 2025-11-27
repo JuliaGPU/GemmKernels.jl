@@ -874,6 +874,8 @@ function main()
                 # Compilation tasks
                 compilation_time_worker = 0
                 compilation_time_master = 0
+                compilation_time_master_per_status = Dict{Symbol, Float64}()
+
                 for _ in 1:compile_workers
                     errormonitor(@async begin
                         worker = nothing
@@ -956,6 +958,7 @@ function main()
 
                                 master_elapsed = time() - master_t0
                                 compilation_time_master += master_elapsed
+                                note_time(compilation_time_master_per_status, Symbol(config.status), master_elapsed)
                                 compilation_time_worker += worker_elapsed
                             end
                         end
@@ -965,6 +968,8 @@ function main()
                 # Measurement tasks
                 measuring_time_worker = 0
                 measuring_time_master = 0
+                measuring_time_master_per_status = Dict{Symbol, Float64}()
+
                 for _ in 1:measurement_workers
                     errormonitor(@async begin
                         worker = nothing
@@ -1065,6 +1070,7 @@ function main()
 
                                 master_elapsed = wait_t1 - master_t0
                                 measuring_time_master += master_elapsed
+                                note_time(measuring_time_master_per_status, Symbol(config.status), master_elapsed)
                                 measuring_time_worker += worker_elapsed
                             end
                         end
@@ -1209,6 +1215,14 @@ function main()
                             end
 
                             push!(vals, ("", ""))
+
+                            # wall time per job (compilation)
+                            header = ("compilation times (master, per config status)", "$(prettytime(compilation_time_master)) master total")
+                            print_subtimings(header, compilation_time_master_per_status, compilation_time_master)
+
+                            # wall time per job (measuring)
+                            header = ("measuring times (master, per config status)", "$(prettytime(measuring_time_master)) master total")
+                            print_subtimings(header, measuring_time_master_per_status, measuring_time_master)
 
                             # num workers started
                             push!(vals, ("# of compilation workers started", num_compilation_workers_started))
