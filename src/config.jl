@@ -232,7 +232,6 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     warps_per_block = get(params, :warps_per_block, warps_per_block_default)
     compute_warp = get(params, :compute_warp, compute_warp_default)
 
-
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
     # TODO: Let the layouts handle this?
     is_a_col_major = get(params, :is_a_col_major, true)
@@ -246,6 +245,11 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     num_elems_per_thread_a = min(16 ÷ sizeof(Layout.eltype(global_a_layout)), (block_shape.M * block_shape.K) ÷ (32 * warps_per_block))
     num_elems_per_thread_b = min(16 ÷ sizeof(Layout.eltype(global_b_layout)), (block_shape.K * block_shape.N) ÷ (32 * warps_per_block))
     num_elems_per_thread_c = min(16 ÷ sizeof(Layout.eltype(global_c_layout)), (block_shape.M * block_shape.N) ÷ (32 * warps_per_block))
+
+    # For the memory stages, we need at least one element per block.
+    (num_elems_per_thread_a >= 1) || throw(ConfigError("Need at least one element per thread for copying the A matrix"))
+    (num_elems_per_thread_b >= 1) || throw(ConfigError("Need at least one element per thread for copying the B matrix"))
+    (num_elems_per_thread_c >= 1) || throw(ConfigError("Need at least one element per thread for copying the C matrix"))
 
     mem_a_warp = get(params, :mem_a_warp,
         adjacent_elements(32 * num_elems_per_thread_a, (M = block_shape.M, K = block_shape.K), is_a_col_major))
