@@ -1133,6 +1133,7 @@ function prepare(tc::TensorContraction, a, b, c, d;
         blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
         warpsPerBlock=WARPS_M * WARPS_N,
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
+        kernel = kernel
     )
 
     (; plan, padded_a, padded_b, padded_c, padded_d, data_d)
