@@ -37,16 +37,15 @@ function main()
 
             println("Trying configuration $(idx)/$(size(candidate_configs, 1)): $(repr_row(config))")
 
-            params = create_params(config)
             try
+                params = create_params(config)
                 args = prepare(problem, data...; params...)
+                execute(problem, data...; args...)
+
+                CUDA.synchronize()
             catch ConfigError
                 continue
             end
-
-            execute(problem, data...; args...)
-
-            CUDA.synchronize()
 
             println("Finished configuration $(idx)/$(size(candidate_configs, 1))")
 
