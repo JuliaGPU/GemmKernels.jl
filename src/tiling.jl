@@ -4,6 +4,8 @@ module Tiling
 # Tile object
 # -----------
 
+using CUDA
+
 export Tile
 
 """
@@ -235,6 +237,13 @@ the calling entity.
     return TileIterator{_size(tiling_size), _size(tile), _names(tile), T, typeof(subtile_indices), idxs, col_major}(parent, subtile_indices, convert(Int32, idx))
 end
 
+macro throw_error(msg)
+    quote
+        @cuprintln "ERROR: $msg"
+        error()
+    end
+end
+
 """
     subdivide(tile, tiling_size, idx, count)
 
@@ -254,9 +263,14 @@ Returns the [`Tile`](@ref) that the calling entity is responsible for.
 """
 @inline function subdivide(tile::Tile{size, names, T}, tiling_size::Tile{tile_sz, names, T}, idx, count) where {names, T, size, tile_sz}
     iter = iterate(parallelise(tile, tiling_size, idx, count))::Tuple{Tile,Any}
-    @boundscheck begin
-        iter === nothing && throw(BoundsError())
+
+    if iter === nothing
+        @throw_error("Bounds error in subdivide")
     end
+
+    # @boundscheck begin
+    #     iter === nothing && throw(BoundsError())
+    # end
     @inbounds iter[1]
 end
 

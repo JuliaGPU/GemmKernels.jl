@@ -2,6 +2,28 @@
 #
 # similar to StaticArrays, but immutable to prevent optimization bugs (JuliaLang/julia#41800)
 
+macro throw_error_getindex()
+    quote
+        @cuprintln "ERROR: In Base.getindex"
+        error()
+    end
+end
+
+macro throw_error_setindex()
+    quote
+        @cuprintln "ERROR: In Base.setindex"
+        error()
+    end
+end
+
+macro throw_error_setindex_MD()
+    quote
+        @cuprintln "ERROR: In Base.setindex MD"
+        error()
+    end
+end
+
+
 struct LocalArray{S <: Tuple, T, N, L} <: AbstractArray{T,N}
     data::NTuple{L,T}
 
@@ -25,17 +47,29 @@ Base.size(x::LocalArray{S}) where {S} = (S.parameters...,)
 
 # indexing
 Base.@propagate_inbounds function Base.getindex(v::LocalArray, i::Int)
-    @boundscheck checkbounds(v,i)
+    if !checkbounds(Bool,v,i)
+        @throw_error_getindex()
+    end
+
+    # @boundscheck checkbounds(v,i)
     @inbounds v.data[i]
 end
 Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L}, val, i::Int) where {S,T,N,L}
-    @boundscheck checkbounds(v,i)
+    if !checkbounds(Bool,v,i)
+        @throw_error_setindex()
+    end
+
+    # @boundscheck checkbounds(v,i)
     new_data = Base.setindex(v.data, convert(T, val), i)
     LocalArray{S,T,N,L}(new_data)
 end
 ## XXX: Base's setindex doesn't have a ND version
 Base.@propagate_inbounds function Base.setindex(v::LocalArray{S,T,N,L}, val, is::Int...) where {S,T,N,L}
-    @boundscheck checkbounds(v,is...)
+    if !checkbounds(Bool,v,is...)
+        @throw_error_setindex_MD()
+    end
+
+    # @boundscheck checkbounds(v,is...)
     I = CartesianIndex(is...)
     i = LinearIndices(v)[I]
     new_data = Base.setindex(v.data, convert(T, val), i)

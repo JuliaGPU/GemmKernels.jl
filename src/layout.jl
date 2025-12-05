@@ -19,6 +19,26 @@ using Base.Cartesian: @ntuple
 
 struct Vec{N, T} end
 
+@noinline function throw_error_load_col()
+    @cuprintln("ERROR: During load col")
+    error()
+end
+
+@noinline function throw_error_store_col()
+    @cuprintln("ERROR: During store col")
+    error()
+end
+
+@noinline function throw_error_load_row()
+    @cuprintln("ERROR: During load row")
+    error()
+end
+
+@noinline function throw_error_store_row()
+    @cuprintln("ERROR: During store row")
+    error()
+end
+
 @noinline function throw_alignmenterror(ptr)
     @cuprintln "ERROR: AlignmentError: Pointer $ptr is not properly aligned for vectorized load/store"
     error()
@@ -39,7 +59,7 @@ Base.@propagate_inbounds @inline @generated function vloada(::Type{Vec{N, T}}, p
     return quote
         $(Expr(:meta, :inline))
         vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-        @boundscheck checkalignment(vec_ptr, $alignment)
+        # @boundscheck checkalignment(vec_ptr, $alignment)
         return unsafe_load(vec_ptr, (i-1) ÷ N + 1, Val($alignment))
     end
 end
@@ -58,7 +78,7 @@ Base.@propagate_inbounds @inline @generated function vstorea!(::Type{Vec{N, T}},
         append!(ex.args, (quote
             y = @ntuple $N j -> VecElement{T}(x[j+$offset].value)
             vec_ptr = Base.bitcast(Core.LLVMPtr{NTuple{N, VecElement{T}}, AS}, ptr)
-            @boundscheck checkalignment(vec_ptr, $alignment)
+            # @boundscheck checkalignment(vec_ptr, $alignment)
             unsafe_store!(vec_ptr, y, $offset ÷ N + (i - 1) ÷ N + 1, Val($alignment))
         end).args)
     end
@@ -202,7 +222,11 @@ abstract type UnsafeAlignedColMajor{T} <: LayoutBase{T} end
     linear_offset = linearise(tile.offset, Base.size(workspace))
     linear_idx = linear_base + linear_offset - 1
 
-    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
+    if !checkbounds(Bool, workspace, linear_idx:(linear_idx+N-1))
+        throw_error_load_col()
+    end
+
+    # @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
     return vloada(Vec{N, T}, pointer(workspace, linear_idx))
 end
 
@@ -213,7 +237,11 @@ end
     linear_offset = linearise(tile.offset, Base.size(workspace))
     linear_idx = linear_base + linear_offset - 1
 
-    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
+    if !checkbounds(Bool, workspace, linear_idx:(linear_idx+length(values)-1))
+        throw_error_store_col()
+    end
+
+    # @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
     vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
     return
 end
@@ -254,7 +282,11 @@ abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
     linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
     linear_idx = linear_base + linear_offset - 1
 
-    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
+    if !checkbounds(Bool, workspace, linear_idx:(linear_idx+N-1))
+        throw_error_load_row()
+    end
+
+    # @boundscheck checkbounds(workspace, linear_idx:(linear_idx+N-1))
     return vloada(Vec{N, T}, pointer(workspace, linear_idx))
 end
 
@@ -265,7 +297,12 @@ end
     linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
 
     linear_idx = linear_base + linear_offset - 1
-    @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
+
+    if !checkbounds(Bool, workspace, linear_idx:(linear_idx+length(values)-1))
+        throw_error_store_row()
+    end
+
+    # @boundscheck checkbounds(workspace, linear_idx:(linear_idx+length(values)-1))
     vstorea!(Vec{N, T}, pointer(workspace, linear_idx), values)
 end
 

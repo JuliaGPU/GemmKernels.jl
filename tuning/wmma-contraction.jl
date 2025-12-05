@@ -27,7 +27,7 @@ function generate_problems()
         push!(problems, WMMATensorContraction(; name=el["parseableName"], extents=el["extents"],
                                                 data_type, compute_type, accumulate_type, zero_c))
     end
-    problems
+    problems[1:1]
 end
 
 function create_configs()
