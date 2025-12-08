@@ -28,14 +28,25 @@ function main()
 
     println("Identified $(size(candidate_configs, 1)) crashed configs.")
     configs_finished = 0
+    config_statuses = Dict{String, Int}()
 
     for problem in problems
         data = allocate_data(problem)
 
         for config in eachrow(select_configs(candidate_configs, problem))
+            status = "unknown"
+
             idx = configs_finished+1
 
             println("Trying configuration $(idx)/$(size(candidate_configs, 1)): $(repr_row(config))")
+
+            if idx in []
+                println("Skipping configuration $(idx).")
+                status = "skipped"
+                configs_finished += 1
+                config_statuses[status] = get(config_statuses, status, 0) + 1
+                continue
+            end
 
             try
                 params = create_params(config)
@@ -43,21 +54,36 @@ function main()
                 execute(problem, data...; args...)
 
                 CUDA.synchronize()
-            catch ConfigError
-                continue
+
+                status = "success"
+            catch ex
+                if isa(ex, GemmKernels.ConfigError)
+                    status = "config_error"
+                # elseif isa(ex, CUDA.KernelException)
+                #     status = "kernel_exception"
+                else
+                    status = "exception"
+                    rethrow()
+                end
+            finally
+                println("Finished configuration $(idx)/$(size(candidate_configs, 1))")
+                configs_finished += 1
+                config_statuses[status] = get(config_statuses, status, 0) + 1
             end
-
-            println("Finished configuration $(idx)/$(size(candidate_configs, 1))")
-
-            configs_finished += 1
         end
+    end
+
+    println("Overview:")
+
+    for (k, v) in pairs(config_statuses)
+        println("$k: $v")
     end
 end
 
 function run_sanitizer()
     compute_sanitizer = joinpath(CUDA_SDK_jll.artifact_dir, "cuda/compute-sanitizer/compute-sanitizer")
     options = ["--launch-timeout=0", "--target-processes=all", "--report-api-errors=no"]
-    julia_options = ["-g2", "--check-bounds=yes", "--project=tuning", "./run-crashes.jl", "RUN"]
+    julia_options = ["-g2", #="--check-bounds=yes",=# "--project=tuning", "./run-crashes.jl", "RUN"]
 
     if "NOSAN" in ARGS
         run(`$(Base.julia_cmd()) $julia_options`)
