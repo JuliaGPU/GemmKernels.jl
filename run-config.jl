@@ -13,13 +13,13 @@ function main()
     problem = problems[PROBLEM_ID]
 
     # Configuration.
-    block = 16, 256, 16
-    warp = 2, 8
-    op = 8, 32, 16
-    layout = [1, 2], [3], [4]
-    col_major = ["B", "D"]
-    swizzle = "vertical-4"
-    kernel = "pipelined"
+    block = 128, 32, 32
+    warp = 2, 2
+    op = 16, 16, 16
+    layout = [2, 1], [3], [4]
+    col_major = ["A", "B", "D"]
+    swizzle = "vertical-8"
+    kernel = "singlestage"
 
     config = (;
         # name

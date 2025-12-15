@@ -17,6 +17,7 @@ using Adapt
 using Scratch
 using Profile
 using ProfileSVG
+using PProf
 
 if myid() == 1
     using Plots
@@ -81,7 +82,7 @@ const EXHAUSTIVE = true
 
 # The time limit for the entire sweep, in seconds.
 # This will be used to determine a per-problem time limit.
-const SWEEP_TIME_LIMIT = 24*3600
+const SWEEP_TIME_LIMIT = 5*60
 
 # The time limit for each single step (preparation, measurement, verification), in seconds.
 const CONFIG_TIME_LIMIT = 60
@@ -746,548 +747,555 @@ function main()
 
     @info "Starting phase 2: Sweep parameters..."
 
-    for (problem_idx, problem) in enumerate(problems)
-        println("\nProcessing $problem [$problem_idx/$(length(problems))]...")
-        configs = select_configs(all_configs, problem)
-        sweep_start = time()
-        sweep_start_date = now()
+    Profile.clear()
+    Profile.init(n = 10^9, delay=0.001)
 
-        # Determine time we already spent on this problem on previous runs.
-        time_spent_for_problem = maximum(configs.found_after; init=0)
-        println(" - already spent $time_spent_for_problem seconds on this problem in previous runs")
+    Profile.@profile_walltime begin
+        for (problem_idx, problem) in enumerate(problems)
+            println("\nProcessing $problem [$problem_idx/$(length(problems))]...")
+            configs = select_configs(all_configs, problem)
+            sweep_start = time()
+            sweep_start_date = now()
 
-        num_compilation_workers_started = 0
-        num_measurement_workers_started = 0
+            # Determine time we already spent on this problem on previous runs.
+            time_spent_for_problem = maximum(configs.found_after; init=0)
+            println(" - already spent $time_spent_for_problem seconds on this problem in previous runs")
 
-        # See if there's anything we need to do
-        best_time = minimum(filter(:status => ==("success"), configs, view=true).time; init=Inf)
-        target_time = baseline_performances[problem]
-        println(" - target time: $(prettytime(target_time))")
-        if best_time != Inf
-            perf_percentage = round(100 * target_time / best_time; digits=2)
-            println(" - best time so far: $(prettytime(best_time)) ($perf_percentage%)")
-            if !EXHAUSTIVE && best_time < target_time
-                println("   fast enough already")
-                continue
-            end
-        end
+            num_compilation_workers_started = 0
+            num_measurement_workers_started = 0
 
-        initial_count = size(configs, 1)
-        total_count = length(config_iterator(problem))
-        println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
-
-        njobs = total_count - initial_count
-        if (njobs > 0) && (parse(Int, get(ENV, "GK_PLOT_ONLY", "0")) == 0)
-            # Determine memory requirement
-            println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
-            problem_cpu_memory_available = cpu_memory_available * memory_margin
-            problem_gpu_memory_available = gpu_memory_available * memory_margin
-
-            # Spawn measurement workers
-            measurement_workers, add_measurement_worker = let
-                gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
-                gpu_mem_limit = gpu_mem_target + 1000*2^20      # size of (reasonable) CUDA context
-                cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
-                cpu_mem_limit = 3*sizeof(problem) + 1500*2^20   # headroom for CUPTI
-                problem_cpu_memory_available -= cpu_mem_limit
-                problem_gpu_memory_available -= gpu_mem_limit
-
-                1, (X) -> begin
-                    num_measurement_workers_started += X
-                    addworkers(X; gpu_mem_target, cpu_mem_target, tag="measurement")
+            # See if there's anything we need to do
+            best_time = minimum(filter(:status => ==("success"), configs, view=true).time; init=Inf)
+            target_time = baseline_performances[problem]
+            println(" - target time: $(prettytime(target_time))")
+            if best_time != Inf
+                perf_percentage = round(100 * target_time / best_time; digits=2)
+                println(" - best time so far: $(prettytime(best_time)) ($perf_percentage%)")
+                if !EXHAUSTIVE && best_time < target_time
+                    println("   fast enough already")
+                    continue
                 end
             end
 
-            # Spawn compilation workers
-            compile_workers, add_compile_worker = let
-                cpu_mem_target = 1500*2^20  # reasonable size of the heap
-                cpu_mem_limit = 2500*2^20   # compilation headroom
+            initial_count = size(configs, 1)
+            total_count = length(config_iterator(problem))
+            println(" - have processed $(round(100*initial_count/total_count; digits=2))% ($initial_count/$total_count) of configurations already")
 
-                max_workers_cpu_mem = floor(Int, problem_cpu_memory_available / cpu_mem_limit)
-                max_workers_cpu_threads = Sys.CPU_THREADS
-                max_workers_njobs = njobs+1
+            njobs = total_count - initial_count
+            if (njobs > 0) && (parse(Int, get(ENV, "GK_PLOT_ONLY", "0")) == 0)
+                # Determine memory requirement
+                println(" - problem memory requirement: $(Base.format_bytes(sizeof(problem)))")
+                problem_cpu_memory_available = cpu_memory_available * memory_margin
+                problem_gpu_memory_available = gpu_memory_available * memory_margin
 
-                max_workers = min(
-                    max_workers_cpu_mem,
-                    max_workers_cpu_threads,
-                    max_workers_njobs
-                )
+                # Spawn measurement workers
+                measurement_workers, add_measurement_worker = let
+                    gpu_mem_target = sizeof(problem) + 32*2^20      # allow minimal unaccounted allocations
+                    gpu_mem_limit = gpu_mem_target + 1000*2^20      # size of (reasonable) CUDA context
+                    cpu_mem_target = 3*sizeof(problem)              # 2 for the data, 1 for the comparison
+                    cpu_mem_limit = 3*sizeof(problem) + 1500*2^20   # headroom for CUPTI
+                    problem_cpu_memory_available -= cpu_mem_limit
+                    problem_gpu_memory_available -= gpu_mem_limit
 
-                println(" - max # of compilation workers: $max_workers")
-                println("   limit determined by CPU memory: $max_workers_cpu_mem")
-                println("   limit determined by #CPU threads: $max_workers_cpu_threads")
-                println("   limit determined by #jobs: $max_workers_njobs")
-
-                max_workers, (X) -> begin
-                    num_compilation_workers_started += X
-                    addworkers(X; cpu_mem_target, tag="compilation")
-                end
-            end
-
-            # Functionality to quickly detect already seen configurations, by hashing
-            # all columns except the status/time/found_after ones added by the tuning script.
-            problem_cols = Symbol.(filter(!in(["status", "time", "found_after"]), names(all_configs)))
-            hash_config(config) = hash(((getproperty(config, col) for col in problem_cols)...,))
-            seen_configs = Set(hash_config.(eachrow(configs)))
-
-            # determine time limits and intervals
-            println(" - time limit: $(prettytime(time_limits[problem]))")
-            checkpoint_duration = @elapsed checkpoint()
-            checkpoint_interval = max(300, 20 * checkpoint_duration)
-            println(" - checkpointing every $(prettytime(checkpoint_interval))")
-
-            # Process jobs!
-            reference_result = deserialize(reference_results[problem])
-            initial_category_counters = Dict(counter(configs[!, "status"]))
-            p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
-
-            compilation_times_worker = Dict{Symbol, Float64}()
-            measurement_times_worker = Dict{Symbol, Float64}()
-
-            compilation_times_master = Dict{Symbol, Float64}()
-            measurement_times_master = Dict{Symbol, Float64}()
-
-            function note_time(collection, key, value)
-                collection[key] = get(collection, key, 0.0) + value
-                return value
-            end
-            results = Channel(Inf)
-            initial_jobs = Channel(100)
-            promising_jobs = Channel(2 * compile_workers)
-            @sync begin
-                # Job queue
-                job_submitter = errormonitor(@async begin
-                    for config in config_iterator(problem)
-                        try
-                            # only process new configurations
-                            if !in(hash_config(config), seen_configs)
-                                push!(all_configs, (config..., "pending", Inf, -Inf))
-                                put!(initial_jobs, size(all_configs, 1))
-                            end
-                        catch err
-                            isa(err, EOFError) || rethrow()
-                            break
-                        end
+                    1, (X) -> begin
+                        num_measurement_workers_started += X
+                        addworkers(X; gpu_mem_target, cpu_mem_target, tag="measurement")
                     end
-                end)
+                end
 
-                # Compilation tasks
-                compilation_time_worker = 0
-                compilation_time_master = 0
-                compilation_time_master_per_status = Dict{Symbol, Float64}()
+                # Spawn compilation workers
+                compile_workers, add_compile_worker = let
+                    cpu_mem_target = 1500*2^20  # reasonable size of the heap
+                    cpu_mem_limit = 2500*2^20   # compilation headroom
 
-                for _ in 1:compile_workers
-                    errormonitor(@async begin
-                        worker = nothing
-                        while isopen(initial_jobs)
-                            # keep track of the time spend on the master, and on the workers
-                            master_t0 = time()
-                            worker_elapsed = 0.0
-                            wait_t0 = master_t0
+                    max_workers_cpu_mem = floor(Int, problem_cpu_memory_available / cpu_mem_limit)
+                    max_workers_cpu_threads = Sys.CPU_THREADS
+                    max_workers_njobs = njobs+1
 
-                            # get a job
-                            wait_t0 = time()
-                            i = try
-                                take!(initial_jobs)
+                    max_workers = min(
+                        max_workers_cpu_mem,
+                        max_workers_cpu_threads,
+                        max_workers_njobs
+                    )
+
+                    println(" - max # of compilation workers: $max_workers")
+                    println("   limit determined by CPU memory: $max_workers_cpu_mem")
+                    println("   limit determined by #CPU threads: $max_workers_cpu_threads")
+                    println("   limit determined by #jobs: $max_workers_njobs")
+
+                    max_workers, (X) -> begin
+                        num_compilation_workers_started += X
+                        addworkers(X; cpu_mem_target, tag="compilation")
+                    end
+                end
+
+                # Functionality to quickly detect already seen configurations, by hashing
+                # all columns except the status/time/found_after ones added by the tuning script.
+                problem_cols = Symbol.(filter(!in(["status", "time", "found_after"]), names(all_configs)))
+                hash_config(config) = hash(((getproperty(config, col) for col in problem_cols)...,))
+                seen_configs = Set(hash_config.(eachrow(configs)))
+
+                # determine time limits and intervals
+                println(" - time limit: $(prettytime(time_limits[problem]))")
+                checkpoint_duration = @elapsed checkpoint()
+                checkpoint_interval = max(300, 20 * checkpoint_duration)
+                println(" - checkpointing every $(prettytime(checkpoint_interval))")
+
+                # Process jobs!
+                reference_result = deserialize(reference_results[problem])
+                initial_category_counters = Dict(counter(configs[!, "status"]))
+                p = Progress(njobs; desc="Measuring configurations:", showspeed=true, output=PROGRESS_OUTPUT)
+
+                compilation_times_worker = Dict{Symbol, Float64}()
+                measurement_times_worker = Dict{Symbol, Float64}()
+
+                compilation_times_master = Dict{Symbol, Float64}()
+                measurement_times_master = Dict{Symbol, Float64}()
+
+                function note_time(collection, key, value)
+                    collection[key] = get(collection, key, 0.0) + value
+                    return value
+                end
+                results = Channel(Inf)
+                initial_jobs = Channel(100)
+                promising_jobs = Channel(2 * compile_workers)
+                @sync begin
+                    # Job queue
+                    job_submitter = errormonitor(@async begin
+                        for config in config_iterator(problem)
+                            try
+                                # only process new configurations
+                                if !in(hash_config(config), seen_configs)
+                                    push!(all_configs, (config..., "pending", Inf, -Inf))
+                                    put!(initial_jobs, size(all_configs, 1))
+                                end
                             catch err
                                 isa(err, EOFError) || rethrow()
                                 break
                             end
-                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_take_initial_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
-                            config = all_configs[i, :]
+                        end
+                    end)
 
-                            # ensure we still have a worker
-                            while worker === nothing
-                                try
-                                    startup = @elapsed begin
-                                        worker = add_compile_worker(1)[1]
-                                    end
-                                    worker_elapsed += note_time(compilation_times_worker, :startup, startup)
+                    # Compilation tasks
+                    compilation_time_worker = 0
+                    compilation_time_master = 0
+                    compilation_time_master_per_status = Dict{Symbol, Float64}()
+
+                    for _ in 1:compile_workers
+                        errormonitor(@async begin
+                            worker = nothing
+                            while isopen(initial_jobs)
+                                # keep track of the time spend on the master, and on the workers
+                                master_t0 = time()
+                                worker_elapsed = 0.0
+                                wait_t0 = master_t0
+
+                                # get a job
+                                wait_t0 = time()
+                                i = try
+                                    take!(initial_jobs)
                                 catch err
-                                    # give up for this problem
-                                    @error "Failed to add compilation worker: $(sprint(Base.showerror, err))"
+                                    isa(err, EOFError) || rethrow()
                                     break
                                 end
-                            end
+                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_take_initial_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                config = all_configs[i, :]
 
-                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
-
-                            status = try
-                                # prepare
-                                preparing, status = @something(
-                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
-                                    error("Time-out preparing configuration")
-                                )
-                                worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)
-                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
-
-                                if status != "success"
-                                    config.status = status
-                                    continue
-                                end
-
-                                config.status = "promising"
-                            catch err
-                                config.status = "crashed_during_compile"
-                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
-                                @error "Unexpected exception on worker $worker\n$log"
-                                try
-                                    rmprocs(worker; waitfor=30)
-                                catch err
-                                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
-                                    @error "Failed to stop worker $worker\n$log"
-                                end
-                                worker = nothing
-                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
-                            finally
-                                if config.status == "promising"
-                                    # submit for further processing
+                                # ensure we still have a worker
+                                while worker === nothing
                                     try
-                                        wait_t0 = time()
-                                        put!(promising_jobs, i)
-                                        wait_t1 = time(); note_time(compilation_times_master, :wait_for_put_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                        startup = @elapsed begin
+                                            worker = add_compile_worker(1)[1]
+                                        end
+                                        worker_elapsed += note_time(compilation_times_worker, :startup, startup)
                                     catch err
-                                        isa(err, EOFError) || rethrow()
+                                        # give up for this problem
+                                        @error "Failed to add compilation worker: $(sprint(Base.showerror, err))"
                                         break
                                     end
-                                else
-                                    wait_t0 = time()
-                                    push!(results, (worker, i))
-                                    wait_t1 = time(); note_time(compilation_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
                                 end
 
-                                master_elapsed = time() - master_t0
-                                compilation_time_master += master_elapsed
-                                note_time(compilation_time_master_per_status, Symbol(config.status), master_elapsed)
-                                compilation_time_worker += worker_elapsed
-                            end
-                        end
-                    end)
-                end
+                                wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
 
-                # Measurement tasks
-                measuring_time_worker = 0
-                measuring_time_master = 0
-                measuring_time_master_per_status = Dict{Symbol, Float64}()
+                                status = try
+                                    # prepare
+                                    preparing, status = @something(
+                                        remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
+                                        error("Time-out preparing configuration")
+                                    )
+                                    worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)
+                                    wait_t1 = time(); note_time(compilation_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
 
-                for _ in 1:measurement_workers
-                    errormonitor(@async begin
-                        worker = nothing
-                        while isopen(promising_jobs)
-                            # keep track of the time spend on the master, and on the workers
-                            master_t0 = time()
-                            worker_elapsed = 0.0
-                            wait_t0 = master_t0
-
-                            # get a job
-                            i = try
-                                take!(promising_jobs)
-                            catch err
-                                isa(err, EOFError) || rethrow()
-                                break
-                            end
-                            wait_t1 = time(); note_time(measurement_times_master, :wait_for_take_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
-                            config = all_configs[i, :]
-
-                            # ensure we still have a worker
-                            while worker === nothing
-                                try
-                                    startup = @elapsed begin
-                                        worker = add_measurement_worker(1)[1]
+                                    if status != "success"
+                                        config.status = status
+                                        continue
                                     end
-                                    worker_elapsed += note_time(measurement_times_worker, :startup, startup)
+
+                                    config.status = "promising"
                                 catch err
-                                    # give up for this problem
-                                    @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
+                                    config.status = "crashed_during_compile"
+                                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                    @error "Unexpected exception on worker $worker\n$log"
+                                    try
+                                        rmprocs(worker; waitfor=30)
+                                    catch err
+                                        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                        @error "Failed to stop worker $worker\n$log"
+                                    end
+                                    worker = nothing
+                                    wait_t1 = time(); note_time(compilation_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                finally
+                                    if config.status == "promising"
+                                        # submit for further processing
+                                        try
+                                            wait_t0 = time()
+                                            put!(promising_jobs, i)
+                                            wait_t1 = time(); note_time(compilation_times_master, :wait_for_put_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                        catch err
+                                            isa(err, EOFError) || rethrow()
+                                            break
+                                        end
+                                    else
+                                        wait_t0 = time()
+                                        push!(results, (worker, i))
+                                        wait_t1 = time(); note_time(compilation_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                    end
+
+                                    master_elapsed = time() - master_t0
+                                    compilation_time_master += master_elapsed
+                                    note_time(compilation_time_master_per_status, Symbol(config.status), master_elapsed)
+                                    compilation_time_worker += worker_elapsed
+                                end
+                            end
+                        end)
+                    end
+
+                    # Measurement tasks
+                    measuring_time_worker = 0
+                    measuring_time_master = 0
+                    measuring_time_master_per_status = Dict{Symbol, Float64}()
+
+                    for _ in 1:measurement_workers
+                        errormonitor(@async begin
+                            worker = nothing
+                            while isopen(promising_jobs)
+                                # keep track of the time spend on the master, and on the workers
+                                master_t0 = time()
+                                worker_elapsed = 0.0
+                                wait_t0 = master_t0
+
+                                # get a job
+                                i = try
+                                    take!(promising_jobs)
+                                catch err
+                                    isa(err, EOFError) || rethrow()
                                     break
                                 end
-                            end
-                            wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
-
-                            try
-                                # prepare
-                                preparing, status = @something(
-                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
-                                    error("Time-out preparing configuration")
-                                )
-                                worker_elapsed += note_time(measurement_times_worker, :preparing, preparing)
-                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
-
-                                if status != "success"
-                                    config.status = status
-                                    continue
-                                end
-
-                                # measure
-                                max_time = 3 * target_time
-                                measuring, (status, measurements, result, times) = @something(
-                                    remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
-                                    error("Time-out measuring configuration")
-                                )
-                                worker_elapsed += measuring
-                                ## measure_config returns subtimes
-                                for (k,v) in pairs(times)
-                                    note_time(measurement_times_worker, k, v)
-                                end
-                                config.time = minimum(measurements; init=Inf)
-                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_measuring, wait_t1 - wait_t0); wait_t0 = wait_t1
-
-                                if status != "success"
-                                    config.status = status
-                                    continue
-                                end
-
-                                # verify results
-                                verifying, verified = @something(
-                                    remotecall_until(verify, worker, problem, reference_result, result),
-                                    error("Time-out verifying results")
-                                )
-                                worker_elapsed += note_time(measurement_times_worker, :verifying, verifying)
-                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_verify, wait_t1 - wait_t0); wait_t0 = wait_t1
-                                if !verified
-                                    @warn "Configuration produced invalid result: $(repr_row(config))"
-                                    config.status = "invalid_result"
-                                    continue
-                                end
-
-                                config.status = "success"
-                            catch err
-                                config.status = "crashed_during_measure"
-                                log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
-                                @error "Unexpected exception on worker $worker\n$log"
-                                try
-                                    rmprocs(worker; waitfor=30)
-                                catch err
-                                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
-                                    @error "Failed to stop worker $worker\n$log"
-                                end
-                                worker = nothing
-                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
-                            finally
-                                push!(results, (worker, i))
-
-                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
-
-                                master_elapsed = wait_t1 - master_t0
-                                measuring_time_master += master_elapsed
-                                note_time(measuring_time_master_per_status, Symbol(config.status), master_elapsed)
-                                measuring_time_worker += worker_elapsed
-                            end
-                        end
-                    end)
-                end
-
-                # Result processing task
-                errormonitor(@async begin
-                    ## to avoid excessive checkpointing
-                    t_checkpoint = 0
-                    ## for reporting purposes
-                    nfinished = 0
-                    new_configs = similar(all_configs, 0)
-
-                    while true
-                        # process results
-                        if isready(results)
-                            while isready(results)
-                                worker, i = take!(results)
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_take_promising_jobs, wait_t1 - wait_t0); wait_t0 = wait_t1
                                 config = all_configs[i, :]
-                                config.found_after = time_spent_for_problem + time() - sweep_start
-                                push!(new_configs, config)
-                                nfinished += 1
 
-                                # Update configuration
-                                if config.status == "success"
-                                    best_time = min(best_time, config.time)
-                                end
-                                @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time)) (found after $(config.found_after) seconds of sweeping)"
-                            end
-
-                            # save results every minute
-                            if time() - t_checkpoint > checkpoint_interval
-                                checkpoint()
-                                t_checkpoint = time()
-                            end
-                        end
-
-                        # update the progress bar
-                        function showvalues()
-                            vals = []
-
-                            current_count = initial_count + nfinished
-
-                            push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
-                            push!(vals, ("sweep for problem started at", Dates.format(sweep_start_date, "yyyy-mm-dd HH:MM:SS")))
-                            push!(vals, ("sweep has been running for", "$((now() - sweep_start_date) / Second(1)) s"))
-                            push!(vals, ("sweeping until at most", Dates.format(sweep_start_date + Second(trunc(time_limits[problem])), "yyyy-mm-dd HH:MM:SS")))
-                            push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
-                            total_workers = compile_workers + measurement_workers
-                            push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
-
-                            push!(vals, ("", ""))
-
-                            # configuration times
-                            push!(vals, ("target time", prettytime(target_time)))
-                            if !isinf(best_time)
-                                perf_percentage = round(100 * target_time / best_time; digits=2)
-                                push!(vals, ("best time", "$(prettytime(best_time)) ($perf_percentage%)"))
-                            end
-
-                            push!(vals, ("", ""))
-
-                            # helper functions to print subtimings
-                            function key_sort_order(key)
-                                order = [
-                                    # worker
-                                    :startup,
-                                    :preparing,
-                                    :warmup,
-                                    :initializing,
-                                    :settling,
-                                    :measuring,
-                                    :copying,
-                                    :verifying,
-
-                                    # master
-                                    :wait_for_take_promising_jobs,
-                                    :wait_for_take_initial_jobs,
-                                    :wait_for_worker_startup,
-                                    :wait_for_worker_preparing,
-                                    :wait_for_worker_measuring,
-                                    :wait_for_worker_verify,
-                                    :wait_for_removing_crashed_worker,
-                                    :wait_for_push_results,
-                                    :wait_for_put_promising_jobs,
-                                ]
-
-                                idx = findfirst(==(key), order)
-
-                                if idx === nothing
-                                    return (2, key)
-                                else
-                                    return (1, idx)
-                                end
-                            end
-                            function print_subtimings(header::Tuple{String, String}, subtimes::Dict, total_time::Number)
-                                push!(vals, header)
-
-                                if !isempty(subtimes)
-                                    for k in sort(collect(keys(subtimes)), by=key_sort_order)
-                                        v = subtimes[k]
-                                        v_rel = round(100 * v / total_time; sigdigits=3)
-                                        push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                # ensure we still have a worker
+                                while worker === nothing
+                                    try
+                                        startup = @elapsed begin
+                                            worker = add_measurement_worker(1)[1]
+                                        end
+                                        worker_elapsed += note_time(measurement_times_worker, :startup, startup)
+                                    catch err
+                                        # give up for this problem
+                                        @error "Failed to add measurement worker: $(sprint(Base.showerror, err))"
+                                        break
                                     end
+                                end
+                                wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_startup, wait_t1 - wait_t0); wait_t0 = wait_t1
+
+                                try
+                                    # prepare
+                                    preparing, status = @something(
+                                        remotecall_until(prepare_config, worker, problem, NamedTuple(config)),
+                                        error("Time-out preparing configuration")
+                                    )
+                                    worker_elapsed += note_time(measurement_times_worker, :preparing, preparing)
+                                    wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_preparing, wait_t1 - wait_t0); wait_t0 = wait_t1
+
+                                    if status != "success"
+                                        config.status = status
+                                        continue
+                                    end
+
+                                    # measure
+                                    max_time = 3 * target_time
+                                    measuring, (status, measurements, result, times) = @something(
+                                        remotecall_until(measure_config, worker, problem, NamedTuple(config), max_time),
+                                        error("Time-out measuring configuration")
+                                    )
+                                    worker_elapsed += measuring
+                                    ## measure_config returns subtimes
+                                    for (k,v) in pairs(times)
+                                        note_time(measurement_times_worker, k, v)
+                                    end
+                                    config.time = minimum(measurements; init=Inf)
+                                    wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_measuring, wait_t1 - wait_t0); wait_t0 = wait_t1
+
+                                    if status != "success"
+                                        config.status = status
+                                        continue
+                                    end
+
+                                    # verify results
+                                    verifying, verified = @something(
+                                        remotecall_until(verify, worker, problem, reference_result, result),
+                                        error("Time-out verifying results")
+                                    )
+                                    worker_elapsed += note_time(measurement_times_worker, :verifying, verifying)
+                                    wait_t1 = time(); note_time(measurement_times_master, :wait_for_worker_verify, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                    if !verified
+                                        @warn "Configuration produced invalid result: $(repr_row(config))"
+                                        config.status = "invalid_result"
+                                        continue
+                                    end
+
+                                    config.status = "success"
+                                catch err
+                                    config.status = "crashed_during_measure"
+                                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                    @error "Unexpected exception on worker $worker\n$log"
+                                    try
+                                        rmprocs(worker; waitfor=30)
+                                    catch err
+                                        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                                        @error "Failed to stop worker $worker\n$log"
+                                    end
+                                    worker = nothing
+                                    wait_t1 = time(); note_time(measurement_times_master, :wait_for_removing_crashed_worker, wait_t1 - wait_t0); wait_t0 = wait_t1
+                                finally
+                                    push!(results, (worker, i))
+
+                                    wait_t1 = time(); note_time(measurement_times_master, :wait_for_push_results, wait_t1 - wait_t0); wait_t0 = wait_t1
+
+                                    master_elapsed = wait_t1 - master_t0
+                                    measuring_time_master += master_elapsed
+                                    note_time(measuring_time_master_per_status, Symbol(config.status), master_elapsed)
+                                    measuring_time_worker += worker_elapsed
+                                end
+                            end
+                        end)
+                    end
+
+                    # Result processing task
+                    errormonitor(@async begin
+                        ## to avoid excessive checkpointing
+                        t_checkpoint = 0
+                        ## for reporting purposes
+                        nfinished = 0
+                        new_configs = similar(all_configs, 0)
+
+                        while true
+                            # process results
+                            if isready(results)
+                                while isready(results)
+                                    worker, i = take!(results)
+                                    config = all_configs[i, :]
+                                    config.found_after = time_spent_for_problem + time() - sweep_start
+                                    push!(new_configs, config)
+                                    nfinished += 1
+
+                                    # Update configuration
+                                    if config.status == "success"
+                                        best_time = min(best_time, config.time)
+                                    end
+                                    @info "Result from worker $worker for $(repr_row(config)): $(config.status) -- $(prettytime(config.time)) (found after $(config.found_after) seconds of sweeping)"
+                                end
+
+                                # save results every minute
+                                if time() - t_checkpoint > checkpoint_interval
+                                    checkpoint()
+                                    t_checkpoint = time()
+                                end
+                            end
+
+                            # update the progress bar
+                            function showvalues()
+                                vals = []
+
+                                current_count = initial_count + nfinished
+
+                                push!(vals, ("problem", "$(problem) [$problem_idx/$(length(problems))]"))
+                                push!(vals, ("sweep for problem started at", Dates.format(sweep_start_date, "yyyy-mm-dd HH:MM:SS")))
+                                push!(vals, ("sweep has been running for", "$((now() - sweep_start_date) / Second(1)) s"))
+                                push!(vals, ("sweeping until at most", Dates.format(sweep_start_date + Second(trunc(time_limits[problem])), "yyyy-mm-dd HH:MM:SS")))
+                                push!(vals, ("current coverage", "$current_count / $total_count ($(round(100 * current_count / total_count; sigdigits=4))%)"))
+                                total_workers = compile_workers + measurement_workers
+                                push!(vals, ("workers", "$(length(workers())) / $(total_workers)"))
+
+                                push!(vals, ("", ""))
+
+                                # configuration times
+                                push!(vals, ("target time", prettytime(target_time)))
+                                if !isinf(best_time)
+                                    perf_percentage = round(100 * target_time / best_time; digits=2)
+                                    push!(vals, ("best time", "$(prettytime(best_time)) ($perf_percentage%)"))
                                 end
 
                                 push!(vals, ("", ""))
-                            end
 
-                            # compilation timings on the worker
-                            compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
-                            header = ("compilation times (worker)", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)")
-                            print_subtimings(header, compilation_times_worker, compilation_time_worker)
+                                # helper functions to print subtimings
+                                function key_sort_order(key)
+                                    order = [
+                                        # worker
+                                        :startup,
+                                        :preparing,
+                                        :warmup,
+                                        :initializing,
+                                        :settling,
+                                        :measuring,
+                                        :copying,
+                                        :verifying,
 
-                            # measurement timings on the worker
-                            measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
-                            header = ("measuring times (worker)", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)")
-                            print_subtimings(header, measurement_times_worker, measuring_time_worker)
+                                        # master
+                                        :wait_for_take_promising_jobs,
+                                        :wait_for_take_initial_jobs,
+                                        :wait_for_worker_startup,
+                                        :wait_for_worker_preparing,
+                                        :wait_for_worker_measuring,
+                                        :wait_for_worker_verify,
+                                        :wait_for_removing_crashed_worker,
+                                        :wait_for_push_results,
+                                        :wait_for_put_promising_jobs,
+                                    ]
 
-                            # compilation timings on the master
-                            header = ("compilation times (master)", "$(prettytime(compilation_time_master)) master total")
-                            print_subtimings(header, compilation_times_master, compilation_time_master)
+                                    idx = findfirst(==(key), order)
 
-                            # measuring timings on the master
-                            header = ("measuring times (master)", "$(prettytime(measuring_time_master)) master total")
-                            print_subtimings(header, measurement_times_master, measuring_time_master)
-
-                            # job state
-                            category_counters = Dict(counter(new_configs[!, "status"]))
-                            for k in keys(initial_category_counters)
-                                if !haskey(category_counters, k)
-                                    category_counters[k] = 0
+                                    if idx === nothing
+                                        return (2, key)
+                                    else
+                                        return (1, idx)
+                                    end
                                 end
+                                function print_subtimings(header::Tuple{String, String}, subtimes::Dict, total_time::Number)
+                                    push!(vals, header)
+
+                                    if !isempty(subtimes)
+                                        for k in sort(collect(keys(subtimes)), by=key_sort_order)
+                                            v = subtimes[k]
+                                            v_rel = round(100 * v / total_time; sigdigits=3)
+                                            push!(vals, (k, "$(prettytime(v)) ($v_rel%)"))
+                                        end
+                                    end
+
+                                    push!(vals, ("", ""))
+                                end
+
+                                # compilation timings on the worker
+                                compilation_time_ratio = round(100 * compilation_time_worker / compilation_time_master; sigdigits=3)
+                                header = ("compilation times (worker)", "$(prettytime(compilation_time_worker)) worker / $(prettytime(compilation_time_master)) master ($compilation_time_ratio%)")
+                                print_subtimings(header, compilation_times_worker, compilation_time_worker)
+
+                                # measurement timings on the worker
+                                measuring_time_ratio = round(100 * measuring_time_worker / measuring_time_master; sigdigits=3)
+                                header = ("measuring times (worker)", "$(prettytime(measuring_time_worker)) worker / $(prettytime(measuring_time_master)) master ($measuring_time_ratio%)")
+                                print_subtimings(header, measurement_times_worker, measuring_time_worker)
+
+                                # compilation timings on the master
+                                header = ("compilation times (master)", "$(prettytime(compilation_time_master)) master total")
+                                print_subtimings(header, compilation_times_master, compilation_time_master)
+
+                                # measuring timings on the master
+                                header = ("measuring times (master)", "$(prettytime(measuring_time_master)) master total")
+                                print_subtimings(header, measurement_times_master, measuring_time_master)
+
+                                # job state
+                                category_counters = Dict(counter(new_configs[!, "status"]))
+                                for k in keys(initial_category_counters)
+                                    if !haskey(category_counters, k)
+                                        category_counters[k] = 0
+                                    end
+                                end
+                                for k in sort(collect(keys(category_counters));
+                                            by=k->category_counters[k])
+                                    initial = get(initial_category_counters, k, 0)
+                                    current = category_counters[k]
+                                    relative = round(100 * (current+initial) / (sum(values(category_counters))+sum(values(initial_category_counters))); sigdigits=3)
+                                    push!(vals, (k, "$(current) + $(initial) ($(relative)%)"))
+                                end
+
+                                push!(vals, ("", ""))
+
+                                # wall time per job (compilation)
+                                header = ("compilation times (master, per config status)", "$(prettytime(compilation_time_master)) master total")
+                                print_subtimings(header, compilation_time_master_per_status, compilation_time_master)
+
+                                # wall time per job (measuring)
+                                header = ("measuring times (master, per config status)", "$(prettytime(measuring_time_master)) master total")
+                                print_subtimings(header, measuring_time_master_per_status, measuring_time_master)
+
+                                # num workers started
+                                push!(vals, ("# of compilation workers started", num_compilation_workers_started))
+                                push!(vals, ("# of measurement workers started", num_measurement_workers_started))
+
+                                push!(vals, ("", ""))
+
+                                # gpu stats
+                                push!(vals, ("power usage", "$(NVML.power_usage(nvml_dev)) W"))
+                                push!(vals, ("temperature", "$(NVML.temperature(nvml_dev)) °C"))
+                                meminfo = NVML.memory_info(nvml_dev)
+                                push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
+                                utilization = NVML.utilization_rates(nvml_dev)
+                                push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
+
+                                vals
                             end
-                            for k in sort(collect(keys(category_counters));
-                                          by=k->category_counters[k])
-                                initial = get(initial_category_counters, k, 0)
-                                current = category_counters[k]
-                                relative = round(100 * (current+initial) / (sum(values(category_counters))+sum(values(initial_category_counters))); sigdigits=3)
-                                push!(vals, (k, "$(current) + $(initial) ($(relative)%)"))
+                            update!(p, nfinished; showvalues, valuecolor=:normal)
+
+                            # see if we need to stop
+                            if istaskdone(job_submitter)
+                                finish!(p)
+                                println(" - tested all configurations")
+                                break
+                            end
+                            if !EXHAUSTIVE && best_time < target_time
+                                finish!(p)
+                                println(" - found a configuration that beats the baseline")
+                                break
+                            end
+                            if (time() - sweep_start) > time_limits[problem]
+                                cancel(p)
+                                println(" - reached time limit")
+                                break
                             end
 
-                            push!(vals, ("", ""))
-
-                            # wall time per job (compilation)
-                            header = ("compilation times (master, per config status)", "$(prettytime(compilation_time_master)) master total")
-                            print_subtimings(header, compilation_time_master_per_status, compilation_time_master)
-
-                            # wall time per job (measuring)
-                            header = ("measuring times (master, per config status)", "$(prettytime(measuring_time_master)) master total")
-                            print_subtimings(header, measuring_time_master_per_status, measuring_time_master)
-
-                            # num workers started
-                            push!(vals, ("# of compilation workers started", num_compilation_workers_started))
-                            push!(vals, ("# of measurement workers started", num_measurement_workers_started))
-
-                            push!(vals, ("", ""))
-
-                            # gpu stats
-                            push!(vals, ("power usage", "$(NVML.power_usage(nvml_dev)) W"))
-                            push!(vals, ("temperature", "$(NVML.temperature(nvml_dev)) °C"))
-                            meminfo = NVML.memory_info(nvml_dev)
-                            push!(vals, ("memory usage", "$(Base.format_bytes(meminfo.used)) / $(Base.format_bytes(meminfo.total))"))
-                            utilization = NVML.utilization_rates(nvml_dev)
-                            push!(vals, ("utilization", "$(round(100*utilization.compute; sigdigits=3))% compute, $(round(100*utilization.memory; sigdigits=3))% memory"))
-
-                            vals
-                        end
-                        update!(p, nfinished; showvalues, valuecolor=:normal)
-
-                        # see if we need to stop
-                        if istaskdone(job_submitter)
-                            finish!(p)
-                            println(" - tested all configurations")
-                            break
-                        end
-                        if !EXHAUSTIVE && best_time < target_time
-                            finish!(p)
-                            println(" - found a configuration that beats the baseline")
-                            break
-                        end
-                        if (time() - sweep_start) > time_limits[problem]
-                            cancel(p)
-                            println(" - reached time limit")
-                            break
+                            sleep(5)
                         end
 
-                        sleep(5)
-                    end
+                        # Clean-up
+                        close(initial_jobs, EOFError())
+                        close(promising_jobs, EOFError())
 
-                    # Clean-up
-                    close(initial_jobs, EOFError())
-                    close(promising_jobs, EOFError())
+                        # Print a summary
+                        new_count = size(new_configs, 1)
+                        perf_percentage = round(100 * target_time / best_time; digits=2)
+                        println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)) ($perf_percentage%), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
+                    end)
+                end
 
-                    # Print a summary
-                    new_count = size(new_configs, 1)
-                    perf_percentage = round(100 * target_time / best_time; digits=2)
-                    println(" - final result: $(prettytime(best_time)) / $(prettytime(target_time)) ($perf_percentage%), after processing $(round(100*(new_count)/total_count; digits=2))% ($(new_count)/$(total_count)) additional configurations")
-                end)
+                checkpoint()
             end
 
-            checkpoint()
-        end
-
-        # Remove workers
-        if workers() != [myid()]
-            for worker in workers()
-                try
-                    rmprocs(worker; waitfor=30)
-                catch err
-                    log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
-                    @error "Failed to stop worker $worker\n$log"
+            # Remove workers
+            if workers() != [myid()]
+                for worker in workers()
+                    try
+                        rmprocs(worker; waitfor=30)
+                    catch err
+                        log = sprint(Base.showerror, err) * sprint(Base.show_backtrace, catch_backtrace())
+                        @error "Failed to stop worker $worker\n$log"
+                    end
                 end
             end
         end
     end
+
+    pprof()
 
 
     #

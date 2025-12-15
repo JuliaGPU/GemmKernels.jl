@@ -94,15 +94,15 @@ if [[ "$DISABLE_SYSTEMD" == "1" ]]; then
 fi
 
 echo "+++ :julia: Instantiating project"
-julia --project -e 'using Pkg; Pkg.develop(path=dirname(@__DIR__)); Pkg.instantiate(); Pkg.precompile()'
+julia +1.12 --project -e 'using Pkg; Pkg.develop(path=dirname(@__DIR__)); Pkg.instantiate(); Pkg.precompile()'
 
 if [[ "$PERPETUAL" == "1" ]]; then
     while true; do
-        julia --project --heap-size-hint=5G tune.jl "$@"
+        julia +1.12 --project --heap-size-hint=5G tune.jl "$@"
 
         echo "Sweep finished at $(date). Restarting sweep after 10 seconds..."
         sleep 10
     done
 else
-    julia --project --heap-size-hint=5G tune.jl "$@"
+    julia +1.12 --project --heap-size-hint=5G tune.jl "$@"
 fi
