@@ -1011,6 +1011,8 @@ function get_pad_time(tc, extents, padded_extents)
     popfirst!(time_measurements)
     popfirst!(thruput_measurements)
 
+    @show minimum(time_measurements)
+
     join(time_measurements, ","), maximum(thruput_measurements)
 end
 
@@ -1051,7 +1053,7 @@ function get_unpad_time(tc, extents, padded_extents)
     join(time_measurements, ","), maximum(thruput_measurements)
 end
 
-write_padding_data = false
+write_padding_data = true
 outfile = open("data-padding.csv", "w")
 write(outfile, "gpu,tc,extents,padded_extents,memory_overhead,pad_times,unpad_times,pad_throughput,unpad_throughput\n")
 
