@@ -266,10 +266,10 @@ function plot_best_configs(all_configs, best_configs)
     # draw geometric mean of speedup factors
     text_margin = 0.25
     hline!([mean_speedup], color=:black, linestyle=:dash)
-    annotate!(p, 12, mean_speedup + text_margin, text(L"\mathrm{GM}_1: %$(round(Int, mean_speedup))\%", 7, rotation=0, :left, :bottom, color=:black))
+    annotate!(p, 9, mean_speedup + text_margin, text(L"\mathrm{GM}_1: %$(round(Int, mean_speedup))\%", 7, rotation=0, :left, :bottom, color=:black))
 
     hline!([mean_speedup_combine], color=:red, linestyle=:dash)
-    annotate!(p, 12, mean_speedup_combine + text_margin, text(L"\mathrm{GM}_2: %$(round(Int, mean_speedup_combine))\%", 7, rotation=0, :left, :bottom, color=:red))
+    annotate!(p, 9, mean_speedup_combine + text_margin, text(L"\mathrm{GM}_2: %$(round(Int, mean_speedup_combine))\%", 7, rotation=0, :left, :bottom, color=:red))
 
     plot!(size=(600, 325)) # default (600, 400)
     savefig(p, joinpath(@__DIR__, "$(name(device())).pdf"))
