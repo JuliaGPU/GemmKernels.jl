@@ -1,7 +1,7 @@
 name = "GemmKernels"
 uuid = "312cec97-f96c-4f55-a63d-8e567f91b59b"
-authors = ["Thomas Faingnaert and contributors"]
 version = "0.2.1"
+authors = ["Thomas Faingnaert and contributors"]
 
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
@@ -10,7 +10,7 @@ LLVMLoopInfo = "8b046642-f1f6-4319-8d3c-209ddc03c586"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [compat]
-CUDA = "3.5, 4, 5"
+CUDA = "3.5, 4, 5, 6"
 LLVM = "3, 4, 5, 6, 7, 8, 9"
 LLVMLoopInfo = "1"
 julia = "1.8"
