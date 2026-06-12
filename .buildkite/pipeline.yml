@@ -9,8 +9,7 @@ steps:
           - JuliaCI/julia-test#v1: ~
           - JuliaCI/julia-coverage#v1: ~
         agents:
-          queue: "juliagpu"
-          cuda: "*"
+          queue: "cuda"
         commands: |
           julia --project -e '
               # make sure the 1.6-era Manifest works on this Julia version
@@ -55,8 +54,8 @@ steps:
   #           println("+++ :julia: Benchmarking")
   #           include("benchmarks/runbenchmarks.jl")'
   #       agents:
-  #         queue: "benchmark"
-  #         cuda: "*"
+  #         queue: "cuda"
+  #         benchmark: "*"
   #         gpu: "rtx4070"
   #       if: build.message !~ /\[skip benchmarks\]/
   #       matrix:
