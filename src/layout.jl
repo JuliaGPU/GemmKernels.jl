@@ -2,6 +2,7 @@ export Layout
 module Layout
 
 using CUDA
+import LLVM # for LLVM.Interop's unsafe_load/unsafe_store! methods on Core.LLVMPtr
 using LLVMLoopInfo: @loopinfo
 using GemmKernels.Tiling
 using GemmKernels: LocalArray, @immutable
