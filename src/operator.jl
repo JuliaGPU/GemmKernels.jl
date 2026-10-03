@@ -296,8 +296,6 @@ for (layout_type, base_layout, wmma_layout_type, convert_index_func) in [
     end
 end
 
-using LLVM
-
 @inline function mma(::Type{WMMAComplexOp{M, N, K, CT, AT}}, a_frag, b_frag, c_frag) where {M, N, K, CT, AT}
     conf = WMMA.Config{M, N, K, AT}
 
