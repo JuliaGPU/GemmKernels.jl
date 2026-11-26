@@ -15,7 +15,7 @@ struct Default end
 
 @inline function (ep::Default)(conf::GemmKernels.Config, d, shmem_d, transform)
     # Constants
-    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape)
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape, conf.matmul_shape)
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1
@@ -53,7 +53,7 @@ end
 
 @inline function (ep::Bias{B})(conf::GemmKernels.Config, d, shmem_d, transform) where {B}
     # Constants
-    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape)
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape, conf.matmul_shape)
 
     warpId = (threadIdx().x - 1) ÷ 32 + 1
     laneId = (threadIdx().x - 1) % 32 + 1

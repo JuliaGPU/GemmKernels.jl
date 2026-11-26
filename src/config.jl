@@ -282,6 +282,7 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
 
     # CTA swizzling function.
     cta_swizzle = get(params, :cta_swizzle, CTASwizzle.Identity)
+    CTASwizzle.is_supported(cta_swizzle, block_shape, gemm_shape) || throw(ConfigError("The CTA swizzling function $(cta_swizzle) does not support a $(gemm_shape) GEMM with a $(block_shape) block shape."))
 
     return Config(
         #= Params =#
