@@ -89,12 +89,21 @@ end
     rows, cols = num_tiles(block_shape, matmul_shape)
     idx = blockIdx.x - 1
 
+    # Divide only by compile-time constants (rows and cols are part of the Config): this
+    # avoids run-time divisions and the divide-by-zero checks that come with them.
+    full_strips = cols ÷ TileSize
+    last_width = max(1, cols - full_strips * TileSize)
+
     strip_idx = idx ÷ (rows * TileSize)
-    width = min(TileSize, cols - strip_idx * TileSize)
     idx_in_strip = idx - strip_idx * rows * TileSize
 
-    block_i = idx_in_strip ÷ width
-    block_j = strip_idx * TileSize + idx_in_strip % width
+    if strip_idx < full_strips
+        block_i = idx_in_strip ÷ TileSize
+        block_j = strip_idx * TileSize + idx_in_strip % TileSize
+    else
+        block_i = idx_in_strip ÷ last_width
+        block_j = strip_idx * TileSize + idx_in_strip % last_width
+    end
 
     block_i * block_shape.M, block_j * block_shape.N
 end
@@ -131,12 +140,20 @@ end
     rows, cols = num_tiles(block_shape, matmul_shape)
     idx = blockIdx.x - 1
 
+    # See HorizontallyTiled: only divide by compile-time constants.
+    full_strips = rows ÷ TileSize
+    last_height = max(1, rows - full_strips * TileSize)
+
     strip_idx = idx ÷ (cols * TileSize)
-    height = min(TileSize, rows - strip_idx * TileSize)
     idx_in_strip = idx - strip_idx * cols * TileSize
 
-    block_i = strip_idx * TileSize + idx_in_strip % height
-    block_j = idx_in_strip ÷ height
+    if strip_idx < full_strips
+        block_i = strip_idx * TileSize + idx_in_strip % TileSize
+        block_j = idx_in_strip ÷ TileSize
+    else
+        block_i = strip_idx * TileSize + idx_in_strip % last_height
+        block_j = idx_in_strip ÷ last_height
+    end
 
     block_i * block_shape.M, block_j * block_shape.N
 end
