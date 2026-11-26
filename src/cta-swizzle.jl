@@ -2,16 +2,36 @@ export CTASwizzle
 module CTASwizzle
 
 # CTA Swizzling functions to improve L2 hit rate.
+#
+# Every swizzling type `S` implements:
+#
+#  - `number_of_blocks(S, block_shape, matmul_shape)`: the grid to launch. This must be
+#    exactly one thread block per output tile: blocks that fall outside of the output
+#    would either access memory out of bounds, or (for layouts that wrap coordinates
+#    around, such as the GETT layouts) silently recompute and re-store another tile.
+#  - `cta_swizzle(S, blockIdx, block_shape, matmul_shape)`: the (M, N) coordinate of the
+#    first element of the output tile that the thread block with index `blockIdx` computes.
+#    This must be a bijection between the blocks in the grid and the output tiles.
+#  - optionally, `is_supported(S, block_shape, matmul_shape)`, if the swizzling function
+#    only works for some problem shapes.
+#
+# Note that CUDA dispatches thread blocks in order of increasing linear block index,
+# with blockIdx().x varying fastest. The tiled swizzles below hence use a 1D grid, so
+# that the traversal order is fully determined by `cta_swizzle`.
+
+@inline num_tiles(block_shape, matmul_shape) =
+    (cld(matmul_shape.M, block_shape.M), cld(matmul_shape.N, block_shape.N))
+
+is_supported(swizzle_type, block_shape, matmul_shape) = true
 
 # Debugging
 function visualise_cta_swizzle(swizzle_type, block_shape = (M = 128, N = 128), matmul_shape = (M = 1024, N = 1024))
-    res = fill("", (cld(matmul_shape.M, block_shape.M),
-                    cld(matmul_shape.N, block_shape.N)))
+    res = fill("", num_tiles(block_shape, matmul_shape))
 
     BX, BY = number_of_blocks(swizzle_type, block_shape, matmul_shape)
 
-    for bx = 1:BX, by = 1:BY
-        block_i, block_j = cta_swizzle(swizzle_type, (x = bx, y = by), block_shape)
+    for by = 1:BY, bx = 1:BX
+        block_i, block_j = cta_swizzle(swizzle_type, (x = bx, y = by), block_shape, matmul_shape)
         res[block_i ÷ block_shape.M + 1, block_j ÷ block_shape.N + 1] = "($bx, $by)"
     end
 
@@ -26,11 +46,10 @@ export Identity
 struct Identity end
 
 @inline function number_of_blocks(::Type{Identity}, block_shape, matmul_shape)
-    (cld(matmul_shape.M, block_shape.M),
-     cld(matmul_shape.N, block_shape.N))
+    num_tiles(block_shape, matmul_shape)
 end
 
-@inline function cta_swizzle(::Type{Identity}, blockIdx, block_shape)
+@inline function cta_swizzle(::Type{Identity}, blockIdx, block_shape, matmul_shape)
     bx = blockIdx.x - 1
     by = blockIdx.y - 1
 
@@ -44,39 +63,38 @@ end
 # Horizontally tiled swizzling
 # ----------------------------
 
-# Example: TileSize = 4:
+# The output tiles are divided into vertical strips that are TileSize tiles wide. The
+# strips are processed from left to right, and every strip is traversed row by row.
+# If the number of tile columns is not a multiple of TileSize, the last strip is narrower.
 #
-# "(1, 1)"   "(2, 1)"   "(3, 1)"   "(4, 1)"  || "(1, 2)"   "(2, 2)"   "(3, 2)"   "(4, 2)"
-# =======================================================================================
-# "(5, 1)"   "(6, 1)"   "(7, 1)"   "(8, 1)"  || "(5, 2)"   "(6, 2)"   "(7, 2)"   "(8, 2)"
-# =======================================================================================
-# "(9, 1)"   "(10, 1)"  "(11, 1)"  "(12, 1)" || "(9, 2)"   "(10, 2)"  "(11, 2)"  "(12, 2)"
-# =======================================================================================
-# "(13, 1)"  "(14, 1)"  "(15, 1)"  "(16, 1)" || "(13, 2)"  "(14, 2)"  "(15, 2)"  "(16, 2)"
-# =======================================================================================
-# "(17, 1)"  "(18, 1)"  "(19, 1)"  "(20, 1)" || "(17, 2)"  "(18, 2)"  "(19, 2)"  "(20, 2)"
-# =======================================================================================
-# "(21, 1)"  "(22, 1)"  "(23, 1)"  "(24, 1)" || "(21, 2)"  "(22, 2)"  "(23, 2)"  "(24, 2)"
-# =======================================================================================
-# "(25, 1)"  "(26, 1)"  "(27, 1)"  "(28, 1)" || "(25, 2)"  "(26, 2)"  "(27, 2)"  "(28, 2)"
-# =======================================================================================
-# "(29, 1)"  "(30, 1)"  "(31, 1)"  "(32, 1)" || "(29, 2)"  "(30, 2)"  "(31, 2)"  "(32, 2)"
+# Example: TileSize = 4, 6 x 6 tiles (numbers indicate the 1D block index):
+#
+#   1   2   3   4 || 25  26
+#   5   6   7   8 || 27  28
+#   9  10  11  12 || 29  30
+#  13  14  15  16 || 31  32
+#  17  18  19  20 || 33  34
+#  21  22  23  24 || 35  36
 
 export HorizontallyTiled
 
 struct HorizontallyTiled{TileSize} end
 
 @inline function number_of_blocks(::Type{HorizontallyTiled{TileSize}}, block_shape, matmul_shape) where {TileSize}
-    (cld(matmul_shape.M * TileSize, block_shape.M),
-     cld(matmul_shape.N, block_shape.N * TileSize))
+    rows, cols = num_tiles(block_shape, matmul_shape)
+    (rows * cols, 1)
 end
 
-@inline function cta_swizzle(::Type{HorizontallyTiled{TileSize}}, blockIdx, block_shape) where {TileSize}
-    bx = blockIdx.x - 1
-    by = blockIdx.y - 1
+@inline function cta_swizzle(::Type{HorizontallyTiled{TileSize}}, blockIdx, block_shape, matmul_shape) where {TileSize}
+    rows, cols = num_tiles(block_shape, matmul_shape)
+    idx = blockIdx.x - 1
 
-    block_i = bx ÷ TileSize
-    block_j = (by * TileSize) + (bx % TileSize)
+    strip_idx = idx ÷ (rows * TileSize)
+    width = min(TileSize, cols - strip_idx * TileSize)
+    idx_in_strip = idx - strip_idx * rows * TileSize
+
+    block_i = idx_in_strip ÷ width
+    block_j = strip_idx * TileSize + idx_in_strip % width
 
     block_i * block_shape.M, block_j * block_shape.N
 end
@@ -85,33 +103,40 @@ end
 # Vertically tiled swizzling
 # --------------------------
 
-# Example: TileSize = 4:
+# The transpose of HorizontallyTiled: the output tiles are divided into horizontal strips
+# that are TileSize tiles high. The strips are processed from top to bottom, and every
+# strip is traversed column by column. If the number of tile rows is not a multiple of
+# TileSize, the last strip is lower.
 #
-# "(1, 1)" || "(1, 5)" || "(1, 9)"  || "(1, 13)" || "(1, 17)" || "(1, 21)" || "(1, 25)" || "(1, 29)"
-# "(1, 2)" || "(1, 6)" || "(1, 10)" || "(1, 14)" || "(1, 18)" || "(1, 22)" || "(1, 26)" || "(1, 30)"
-# "(1, 3)" || "(1, 7)" || "(1, 11)" || "(1, 15)" || "(1, 19)" || "(1, 23)" || "(1, 27)" || "(1, 31)"
-# "(1, 4)" || "(1, 8)" || "(1, 12)" || "(1, 16)" || "(1, 20)" || "(1, 24)" || "(1, 28)" || "(1, 32)"
-# ====================================================================================================
-# "(2, 1)" || "(2, 5)" || "(2, 9)"  || "(2, 13)" || "(2, 17)" || "(2, 21)" || "(2, 25)" || "(2, 29)"
-# "(2, 2)" || "(2, 6)" || "(2, 10)" || "(2, 14)" || "(2, 18)" || "(2, 22)" || "(2, 26)" || "(2, 30)"
-# "(2, 3)" || "(2, 7)" || "(2, 11)" || "(2, 15)" || "(2, 19)" || "(2, 23)" || "(2, 27)" || "(2, 31)"
-# "(2, 4)" || "(2, 8)" || "(2, 12)" || "(2, 16)" || "(2, 20)" || "(2, 24)" || "(2, 28)" || "(2, 32)"
+# Example: TileSize = 4, 6 x 6 tiles (numbers indicate the 1D block index):
+#
+#   1   5   9  13  17  21
+#   2   6  10  14  18  22
+#   3   7  11  15  19  23
+#   4   8  12  16  20  24
+#  =====================
+#  25  27  29  31  33  35
+#  26  28  30  32  34  36
 
 export VerticallyTiled
 
 struct VerticallyTiled{TileSize} end
 
 @inline function number_of_blocks(::Type{VerticallyTiled{TileSize}}, block_shape, matmul_shape) where {TileSize}
-    (cld(matmul_shape.M, block_shape.M * TileSize),
-     cld(matmul_shape.N * TileSize, block_shape.N))
+    rows, cols = num_tiles(block_shape, matmul_shape)
+    (rows * cols, 1)
 end
 
-@inline function cta_swizzle(::Type{VerticallyTiled{TileSize}}, blockIdx, block_shape) where {TileSize}
-    bx = blockIdx.x - 1
-    by = blockIdx.y - 1
+@inline function cta_swizzle(::Type{VerticallyTiled{TileSize}}, blockIdx, block_shape, matmul_shape) where {TileSize}
+    rows, cols = num_tiles(block_shape, matmul_shape)
+    idx = blockIdx.x - 1
 
-    block_i = (bx * TileSize) + (by % TileSize)
-    block_j = by ÷ TileSize
+    strip_idx = idx ÷ (cols * TileSize)
+    height = min(TileSize, rows - strip_idx * TileSize)
+    idx_in_strip = idx - strip_idx * cols * TileSize
+
+    block_i = strip_idx * TileSize + idx_in_strip % height
+    block_j = idx_in_strip ÷ height
 
     block_i * block_shape.M, block_j * block_shape.N
 end
@@ -120,6 +145,8 @@ end
 # Lebesgue space-filling curve
 # ----------------------------
 
+# Only a bijection if the output consists of a square, power-of-two number of tiles.
+#
 # Example:
 # "(1, 1)"   "(3, 1)"   "(9, 1)"   "(11, 1)"  "(33, 1)"  "(35, 1)"  "(41, 1)"  "(43, 1)"
 # "(2, 1)"   "(4, 1)"   "(10, 1)"  "(12, 1)"  "(34, 1)"  "(36, 1)"  "(42, 1)"  "(44, 1)"
@@ -146,11 +173,17 @@ export LebesgueCurve
 
 struct LebesgueCurve end
 
-@inline function number_of_blocks(::Type{LebesgueCurve}, block_shape, matmul_shape)
-    (cld(matmul_shape.M, block_shape.M) * cld(matmul_shape.N, block_shape.N), 1)
+function is_supported(::Type{LebesgueCurve}, block_shape, matmul_shape)
+    rows, cols = num_tiles(block_shape, matmul_shape)
+    rows == cols && ispow2(rows)
 end
 
-@inline function cta_swizzle(::Type{LebesgueCurve}, blockIdx, block_shape)
+@inline function number_of_blocks(::Type{LebesgueCurve}, block_shape, matmul_shape)
+    rows, cols = num_tiles(block_shape, matmul_shape)
+    (rows * cols, 1)
+end
+
+@inline function cta_swizzle(::Type{LebesgueCurve}, blockIdx, block_shape, matmul_shape)
     bx = blockIdx.x - 1
 
     block_i = extract_even_bits(bx)
