@@ -1120,21 +1120,27 @@ function prepare(tc::TensorContraction, a, b, c, d;
     GemmKernels.Tensors.OVERRIDE_perm_K = PERM_K
     GemmKernels.Tensors.OVERRIDE_cta_swizzle = cta_swizzle
 
-    plan = Tensors.ContractionPlan(
-        tc.alpha,
-        padded_a, a_desc, tc.modes[2],
-        padded_b, b_desc, tc.modes[3],
-        tc.beta,
-        padded_c, c_desc, tc.modes[1],
-        padded_d, c_desc, tc.modes[1];
-        operator=Operator.WMMAOp{OP_M, OP_N, OP_K, tc.compute_type, tc.accumulate_type},
-        computeType=tc.compute_type,
-        accumulateType=tc.accumulate_type,
-        blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
-        warpsPerBlock=WARPS_M * WARPS_N,
-        computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
-        kernel = kernel
-    )
+    # The overrides are global state: reset them, so that they do not leak into
+    # contraction plans created later in this process (e.g. by other tests).
+    plan = try
+        Tensors.ContractionPlan(
+            tc.alpha,
+            padded_a, a_desc, tc.modes[2],
+            padded_b, b_desc, tc.modes[3],
+            tc.beta,
+            padded_c, c_desc, tc.modes[1],
+            padded_d, c_desc, tc.modes[1];
+            operator=Operator.WMMAOp{OP_M, OP_N, OP_K, tc.compute_type, tc.accumulate_type},
+            computeType=tc.compute_type,
+            accumulateType=tc.accumulate_type,
+            blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
+            warpsPerBlock=WARPS_M * WARPS_N,
+            computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
+            kernel = kernel
+        )
+    finally
+        GemmKernels.Tensors.OVERRIDE_do_override = false
+    end
 
     (; plan, padded_a, padded_b, padded_c, padded_d, data_d)
 end
