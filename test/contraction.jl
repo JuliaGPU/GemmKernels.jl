@@ -3,6 +3,7 @@ using cuTENSOR
 using GemmKernels.Operator
 using GemmKernels.Tensors
 using JSON
+using LinearAlgebra: LinearAlgebra
 
 # Pad the extents of the tensors such that the M, N, and K dimensions of the equivalent GEMM
 # are multiples of 512, which allows for a broad range of block shapes. Like `pad_extents`
@@ -210,13 +211,23 @@ end
             return Array(d)
         end
 
-        rejected_or_correct(f, reference) =
-            try
-                isapprox(f(), reference; rtol = 1e-2)
+        # Passes if the descriptor is rejected with an ArgumentError, or if the result is
+        # correct. Logs which of the two happened (and the relative error), so that a
+        # negative-control run shows what the code did. The error is computed in Float32,
+        # because norm() of a large Float16 matrix accumulates in Float16 and is inaccurate.
+        function rejected_or_correct(f, reference)
+            result = try
+                f()
             catch err
                 err isa ArgumentError || rethrow()
-                true
+                @info "Descriptor rejected" message = sprint(showerror, err)
+                return true
             end
+            relerr = LinearAlgebra.norm(Array{Float32}(result) - reference) /
+                     LinearAlgebra.norm(reference)
+            @info "Descriptor accepted" relative_error = relerr
+            return relerr < 1e-2
+        end
 
         host(x) = Array{Float32}(Array(x))
         AB(a) = host(a) * host(B)
