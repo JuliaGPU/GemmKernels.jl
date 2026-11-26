@@ -25,12 +25,26 @@ GemmKernels.OVERRIDE_cap[] = CAP
 GemmKernels.OVERRIDE_max_shmem[] = MAX_SHMEM
 
 failures = String[]
+warnings = String[]
 function check(f, label)
     try
         result = f()
         println("  ok      $label", result === nothing ? "" : "  ($result)")
     catch err
         msg = sprint(showerror, err)
+        # Offline, GPUCompiler's exception runtime is not linked, so code that can throw
+        # (e.g. a division by a run-time value) shows up as calls to unknown gpu_*
+        # functions. That compiles on a real system, but is worth knowing about.
+        reasons = [m.captures[1] for m in eachmatch(r"Reason: (.*)", msg)]
+        if isa(err, GPUCompiler.InvalidIRError) && !HAVE_CUDA_RUNTIME && !isempty(reasons) &&
+           all(r -> occursin("(call to gpu_", r), reasons)
+            # the caller of the throwing function (frame [2]), e.g. cta_swizzle rather than div
+            where_ = unique([m.captures[1] * " (" * m.captures[2] * ")"
+                             for m in eachmatch(r"\n\s*\[2\] ([^\n]*)\n\s*@ ([^\n]+)", msg)])
+            println("  ok*     $label  (contains an exception path, at: $(join(where_, "; ")))")
+            push!(warnings, label)
+            return
+        end
         println("  FAILED  $label\n", join(map(l -> "          " * l, first(split(msg, '\n'), 30)), "\n"))
         push!(failures, label)
     end
@@ -208,6 +222,7 @@ let modes = ([1, 2, 3], [2, 4, 1], [4, 3]), extents = [320, 312, 32, 320]
 end
 
 println()
+isempty(warnings) || println("$(length(warnings)) kernel(s) contain exception paths (ok*); these compile, but cost a branch.")
 if isempty(failures)
     println("All checks passed.")
 else
