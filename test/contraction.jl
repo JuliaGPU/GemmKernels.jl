@@ -180,26 +180,56 @@ end
         @test Array(D) ≈ reference
     end
 
-    @testcase "Unsupported descriptors are rejected" begin
-        A = CUDA.rand(Float16, 512, 512)
-        B = CUDA.rand(Float16, 512, 512)
-        C = CUDA.rand(Float16, 512, 512)
-        D = CUDA.rand(Float16, 512, 512)
-        plan(; descA = TensorDescriptor(A), modeC = [1, 2], descC = TensorDescriptor(C)) =
-            Tensors.ContractionPlan(
+    @testcase "Unsupported descriptors are rejected, not computed wrongly" begin
+        # Each case must either be rejected with an ArgumentError, or give the right result:
+        # without the descriptor checks, they run and silently compute something else.
+        # Explicit kernel parameters keep this test independent of the default heuristics.
+        M = N = K = 512
+        A_big = CUDA.rand(Float16, 2M, K)
+        A = CUDA.rand(Float16, M, K)
+        B = CUDA.rand(Float16, K, N)
+        C = CUDA.rand(Float16, M, N)
+        # C large enough that a mistake in how it is read changes D well beyond the tolerance
+        C_transposed = CUDA.rand(Float16, N, M) .* Float16(100)
+        C_float32 = CUDA.rand(Float32, M, N) .* 100f0
+
+        function contract(a, c, modeC, β)
+            d = CUDA.zeros(Float16, M, N)
+            plan = Tensors.ContractionPlan(
                 1,
-                A, descA, [1, 3],
+                a, TensorDescriptor(a), [1, 3],
                 B, TensorDescriptor(B), [3, 2],
-                1,
-                C, descC, modeC,
-                D, TensorDescriptor(D), [1, 2];
-                computeType=Float16, accumulateType=Float32)
+                β,
+                c, TensorDescriptor(c), modeC,
+                d, TensorDescriptor(d), [1, 2];
+                operator = Operator.WMMAOp{16, 16, 16, Float16, Float32},
+                computeType = Float16, accumulateType = Float32,
+                blockShape = (M = 128, N = 128, K = 32), warpsPerBlock = 8,
+                computeWarp = (M = 32, N = 64, K = 16))
+            Tensors.contraction!(plan, 1, a, B, β, c, d)
+            return Array(d)
+        end
 
-        # C must have the same modes and data type as D.
-        @test_throws ArgumentError plan(modeC = [2, 1])
-        @test_throws ArgumentError plan(descC = TensorDescriptor(CUDA.rand(Float32, 512, 512)))
+        rejected_or_correct(f, reference) =
+            try
+                isapprox(f(), reference; rtol = 1e-2)
+            catch err
+                err isa ArgumentError || rethrow()
+                true
+            end
 
-        # Only dense column-major tensors are supported.
-        @test_throws ArgumentError plan(descA = TensorDescriptor(A; stride = [1, 1024]))
+        host(x) = Array{Float32}(Array(x))
+        AB(a) = host(a) * host(B)
+
+        # Only dense column-major tensors are supported: the top half of a taller matrix.
+        A_view = view(A_big, 1:M, :)    # strides (1, 2M)
+        @test rejected_or_correct(() -> contract(A_view, C, [1, 2], 0), AB(A_view))
+
+        # C must have the same modes as D (C is read with D's layout).
+        @test rejected_or_correct(() -> contract(A, C_transposed, [2, 1], 1),
+                                  AB(A) + permutedims(host(C_transposed)))
+
+        # C must have the same data type as D.
+        @test rejected_or_correct(() -> contract(A, C_float32, [1, 2], 1), AB(A) + host(C_float32))
     end
 end
