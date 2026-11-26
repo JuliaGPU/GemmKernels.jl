@@ -4,18 +4,20 @@ using GemmKernels.Operator
 using GemmKernels.Tensors
 using JSON
 
-# Pad the extents of the tensors such that the M, N, and K dimensions are a multiple of 512.
-# This allows for a broad range of possible block shapes in the GEMM.
+# Pad the extents of the tensors such that the M, N, and K dimensions of the equivalent GEMM
+# are multiples of 512, which allows for a broad range of block shapes. Like `pad_extents`
+# in configs/configs.jl, we pick the smallest padding of *all* extents of a dimension whose
+# product is a multiple of 512, rather than padding a single extent to a multiple of 512:
+# for extents of 72, that keeps tensors ~15x smaller (0.4 instead of 10 GiB for TC19-30).
 function pad_extents_512(extents, tensorModes)
     padded_extents = copy(extents)
     for (idx1, idx2) in [(1, 2), (3, 2), (1, 3)]
         intersection = intersect(tensorModes[idx1], tensorModes[idx2])
 
-        if prod(extents[intersection]) % 512 == 0
-            continue
-        end
-
-        padded_extents[intersection[1]] = Int64(ceil(extents[intersection[1]] / 512) * 512)
+        # candidates: each extent rounded up to a multiple of 1, 2, 4, ..., 512
+        candidates = [unique([cld(padded_extents[i], 2^k) * 2^k for k in 0:9]) for i in intersection]
+        best = argmin(prod, Iterators.filter(c -> prod(c) % 512 == 0, Iterators.product(candidates...)))
+        padded_extents[intersection] .= best
     end
     return padded_extents
 end
@@ -48,10 +50,10 @@ function testContraction(extents, tensorModes; α = 1, β = 1, opA = identity, o
     # ------------------------------
 
     # Creating tensors on the GPU with the padded extents.
-    A = CuArray(zeros(dataType, padded_extents[tensorModes[2]]))
-    B = CuArray(zeros(dataType, padded_extents[tensorModes[3]]))
-    C = CuArray(zeros(dataType, padded_extents[tensorModes[1]]))
-    D = CuArray(zeros(dataType, padded_extents[tensorModes[1]]))
+    A = CUDA.zeros(dataType, padded_extents[tensorModes[2]])
+    B = CUDA.zeros(dataType, padded_extents[tensorModes[3]])
+    C = CUDA.zeros(dataType, padded_extents[tensorModes[1]])
+    D = CUDA.zeros(dataType, padded_extents[tensorModes[1]])
 
     # Copying the random tensors to the GPU.
     A[(1:extent for extent in extents[tensorModes[2]])...] = A_host
@@ -77,15 +79,21 @@ function testContraction(extents, tensorModes; α = 1, β = 1, opA = identity, o
     # Copying the result back to the CPU while removing the padding.
     D1 = Array(D[(1:extent for extent in extents[tensorModes[1]])...])
 
+    # Free the padded tensors right away: tests run in parallel on the same GPU.
+    foreach(CUDA.unsafe_free!, (A, B, C, D))
+
     # ------------------------------
     # cuTENSOR implementation.
     # ------------------------------
 
     # cuTENSOR does not need padding, so we directly use the host tensors.
     # The elementwise operations are applied separately.
-    A = opA.(CuArray(A_host))
-    B = opB.(CuArray(B_host))
+    A_unpadded = CuArray(A_host)
+    B_unpadded = CuArray(B_host)
+    A = opA.(A_unpadded)
+    B = opB.(B_unpadded)
     C = CuArray(C_host)
+    foreach(CUDA.unsafe_free!, (A_unpadded, B_unpadded))
 
     # Creating the cuTENSOR contraction plan.
     plan = cuTENSOR.plan_contraction(
@@ -111,6 +119,8 @@ function testContraction(extents, tensorModes; α = 1, β = 1, opA = identity, o
 
     # Copying the result back to the CPU.
     D2 = Array(C)
+    foreach(CUDA.unsafe_free!, (A, B, C))
+    CUDA.reclaim()  # return the memory to the driver, for the other test workers
 
     return all(isapprox.(Array(D1), Array(D2); rtol = sqrt(eps(dataType))))
 end
