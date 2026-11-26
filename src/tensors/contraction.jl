@@ -30,9 +30,11 @@ mutable struct ContractionPlan
             α = desc.computeType(α)
             β = desc.computeType(β)
 
+            # D = α ⋅ opA(A) ⋅ opB(B) + β ⋅ opC(C), as in cuTENSOR: α scales the result of the
+            # elementwise operation, not its input.
             matmulPlan = GemmKernels.plan_matmul(
                 algorithmPlan.gemmConf, a, b, c, d;
-                transform_shared_to_regs_a = Transform.Elementwise(x -> unaryOpA(α * x)),
+                transform_shared_to_regs_a = Transform.Elementwise(x -> α * unaryOpA(x)),
                 transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
                 transform_global_to_shared_c = Transform.Elementwise(x -> β * unaryOpC(x)),
                 transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
@@ -69,10 +71,6 @@ mutable struct ContractionPlan
         return ContractionPlan(desc, α, a, b, β, c, d; algo, operator, kernel,
                                blockShape, warpsPerBlock, computeWarp)
     end
-
-    function ContractionPlan(plan::ContractionPlan, operator)
-        return ContractionPlan(plan.desc; plan.algo, operator)
-    end
 end
 
 export contraction!
@@ -100,7 +98,8 @@ function contraction!(plan::ContractionPlan, α, a, b, β, c, d, opAB, opABC)
     if (opAB == *) && (opABC == +)
         contraction!(plan, α, a, b, β, c, d)
     elseif (opAB == +) && (opABC == max)
-        plan = ContractionPlan(plan, Operator.TropicalFPUOp)
+        plan = ContractionPlan(plan.desc, α, a, b, β, c, d;
+                               plan.algo, operator=Operator.TropicalFPUOp)
         contraction!(plan, α, a, b, β, c, d)
     else
         error("Unsupported operator combination!")
