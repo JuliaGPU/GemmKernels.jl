@@ -37,7 +37,11 @@ Base.@propagate_inbounds @inline function Layout.load(
     ) where {T, divT1, modT1, strides1, divT2, modT2, strides2,
              isLoadOrStoreStrided, strideOverExtent, size}
 
-    NUMEL = 16 ÷ sizeof(T)
+    # Each thread loads/stores exactly the elements of its tile. Note that this can be fewer
+    # than 16 bytes (when a block has few elements per thread), so we must not assume a
+    # fixed 128-bit vector width: that would access memory outside of the tile at an
+    # address that is not 16-byte aligned.
+    NUMEL = size[1] * size[2]
 
     G1 = tile.base[1] + tile.offset[1]
     G2 = tile.base[2] + tile.offset[2]
@@ -71,7 +75,11 @@ Base.@propagate_inbounds @inline function Layout.store!(
     ) where {T, divT1, modT1, strides1, divT2, modT2, strides2,
              isLoadOrStoreStrided, strideOverExtent, size}
 
-    NUMEL = 16 ÷ sizeof(T)
+    # Each thread loads/stores exactly the elements of its tile. Note that this can be fewer
+    # than 16 bytes (when a block has few elements per thread), so we must not assume a
+    # fixed 128-bit vector width: that would access memory outside of the tile at an
+    # address that is not 16-byte aligned.
+    NUMEL = size[1] * size[2]
 
     G1 = tile.base[1] + tile.offset[1]
     G2 = tile.base[2] + tile.offset[2]
