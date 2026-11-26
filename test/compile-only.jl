@@ -104,8 +104,11 @@ function codegen(conf, a, b, c, d; kernel,
     source = GPUCompiler.methodinstance(typeof(kernel), Tuple{map(Core.Typeof, kernel_args)...})
     config = offline_compiler_config(maxthreads = conf.warps_per_block * 32)
     job = GPUCompiler.CompilerJob(source, config)
+    # Without a CUDA installation, libdevice (NVIDIA's math library, linked when kernels
+    # call e.g. __nv_* functions) is unavailable; skip linking it. Type inference and IR
+    # validation happen before that, and the calls stay external declarations in the PTX.
     asm = GPUCompiler.JuliaContext() do ctx
-        first(GPUCompiler.compile(:asm, job))
+        first(GPUCompiler.compile(:asm, job; libraries = HAVE_CUDA_RUNTIME))
     end
     # sanity checks on the generated PTX
     if kernel isa Kernel.MatmulPipelinedAsync
@@ -124,7 +127,7 @@ const KERNELS = [
 ]
 
 println("== GPU code generation for sm_$(CAP.major)$(CAP.minor) (no driver needed",
-        HAVE_CUDA_RUNTIME ? ")" : "; no CUDA runtime found, so the compiler configuration is built manually)")
+        HAVE_CUDA_RUNTIME ? ")" : "; no CUDA runtime found: building the compiler configuration manually, not linking libdevice)")
 
 # Plain FP16 GEMM, all transpose combinations.
 for transpose_a in [false, true], transpose_b in [false, true],
