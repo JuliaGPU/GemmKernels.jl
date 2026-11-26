@@ -127,8 +127,8 @@ for transpose_a in [false, true], transpose_b in [false, true],
             operator = Operator.WMMAOp{16, 16, 16, Float16, Float32},
             is_a_col_major = !transpose_a, is_b_col_major = !transpose_b,
             cta_swizzle = swizzle)
-        a = devarray(Float16, transpose_a ? (K, M) : (M, K)...)
-        b = devarray(Float16, transpose_b ? (N, K) : (K, N)...)
+        a = devarray(Float16, (transpose_a ? (K, M) : (M, K))...)
+        b = devarray(Float16, (transpose_b ? (N, K) : (K, N))...)
         c = devarray(Float32, M, N)
         d = devarray(Float32, M, N)
         codegen(conf, a, b, c, d; kernel)
