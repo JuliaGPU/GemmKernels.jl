@@ -588,4 +588,198 @@ function shmem_size(@nospecialize(conf::GemmKernels.Config), ::typeof(matmul_pip
     max(size_c, 2 * (size_a + size_b), size_d)
 end
 
+# --------------------------------------------------------------------
+# Multi-stage pipelined kernel using asynchronous copies (sm_80+, PROTOTYPE)
+# --------------------------------------------------------------------
+
+# Tiles of A and B are copied from global to shared memory with cp.async, into a ring of
+# `Stages` buffers, so that the copies of the next `Stages - 1` K-tiles overlap with the
+# computation on the current one, without staging the data in registers.
+#
+# Requirements (checked by `check_async_copy` when planning):
+#  - compute capability 8.0 or higher;
+#  - A and B have identical element types in global and shared memory, and every thread
+#    copies a contiguous 4, 8 or 16-byte piece of a tile (so e.g. strided GETT layouts are
+#    not supported);
+#  - the global-to-shared transforms of A and B are the identity (elementwise operations
+#    can be applied when loading from shared memory into registers instead).
+#
+# Use as `kernel = Kernel.matmul_pipelined_async(stages)`.
+
+struct MatmulPipelinedAsync{Stages} end
+
+function matmul_pipelined_async(stages::Integer = 3)
+    2 ≤ stages ≤ 8 || throw(ArgumentError("The number of stages must be between 2 and 8"))
+    return MatmulPipelinedAsync{Int(stages)}()
+end
+
+function (::MatmulPipelinedAsync{STAGES})(conf::GemmKernels.Config, a, b, c, d,
+                                          transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
+                                          transf_sh2rf_a, transf_sh2rf_b, transf_sh2rf_c, transf_rf2sh_d,
+                                          epilogue) where {STAGES}
+    # Calculate the number of fragments needed to fully cover a warp tile
+    num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
+    num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
+
+    # Constants
+    block_i, block_j = CTASwizzle.cta_swizzle(conf.cta_swizzle, blockIdx(), conf.block_shape, conf.matmul_shape)
+
+    warpId = (threadIdx().x - 1) ÷ 32 + 1
+    laneId = (threadIdx().x - 1) % 32 + 1
+
+    gemm_sz = Tile(conf.matmul_shape)
+    block_tile = Tile(conf.block_shape)
+
+    # (1) Cooperatively load a block_shape.M x block_shape.N tile of C from global to shared memory within one threadblock
+    shmem_c = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_c_layout), Layout.physical_size(conf.shared_c_layout, block_tile.MN.size))
+
+    @loopinfo unroll for warp_tile = parallelise(block_tile.MN, Tile(conf.mem_cd_warp), warpId, conf.warps_per_block)
+        @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_cd_thread), laneId, 32)
+            x = @inbounds Layout.load(conf.global_c_layout, c, translate_base(thread_tile, (M = block_i, N = block_j)))
+            x = transf_gl2sh_c(x, thread_tile)
+            @inbounds Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
+        end
+    end
+
+    sync_threads()
+
+    # (2) Load a compute_warp.M x compute_warp.N tile of C from shared memory into registers
+    warp_tile = @inbounds subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
+
+    c_frags = LocalArray{Tuple{num_fragments_m, num_fragments_n}, Operator.fragtype_accum(conf.operator, conf.shared_c_layout)}(undef)
+
+    @loopinfo unroll for i = 1 : num_fragments_m
+        @loopinfo unroll for j = 1 : num_fragments_n
+            tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
+            @inbounds @immutable c_frags[i, j] = transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile)
+        end
+    end
+
+    sync_threads()
+
+    # (3) Compute a block_shape.M x block_shape.N x block_shape.K matrix product within one threadblock,
+    #     using a ring of STAGES shared memory buffers for A and B.
+    shmem_a = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_a_layout), (Layout.physical_size(conf.shared_a_layout, block_tile.MK.size)..., STAGES))
+    shmem_b = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), (Layout.physical_size(conf.shared_b_layout, block_tile.KN.size)..., STAGES),
+                                             length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
+
+    NUM_K_TILES = gemm_sz.size.K ÷ block_tile.size.K
+
+    # Issue the asynchronous copies of K-tile `kt` into stage buffer `stage`.
+    @inline function copy_tile(kt, stage)
+        block_k = kt * block_tile.size.K
+        shmem_a_stage = view(shmem_a, :, :, stage)
+        shmem_b_stage = view(shmem_b, :, :, stage)
+
+        @loopinfo unroll for warp_tile = parallelise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major)
+            @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major)
+                @inbounds Layout.copy_async!(conf.global_a_layout, conf.shared_a_layout, shmem_a_stage, a,
+                                             thread_tile, translate_base(thread_tile, (M = block_i, K = block_k)))
+            end
+        end
+
+        @loopinfo unroll for warp_tile = parallelise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major)
+            @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major)
+                @inbounds Layout.copy_async!(conf.global_b_layout, conf.shared_b_layout, shmem_b_stage, b,
+                                             thread_tile, translate_base(thread_tile, (K = block_k, N = block_j)))
+            end
+        end
+    end
+
+    # Prologue: start copying the first STAGES - 1 K-tiles. We always commit a group, even
+    # an empty one, so that the number of committed groups is the same for every thread
+    # and iteration, which keeps the wait_group arithmetic below simple.
+    @loopinfo unroll for kt = 0 : STAGES - 2
+        if kt < NUM_K_TILES
+            copy_tile(kt, kt + 1)
+        end
+        Layout.cp_async_commit()
+    end
+
+    for kt = 0 : NUM_K_TILES - 1
+        # Before this point, STAGES - 1 + kt groups were committed; K-tile kt is in group kt,
+        # so it has arrived once at most STAGES - 2 groups are still pending. The barrier
+        # makes the copies of all threads visible, and guarantees that every warp is done
+        # computing on K-tile kt - 1, whose buffer we refill below.
+        Layout.cp_async_wait(Val(STAGES - 2))
+        sync_threads()
+
+        kt_next = kt + STAGES - 1
+        if kt_next < NUM_K_TILES
+            copy_tile(kt_next, kt_next % STAGES + 1)
+        end
+        Layout.cp_async_commit()
+
+        stage = kt % STAGES + 1
+        shmem_a_stage = view(shmem_a, :, :, stage)
+        shmem_b_stage = view(shmem_b, :, :, stage)
+
+        # (3.3) Calculate a compute_warp.M x compute_warp.N tile of D, using a compute_warp.M x compute_warp.N x compute_warp.K operation
+        @loopinfo unroll for warp_tile = parallelise(block_tile, Tile(conf.compute_warp), warpId, conf.warps_per_block)
+            # (3.3.1) Load a compute_warp.M x compute_warp.K tile of A from shared memory into registers
+            a_frags = LocalArray{Tuple{num_fragments_m}, Operator.fragtype_a(conf.operator, conf.shared_a_layout)}(undef)
+
+            @loopinfo unroll for i = 1 : num_fragments_m
+                a_tile = translate_offset(warp_tile.MK, (M = (i-1)*conf.compute_op_shape.M, K = 0))
+                @inbounds @immutable a_frags[i] = transf_sh2rf_a(Operator.load_a(conf.operator, conf.shared_a_layout, shmem_a_stage, a_tile), a_tile)
+            end
+
+            # (3.3.2) Load a compute_warp.K x compute_warp.N tile of B from shared memory into registers
+            b_frags = LocalArray{Tuple{num_fragments_n}, Operator.fragtype_b(conf.operator, conf.shared_b_layout)}(undef)
+
+            @loopinfo unroll for j = 1 : num_fragments_n
+                b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*conf.compute_op_shape.N))
+                @inbounds @immutable b_frags[j] = transf_sh2rf_b(Operator.load_b(conf.operator, conf.shared_b_layout, shmem_b_stage, b_tile), b_tile)
+            end
+
+            # (3.3.3) Compute a compute_warp.M x compute_warp.N x compute_warp.K matrix product within one warp
+            @loopinfo unroll for i = 1 : num_fragments_m
+                @loopinfo unroll for j = 1 : num_fragments_n
+                    @inbounds @immutable c_frags[i, j] = Operator.mma(conf.operator, a_frags[i], b_frags[j], c_frags[i, j])
+                end
+            end
+        end
+    end
+
+    # Shared memory for D aliases the A and B buffers: make sure that no copies are still in
+    # flight (only empty groups should remain), and that all warps are done computing.
+    Layout.cp_async_wait_all()
+    sync_threads()
+
+    # (4) Store the compute_warp.M x compute_warp.N tile of D from registers to shared memory
+    shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
+
+    warp_tile = @inbounds subdivide(block_tile.MN, Tile(conf.compute_warp).MN, warpId, conf.warps_per_block)
+
+    @loopinfo unroll for i = 1 : num_fragments_m
+        @loopinfo unroll for j = 1 : num_fragments_n
+            tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
+            @inbounds Operator.store_d(conf.operator, conf.shared_d_layout, shmem_d, transf_rf2sh_d(c_frags[i, j], tile), tile)
+        end
+    end
+
+    sync_threads()
+
+    # (5) Run the epilogue
+    epilogue(conf, d, shmem_d, transf_sh2gl_d)
+
+    return
+end
+
+function shmem_size(@nospecialize(conf::GemmKernels.Config), ::MatmulPipelinedAsync{STAGES}) where {STAGES}
+    size_a = sizeof(Layout.eltype(conf.shared_a_layout)) *
+             prod(Layout.physical_size(conf.shared_a_layout,
+                  (; conf.block_shape.M, conf.block_shape.K)))
+    size_b = sizeof(Layout.eltype(conf.shared_b_layout)) *
+             prod(Layout.physical_size(conf.shared_b_layout,
+                  (; conf.block_shape.K, conf.block_shape.N)))
+    size_c = sizeof(Layout.eltype(conf.shared_c_layout)) *
+             prod(Layout.physical_size(conf.shared_c_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    size_d = sizeof(Layout.eltype(conf.shared_d_layout)) *
+             prod(Layout.physical_size(conf.shared_d_layout,
+                  (; conf.block_shape.M, conf.block_shape.N)))
+    max(size_c, STAGES * (size_a + size_b), size_d)
+end
+
 end
