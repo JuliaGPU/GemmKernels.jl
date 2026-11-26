@@ -74,8 +74,12 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
 
     # compile or load from disk
     compiled = let
-        # generate a unique id/path for the kernel
-        id = hash((conf, typeof(a), typeof(b), typeof(c), typeof(d), args...))
+        # generate a unique id/path for the kernel. this must include everything the
+        # generated code depends on: the kernel function itself (the config does not
+        # contain it), the target device, and the GemmKernels code (module_build_id
+        # changes whenever GemmKernels or one of its dependencies is recompiled).
+        id = hash((Base.module_build_id(GemmKernels), cap, typeof(kernel),
+                   conf, typeof(a), typeof(b), typeof(c), typeof(d), args...))
         tmpdir = get_scratch!(GemmKernels, "matmul_cache")
         path = joinpath(tmpdir, "matmul_$(id).ptx")
 
