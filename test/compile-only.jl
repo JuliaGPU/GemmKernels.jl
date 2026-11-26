@@ -70,6 +70,28 @@ end
 devarray(T, dims...) = CuDeviceArray{T, length(dims), CUDA.AS.Global}(
     reinterpret(Core.LLVMPtr{T, CUDA.AS.Global}, C_NULL), Tuple(dims))
 
+# CUDA.compiler_config asks the CUDA runtime library which PTX ISA versions the toolkit
+# supports, which fails without a CUDA installation (e.g. on macOS: "libcudart not
+# defined"). In that case, build the same configuration ourselves, choosing the PTX ISA
+# from what LLVM supports (PTX 7.8 is needed for sm_89; cp.async needs PTX 7.0).
+const HAVE_CUDA_RUNTIME = try
+    CUDA.runtime_version()
+    true
+catch
+    false
+end
+
+function offline_compiler_config(; maxthreads)
+    HAVE_CUDA_RUNTIME && return CUDA.compiler_config(nothing; cap = CAP, maxthreads)
+
+    llvm_support = CUDA.llvm_compat()
+    ptx = v"7.8" in llvm_support.ptx ? v"7.8" : maximum(llvm_support.ptx)
+    llvm_cap = maximum(filter(<=(CAP), llvm_support.cap))
+    target = GPUCompiler.PTXCompilerTarget(; cap = llvm_cap, ptx, maxthreads)
+    params = CUDA.CUDACompilerParams(; cap = CAP, ptx)
+    return GPUCompiler.CompilerConfig(target, params; kernel = true, name = nothing, always_inline = false)
+end
+
 function codegen(conf, a, b, c, d; kernel,
                  transforms = ntuple(_ -> Transform.Elementwise(), 8), epilogue = Epilogue.Default())
     # the same host-side checks as plan_matmul
@@ -80,7 +102,7 @@ function codegen(conf, a, b, c, d; kernel,
 
     kernel_args = map(cudaconvert, (conf, a, b, c, d, transforms..., epilogue))
     source = GPUCompiler.methodinstance(typeof(kernel), Tuple{map(Core.Typeof, kernel_args)...})
-    config = CUDA.compiler_config(nothing; cap = CAP, maxthreads = conf.warps_per_block * 32)
+    config = offline_compiler_config(maxthreads = conf.warps_per_block * 32)
     job = GPUCompiler.CompilerJob(source, config)
     asm = GPUCompiler.JuliaContext() do ctx
         first(GPUCompiler.compile(:asm, job))
@@ -101,7 +123,8 @@ const KERNELS = [
     "async_4" => Kernel.matmul_pipelined_async(4),
 ]
 
-println("== GPU code generation for sm_$(CAP.major)$(CAP.minor) (no driver needed)")
+println("== GPU code generation for sm_$(CAP.major)$(CAP.minor) (no driver needed",
+        HAVE_CUDA_RUNTIME ? ")" : "; no CUDA runtime found, so the compiler configuration is built manually)")
 
 # Plain FP16 GEMM, all transpose combinations.
 for transpose_a in [false, true], transpose_b in [false, true],
