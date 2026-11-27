@@ -17,8 +17,9 @@
 #     GEMM=4096         size of the square FP16 GEMM (0 to skip)
 #     OUT=compare-async.csv
 #
-# Note: a configuration that crashes the GPU (e.g. an illegal memory access) aborts the
-# whole script; re-run under `compute-sanitizer` to investigate. Make sure the kernel
+# Note: a configuration that fails to compile is recorded and skipped, but one that crashes
+# the GPU (e.g. an illegal memory access) aborts the whole script; re-run under
+# `compute-sanitizer` to investigate. Make sure the kernel
 # cache (~/.julia/scratchspaces/*/matmul_cache) does not contain kernels compiled by
 # older versions of GemmKernels: older versions did not include the kernel in the cache
 # key.
@@ -72,21 +73,30 @@ function measure(f)
 end
 
 function run_config(problem, data, reference, params, is_tc)
+    # Planning and compiling happen on the host, so a failure there doesn't affect the GPU:
+    # record it (like tuning/tune.jl does) and continue with the next configuration.
     args = try
         is_tc ? prepare(problem, data...; params...) : prepare(problem; params...)
     catch err
-        isa(err, GemmKernels.ConfigError) || rethrow()
-        return "config_error", NaN
+        isa(err, GemmKernels.ConfigError) && return "config_error", NaN
+        isa(err, CUDA.InvalidIRError) && return "compilation_error", NaN
+        isa(err, InterruptException) && rethrow()
+        msg = first(split(sprint(showerror, err), '\n'))
+        @warn "Unexpected error while compiling $(params.kernel) for $(repr(params)): $msg"
+        return "unknown_error_during_prepare", NaN
     finally
         GemmKernels.Tensors.OVERRIDE_do_override = false
     end
 
+    # An error while running a kernel (e.g. an illegal address) can leave the GPU unusable,
+    # so that still aborts the script, after printing the configuration.
     is_tc && initialize_data(problem, data...; params...)
     result = try
         Array(execute(problem, data...; args...))
     catch err
-        isa(err, GemmKernels.ConfigError) || rethrow()
-        return "config_error", NaN
+        isa(err, GemmKernels.ConfigError) && return "config_error", NaN
+        @error "Error while running $(params.kernel) for $(repr(params))"
+        rethrow()
     end
     ok = is_tc ? verify(problem, reference, result) :
                  isapprox(result, reference; rtol = sqrt(eps(Float16)))
