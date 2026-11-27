@@ -553,6 +553,10 @@ function matmul_pipelined_ng(conf::GemmKernels.Config, a, b, c, d,
         end
     end
 
+    # Shared memory for D aliases the A and B buffers, from which warps load fragments until
+    # the very last iteration above. Wait until all warps are done before overwriting them.
+    sync_threads()
+
     # (4) Store the compute_warp.M x compute_warp.N tile of D from registers to shared memory
     shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))
 
