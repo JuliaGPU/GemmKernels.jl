@@ -96,6 +96,42 @@ Base.@propagate_inbounds @inline function Layout.store!(
 end
 
 
+# Asynchronous copies (see Layout.copy_async!): only non-strided GETT layouts store the
+# elements of a thread's tile contiguously.
+Layout.contiguous_tiles(
+        ::Union{
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
+        }
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} =
+    isLoadOrStoreStrided == false
+
+Base.@propagate_inbounds @inline function Layout.tile_pointer(
+        ::Union{
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
+        },
+        workspace, tile::Tile
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}
+
+    G1 = tile.base[1] + tile.offset[1]
+    G2 = tile.base[2] + tile.offset[2]
+
+    offset = 1
+
+    @loopinfo unroll for i in eachindex(divT1)
+        stride_offset = (G1 ÷ divT1[i]) % modT1[i]
+        offset += stride_offset * strides1[i]
+    end
+
+    @loopinfo unroll for i in eachindex(divT2)
+        stride_offset = (G2 ÷ divT2[i]) % modT2[i]
+        offset += stride_offset * strides2[i]
+    end
+
+    return pointer(workspace) + (offset - 1) * sizeof(T)
+end
+
 # TODO: Write test. One example given below.
 # precomputeGETTLayoutConstants([16, 512, 32], ([1, 3], [2]))
 # result: ((1, 3), (2,), (1, 16), (1,), (16, 512, 32), (1, 8192), (16,))

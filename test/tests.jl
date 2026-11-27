@@ -12,10 +12,14 @@ t0 = now()
 try
     @testset runner=DistributedTestRunner() "GemmKernels.jl" begin
         include("tiling.jl")
+        include("cta-swizzle.jl")
         include("matmul.jl")
         include("blas.jl")
+        include("async-copy.jl")
         include("examples.jl")
         include("contraction.jl")
+        include("contraction-configs.jl")
+        include("split-k.jl")
     end
 finally
     if myid() == 1
