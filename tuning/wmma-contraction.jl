@@ -53,6 +53,7 @@ function create_configs()
         OP_N=Int[],
         OP_K=Int[],
         kernel_str=String[],
+        SPLIT_K=Int[],
         ## layout
         is_A_col_major=Bool[],
         is_B_col_major=Bool[],
@@ -72,6 +73,20 @@ const TUNE_ASYNC = get(ENV, "GEMMKERNELS_TUNE_ASYNC", "1") != "0" &&
 const KERNEL_STRINGS = vcat(["singlestage", "pipelined", "pipelined_ng"],
                             TUNE_ASYNC ? ["pipelined_async_2", "pipelined_async_3", "pipelined_async_4"] : String[])
 
+# Split-K (several thread blocks per output tile, each computing part of K) only helps when
+# there are too few output tiles to fill the GPU, i.e. for a long K: it is tried for
+# contractions whose K is larger than both M and N (in the TCCG suite: TC13 and TC14), with
+# these numbers of parts (GK_SPLIT_K; "1" disables it). Only singlestage and the async
+# kernels support it; precheck_config rejects the other combinations without a worker.
+const SPLIT_K_VALUES = parse.(Int, split(get(ENV, "GK_SPLIT_K", "1,2,4,8,16"), ','))
+
+function split_k_values(problem)
+    D, A, B = problem.modes
+    extent(modes) = prod(problem.extents[m] for m in modes; init = 1)
+    M, N, K = extent(intersect(D, A)), extent(intersect(D, B)), extent(intersect(A, B))
+    return (K > M && K > N) ? SPLIT_K_VALUES : [1]
+end
+
 function config_iterator(problem)
     param_product = shuffle_product(
         2 .^ (3:9),
@@ -81,6 +96,7 @@ function config_iterator(problem)
         2 .^ (0:3),
         [(16, 16, 16), (8, 32, 16), (32, 8, 16)],
         KERNEL_STRINGS,
+        split_k_values(problem),
 
         [false, true],
         [false, true],
@@ -104,6 +120,7 @@ function config_iterator(problem)
         WARPS_N,
         OP_M, OP_N, OP_K,
         kernel_str,
+        SPLIT_K,
 
         is_A_col_major,
         is_B_col_major,
@@ -115,7 +132,7 @@ function config_iterator(problem)
         cta_swizzle_str
     ) for (
         BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N,
-        (OP_M, OP_N, OP_K), kernel_str, is_A_col_major,
+        (OP_M, OP_N, OP_K), kernel_str, SPLIT_K, is_A_col_major,
         is_B_col_major, is_D_col_major, PERM_M, PERM_N,
         PERM_K, cta_swizzle_str
     ) in param_product)
@@ -133,6 +150,7 @@ end
 # December 2025): no configuration that compiled would have been rejected.
 function precheck_config(config; max_shmem)
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel_str) = config
+    SPLIT_K = hasproperty(config, :SPLIT_K) ? config.SPLIT_K : 1
     warps = WARPS_M * WARPS_N
     rejected = "config_error_during_prepare"
 
@@ -148,6 +166,14 @@ function precheck_config(config; max_shmem)
     (warp_m == 0 || warp_n == 0 || warp_m % OP_M != 0 || warp_n % OP_N != 0) && return rejected
     # plan_matmul: the pipelined kernel needs at least two stages
     (kernel_str == "pipelined" && BLOCK_K < 2 * OP_K) && return rejected
+    # plan_matmul: split-K needs singlestage or an async kernel, and at most one part per K-tile
+    if SPLIT_K != 1
+        kernel_str in ("pipelined", "pipelined_ng") && return rejected
+        modes = [parse.(Int, split(m, '.')) for m in split(config.name, '-')]
+        padded = Configs.pad_extents(config.extents, modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+        k_tiles = prod(padded[intersect(modes[2], modes[3])]) ÷ BLOCK_K
+        (SPLIT_K < 1 || SPLIT_K > k_tiles) && return rejected
+    end
     # plan_matmul: shared memory. A and B are Float16 (padding only adds), D is Float32.
     stages = kernel_str == "pipelined_ng" ? 2 :
              startswith(kernel_str, "pipelined_async_") ? parse(Int, chopprefix(kernel_str, "pipelined_async_")) : 1
@@ -183,7 +209,9 @@ function repr_row(row)
         print(io, "col-major")
     end
     print(io, ", $(row.cta_swizzle_str) swizzle")
-    print(io, ", $(row.kernel_str) kernel)")
+    print(io, ", $(row.kernel_str) kernel")
+    hasproperty(row, :SPLIT_K) && row.SPLIT_K != 1 && print(io, ", split-K $(row.SPLIT_K)")
+    print(io, ")")
 
     return String(take!(io))
 end
@@ -205,9 +233,11 @@ function create_params(row)
     PERM_N = row.PERM_N
     PERM_K = row.PERM_K
     cta_swizzle = cta_swizzle_string_to_function(row.cta_swizzle_str)
+    # configurations from before split-K have no SPLIT_K column
+    SPLIT_K = hasproperty(row, :SPLIT_K) ? row.SPLIT_K : 1
 
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
-       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle)
+       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle, SPLIT_K)
 end
 
 function kernel_string_to_function(str)

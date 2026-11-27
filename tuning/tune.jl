@@ -692,6 +692,12 @@ function main()
                 end
             end
 
+            # configurations from before split-K: add the column, after kernel_str
+            if !("SPLIT_K" in names(all_configs)) && "kernel_str" in names(all_configs)
+                insertcols!(all_configs, findfirst(==("kernel_str"), names(all_configs)) + 1,
+                            :SPLIT_K => ones(Int, nrow(all_configs)))
+            end
+
             @info "Loaded $(size(all_configs, 1)) configurations in $(prettytime(read_time))."
         catch err
             @error "Error while loading configurations from disk: $(sprint(Base.showerror, err)))"
