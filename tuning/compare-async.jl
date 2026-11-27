@@ -62,12 +62,15 @@ swizzle_type(str) = startswith(str, "horizontal-") ?
     CTASwizzle.HorizontallyTiled{parse(Int, chopprefix(str, "horizontal-"))} :
     CTASwizzle.VerticallyTiled{parse(Int, chopprefix(str, "vertical-"))}
 
-# time the kernels launched by `f`, using the CUDA profiler like tuning/tune.jl does
+# Time `f` with CUDA events. execute() launches a single kernel, so this is the kernel time
+# plus a few microseconds of launch latency, the same for every kernel variant. We don't use
+# CUDA.@profile like tuning/tune.jl: in our runs (with a CUDA.jl newer than 5.9.2), every kernel compiled in
+# the same process after a profiled run failed with "AssertionError: haskey(compiled,
+# job.source)" (tune.jl compiles in separate worker processes).
 function measure(f)
     f(); synchronize()  # warm-up
     times = map(1:RUNS) do _
-        prof = CUDA.@profile concurrent=false f()
-        device_time(prof)
+        CUDA.@elapsed f()
     end
     minimum(times)
 end
