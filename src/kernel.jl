@@ -493,8 +493,12 @@ function matmul_pipelined_ng(conf::GemmKernels.Config, a, b, c, d,
             warp_k_next = warp_mma_k_next * conf.compute_op_shape.K
             warp_tile_next = translate_offset(warp_tile_mn, (M = 0, N = 0, K = warp_k_next))
 
+            # Stage buffers alternate strictly between iterations of the main loop. Select
+            # them with main_loop_it + 1, not with main_loop_it_next: the latter wraps around
+            # to 0 in the last iteration, which for an odd number of iterations selects the
+            # buffer of the previous iteration, while other warps may still be reading it.
             main_loop_it_next_warp_k = if warp_mma_k_next == 0
-                main_loop_it_next
+                main_loop_it + 1
             else
                 main_loop_it
             end
@@ -504,14 +508,14 @@ function matmul_pipelined_ng(conf::GemmKernels.Config, a, b, c, d,
                 @loopinfo unroll for (i, warp_tile) = enumerate(parallelise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major))
                     @loopinfo unroll for (j, thread_tile) = enumerate(parallelise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major))
                         x = transf_gl2sh_a(@inbounds(a_fragment[i, j]), thread_tile)
-                        @inbounds Layout.store!(conf.shared_a_layout, view(shmem_a, :, :, main_loop_it_next % 2 + 1), x, thread_tile)
+                        @inbounds Layout.store!(conf.shared_a_layout, view(shmem_a, :, :, (main_loop_it + 1) % 2 + 1), x, thread_tile)
                     end
                 end
 
                 @loopinfo unroll for (i, warp_tile) = enumerate(parallelise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major))
                     @loopinfo unroll for (j, thread_tile) = enumerate(parallelise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major))
                         x = transf_gl2sh_b(@inbounds(b_fragment[i, j]), thread_tile)
-                        @inbounds Layout.store!(conf.shared_b_layout, view(shmem_b, :, :, main_loop_it_next % 2 + 1), x, thread_tile)
+                        @inbounds Layout.store!(conf.shared_b_layout, view(shmem_b, :, :, (main_loop_it + 1) % 2 + 1), x, thread_tile)
                     end
                 end
 
@@ -552,6 +556,10 @@ function matmul_pipelined_ng(conf::GemmKernels.Config, a, b, c, d,
             end
         end
     end
+
+    # Shared memory for D aliases the A and B buffers, from which warps load fragments until
+    # the very last iteration above. Wait until all warps are done before overwriting them.
+    sync_threads()
 
     # (4) Store the compute_warp.M x compute_warp.N tile of D from registers to shared memory
     shmem_d = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_d_layout), Layout.physical_size(conf.shared_d_layout, block_tile.MN.size))

@@ -16,6 +16,7 @@ try
         include("blas.jl")
         include("examples.jl")
         include("contraction.jl")
+        include("pipelined-ng-stages.jl")
     end
 finally
     if myid() == 1
