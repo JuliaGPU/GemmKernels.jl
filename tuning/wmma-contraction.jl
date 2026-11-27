@@ -58,11 +58,12 @@ function create_configs()
     )
 end
 
-# The asynchronous-copy kernels (sm_80+) are a prototype; include them in the sweep with
-# GEMMKERNELS_TUNE_ASYNC=1.
+# All kernels the GPU supports: the asynchronous-copy kernels need sm_80 or later. Exclude
+# them with GEMMKERNELS_TUNE_ASYNC=0 (e.g. to reproduce sweeps that didn't have them).
+const TUNE_ASYNC = get(ENV, "GEMMKERNELS_TUNE_ASYNC", "1") != "0" &&
+                   CUDA.functional() && CUDA.capability(device()) >= v"8.0"
 const KERNEL_STRINGS = vcat(["singlestage", "pipelined", "pipelined_ng"],
-                            get(ENV, "GEMMKERNELS_TUNE_ASYNC", "0") == "1" ?
-                                ["pipelined_async_2", "pipelined_async_3", "pipelined_async_4"] : String[])
+                            TUNE_ASYNC ? ["pipelined_async_2", "pipelined_async_3", "pipelined_async_4"] : String[])
 
 function config_iterator(problem)
     param_product = shuffle_product(
