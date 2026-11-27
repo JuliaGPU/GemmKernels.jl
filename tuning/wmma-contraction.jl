@@ -145,7 +145,9 @@ end
 # shared memory, with a lower bound of the kernels' `shmem_size`), for the parameters that
 # `prepare(::TensorContraction)` passes. Configurations with more than 32 accumulator fragments
 # per warp fail to compile (an `InvalidIRError`: updating a tuple of more than 32 elements
-# allocates). Returns the status to record, or `nothing` to compile the configuration.
+# allocates). A split-K configuration whose split equals that of a smaller number of parts in
+# the search space is a "duplicate". Returns the status to record, or `nothing` to compile the
+# configuration.
 # Checked against the outcomes in four sweeps (November 2026 trial, February 2026,
 # December 2025): no configuration that compiled would have been rejected.
 function precheck_config(config; max_shmem)
@@ -173,6 +175,12 @@ function precheck_config(config; max_shmem)
         padded = Configs.pad_extents(config.extents, modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
         k_tiles = prod(padded[intersect(modes[2], modes[3])]) ÷ BLOCK_K
         (SPLIT_K < 1 || SPLIT_K > k_tiles) && return rejected
+        # each part computes cld(k_tiles, SPLIT_K) K-tiles, and the parts beyond K are empty:
+        # when a smaller number of parts in the search space gives the same split, only that
+        # one is worth measuring
+        per_part = cld(k_tiles, SPLIT_K)
+        any(s -> 1 <= s < SPLIT_K && cld(k_tiles, s) == per_part, SPLIT_K_VALUES) &&
+            return "duplicate"
     end
     # plan_matmul: shared memory. A and B are Float16 (padding only adds), D is Float32.
     stages = kernel_str == "pipelined_ng" ? 2 :

@@ -23,6 +23,8 @@ println("  of which recorded as config_error_during_prepare: $(count(rejected .&
 wrong = rejected .& .!in.(status, Ref(["config_error_during_prepare", "pending"]))
 println("  of which recorded otherwise (must be 0): $(count(wrong))")
 count(wrong) > 0 && show(stdout, MIME("text/plain"), first(df[wrong, :], 10)); println()
+duplicate = verdict .== "duplicate"
+println("split-K duplicates of a smaller number of parts: $(count(duplicate))")
 println("predicted compilation errors: $(count(predicted_compile_error))")
 wrong_ce = predicted_compile_error .& .!in.(status, Ref(["compilation_error", "config_error_during_prepare", "pending"]))
 println("  of which compiled after all (must be 0): $(count(wrong_ce))")
