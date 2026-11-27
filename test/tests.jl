@@ -16,6 +16,7 @@ try
         include("blas.jl")
         include("examples.jl")
         include("contraction.jl")
+        include("baseline.jl")
     end
 finally
     if myid() == 1
