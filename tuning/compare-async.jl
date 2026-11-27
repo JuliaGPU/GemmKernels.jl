@@ -27,6 +27,10 @@ using CUDA, GemmKernels, JSON, Random, Printf, DataFrames
 using Base.Iterators: product
 using Combinatorics: permutations
 
+# Total time of the kernels in a CUDA.@profile result. Older CUDA.jl versions return the
+# device events as a DataFrame, newer ones as a NamedTuple of columns; DataFrame() takes both.
+device_time(prof) = (events = DataFrame(prof.device); sum(events.stop .- events.start))
+
 include(joinpath(@__DIR__, "..", "configs", "configs.jl"))
 
 const SAMPLES = parse(Int, get(ENV, "SAMPLES", "60"))
@@ -62,7 +66,7 @@ function measure(f)
     f(); synchronize()  # warm-up
     times = map(1:RUNS) do _
         prof = CUDA.@profile concurrent=false f()
-        sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        device_time(prof)
     end
     minimum(times)
 end

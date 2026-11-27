@@ -5,6 +5,10 @@ using DataFrames
 using Printf
 using Statistics
 
+# Total time of the kernels in a CUDA.@profile result. Older CUDA.jl versions return the
+# device events as a DataFrame, newer ones as a NamedTuple of columns; DataFrame() takes both.
+device_time(prof) = (events = DataFrame(prof.device); sum(events.stop .- events.start))
+
 const BENCHMARK_SAMPLES = 10
 
 isinteractive() || include("wmma-contraction.jl")
@@ -34,7 +38,7 @@ function benchmark_cutensor(problem; elementwise_op)
 
     for i in 1:BENCHMARK_SAMPLES
         prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args..., elementwise_op)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        cur_time = device_time(prof)
         push!(times, cur_time)
     end
 
@@ -54,7 +58,7 @@ function benchmark_gemmkernels(problem, config; elementwise_op)
 
     for i in 1:BENCHMARK_SAMPLES
         prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        cur_time = device_time(prof)
         push!(times, cur_time)
     end
 
