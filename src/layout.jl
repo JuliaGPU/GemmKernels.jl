@@ -243,6 +243,12 @@ end
 
 abstract type UnsafeAlignedRowMajor{T} <: LayoutBase{T} end
 
+# load, store! and tile_pointer address the workspace with reversed (N, M) coordinates, so
+# its first physical dimension is N. Without this method, the LayoutBase fallback returns
+# (M, N), and a row-major shared array with M > N is addressed past its end (and rows
+# overlap when M < N).
+@inline physical_size(::Type{<:UnsafeAlignedRowMajor{T}}, logical_size::NamedTuple) where {T} = (logical_size[2], logical_size[1])
+
 @inline physical_size(::Type{<:Padded{UnsafeAlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
 @inline fragtype(::Type{<:UnsafeAlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], VecElement{T}}
