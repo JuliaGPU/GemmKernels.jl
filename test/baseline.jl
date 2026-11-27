@@ -15,8 +15,11 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
                                           accumulate_type = Float32, zero_c = true)
         a, b, c, d = allocate_data(problem)
         extents(t) = problem.extents[problem.modes[t]]
-        A = Float16.(randn(extents(2)...))   # negative values, so that Leaky ReLU matters
-        B = Float16.(randn(extents(3)...))
+        # A ≥ 0 and B ≤ 0 make every element of D negative, so that each of the three
+        # Leaky ReLUs changes the result (with random signs, D is almost entirely positive
+        # and a missing Leaky ReLU on D goes unnoticed).
+        A = Float16.(abs.(randn(extents(2)...)))
+        B = Float16.(-abs.(randn(extents(3)...)))
         # the baseline uses the first prod(extents) elements of each buffer as the tensor
         fill_start!(buffer, x) = copyto!(buffer, vcat(vec(x), zeros(eltype(buffer), length(buffer) - length(x))))
         fill_start!(a, A)
@@ -29,6 +32,7 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
 
         leaky_relu(x) = x > 0 ? x : 0.01f0 * x
         reference = leaky_relu.(Float32(problem.alpha) .* (leaky_relu.(Float32.(A)) * leaky_relu.(Float32.(B))))
+        @test all(<(0), reference)
         @test isapprox(D, reference; rtol = 1e-2)
     end
 end
