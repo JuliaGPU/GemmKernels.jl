@@ -90,6 +90,16 @@ const SWEEP_TIME_LIMIT = 24*3600
 # The time limit for each single step (preparation, measurement, verification), in seconds.
 const CONFIG_TIME_LIMIT = 60
 
+# The time limit for compiling a configuration on a compilation worker, in seconds. Higher than
+# CONFIG_TIME_LIMIT: with many workers compiling at the same time, a compilation can take over
+# a minute (a time-out restarts the worker and records the configuration as crashed).
+const COMPILE_TIME_LIMIT = 180
+
+# The number of compilation workers: at most this many (default: half the CPU threads, as
+# compilations share the CPU, and the single measurement worker limits the throughput anyway),
+# and further limited by memory and by the number of configurations to try.
+const MAX_COMPILE_WORKERS = parse(Int, get(ENV, "GK_COMPILE_WORKERS", string(max(1, Sys.CPU_THREADS ÷ 2))))
+
 # Retry configurations with these categories.
 const RETRY_STATUSSES = ["oom", "crashed_during_compile", "crashed_during_measure"]
 
@@ -821,7 +831,7 @@ function main()
                 cpu_mem_limit = 2500*2^20   # compilation headroom
 
                 max_workers_cpu_mem = floor(Int, problem_cpu_memory_available / cpu_mem_limit)
-                max_workers_cpu_threads = Sys.CPU_THREADS
+                max_workers_cpu_threads = MAX_COMPILE_WORKERS
                 max_workers_njobs = njobs+1
 
                 max_workers = min(
@@ -832,7 +842,7 @@ function main()
 
                 println(" - max # of compilation workers: $max_workers")
                 println("   limit determined by CPU memory: $max_workers_cpu_mem")
-                println("   limit determined by #CPU threads: $max_workers_cpu_threads")
+                println("   limit determined by #CPU threads (GK_COMPILE_WORKERS): $max_workers_cpu_threads")
                 println("   limit determined by #jobs: $max_workers_njobs")
 
                 max_workers, (X) -> begin
@@ -940,7 +950,7 @@ function main()
                             status = try
                                 # prepare
                                 preparing, status = @something(
-                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
+                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true; timeout=COMPILE_TIME_LIMIT),
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)
