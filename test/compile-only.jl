@@ -4,14 +4,19 @@
 #  2. GPU code generation for every kernel (including Kernel.matmul_pipelined_async) on a
 #     plain GEMM and on a tensor contraction: type inference + LLVM + PTX generation, which
 #     catches most errors in kernel code (InvalidIRError: dynamic dispatch, type
-#     instabilities, undefined functions, ...). It stops before ptxas, so it neither needs a
-#     driver nor the CUDA toolkit, and it does not run anything.
+#     instabilities, undefined functions, ...). It needs neither a driver nor the CUDA
+#     toolkit, and it does not run anything;
+#  3. optionally (PTXAS=/path/to/ptxas, from a CUDA toolkit), assembling that PTX into
+#     machine code for the target GPU, which reports per kernel the registers, shared
+#     memory and register spills that ptxas needs. Still no GPU or driver needed, so this
+#     also checks targets you don't have, e.g. CAP=8.0 (A100) or CAP=8.6 (RTX 30x0, A10).
 #
 # Usage, from the repository root:
 #
 #     julia --project test/compile-only.jl
 #
-# Environment variables: CAP=8.9 (target compute capability), QUICK=1 (fewer cases).
+# Environment variables: CAP=8.9 (target compute capability), QUICK=1 (fewer cases),
+# PTXAS=path to ptxas (assemble the generated PTX for sm_CAP).
 
 using CUDA, GemmKernels
 using GemmKernels: Layout, Operator, Kernel, CTASwizzle, Transform, Epilogue, Tensors
@@ -19,7 +24,10 @@ const GPUCompiler = CUDA.GPUCompiler
 
 const CAP = VersionNumber(get(ENV, "CAP", "8.9"))
 const QUICK = get(ENV, "QUICK", "0") == "1"
-const MAX_SHMEM = 101376   # sm_86/sm_89 opt-in limit
+const PTXAS = get(ENV, "PTXAS", "")
+# opt-in shared memory per block, by compute capability
+const MAX_SHMEM = CAP == v"8.0" ? 166912 : CAP == v"8.7" ? 166912 : CAP >= v"9.0" ? 232448 :
+                  CAP >= v"8.6" ? 101376 : CAP == v"7.5" ? 65536 : 98304
 
 GemmKernels.OVERRIDE_cap[] = CAP
 GemmKernels.OVERRIDE_max_shmem[] = MAX_SHMEM
@@ -128,7 +136,32 @@ function codegen(conf, a, b, c, d; kernel,
     if kernel isa Kernel.MatmulPipelinedAsync
         occursin("cp.async", asm) || error("no cp.async instructions in the generated PTX")
     end
-    return "$(count(==('\n'), asm)) lines of PTX, $(shmem) bytes of shared memory"
+    summary = "$(count(==('\n'), asm)) lines of PTX, $(shmem) bytes of dynamic shared memory"
+    isempty(PTXAS) && return summary
+    return summary * ", " * assemble(asm)
+end
+
+# Assemble PTX into machine code with ptxas, as relocatable code (-c: the exception
+# variables are resolved when CUDA.jl links the kernel), and report what ptxas -v prints.
+function assemble(asm)
+    mktempdir() do dir
+        ptx = joinpath(dir, "kernel.ptx")
+        write(ptx, asm)
+        out = IOBuffer()
+        cmd = `$PTXAS -c -v -arch=sm_$(CAP.major)$(CAP.minor) -o $(joinpath(dir, "kernel.o")) $ptx`
+        ok = success(pipeline(ignorestatus(cmd); stdout = out, stderr = out))
+        log = String(take!(out))
+        ok || error("ptxas failed:\n" * log)
+        # with -c, ptxas also reports on non-kernel functions; use the kernel's section
+        i = findfirst("Compiling entry function", log)
+        i === nothing || (log = log[first(i):end])
+        regs = match(r"Used (\d+) registers", log)
+        spills = match(r"(\d+) bytes spill stores, (\d+) bytes spill loads", log)
+        smem = match(r"(\d+) bytes smem", log)
+        "sm_$(CAP.major)$(CAP.minor): $(regs === nothing ? "?" : regs[1]) registers" *
+            (spills === nothing ? "" : ", spills $(spills[1])/$(spills[2]) bytes stored/loaded") *
+            (smem === nothing ? "" : ", $(smem[1]) bytes static shared memory")
+    end
 end
 
 const KERNELS = [
@@ -142,6 +175,7 @@ const KERNELS = [
 
 println("== GPU code generation for sm_$(CAP.major)$(CAP.minor) (no driver needed",
         HAVE_CUDA_RUNTIME ? ")" : "; no CUDA runtime found: building the compiler configuration manually, not linking libdevice)")
+isempty(PTXAS) || println("   assembling with $PTXAS (", last(split(readchomp(`$PTXAS --version`), '\n')), ")")
 
 # Plain FP16 GEMM, all transpose combinations.
 for transpose_a in [false, true], transpose_b in [false, true],
