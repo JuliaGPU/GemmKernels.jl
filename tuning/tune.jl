@@ -749,6 +749,9 @@ function main()
         time_limits[problem] = SWEEP_TIME_LIMIT * weights[problem] / total_weight
     end
 
+    # For precheck_config: the shared memory a kernel can use on this GPU.
+    max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
+
     # Get rid of the CUDA context on the master process
     # NOTE: don't use CUDA API's after this point!
     CUDA.device_reset!()
@@ -876,7 +879,15 @@ function main()
                             # only process new configurations
                             if !in(hash_config(config), seen_configs)
                                 push!(all_configs, (config..., "pending", Inf, -Inf))
-                                put!(initial_jobs, size(all_configs, 1))
+                                i = size(all_configs, 1)
+                                # reject what is certain to fail here, without a worker
+                                prechecked = precheck_config(config; max_shmem)
+                                if prechecked === nothing
+                                    put!(initial_jobs, i)
+                                else
+                                    all_configs[i, :status] = prechecked
+                                    push!(results, ("master (pre-check)", i))
+                                end
                             end
                         catch err
                             isa(err, EOFError) || rethrow()

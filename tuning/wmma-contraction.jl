@@ -121,6 +121,45 @@ function config_iterator(problem)
     ) in param_product)
 end
 
+# Reject configurations that GemmKernels is certain to reject, without sending them to a
+# compilation worker, where each costs over a second (setting up types and a plan). Every rule
+# implies an error that the worker would raise: the ConfigErrors of `get_config` (block shape,
+# operator shape, elements per thread, warp tile) and of `plan_matmul` (pipelined stages,
+# shared memory, with a lower bound of the kernels' `shmem_size`), for the parameters that
+# `prepare(::TensorContraction)` passes. Configurations with more than 32 accumulator fragments
+# per warp fail to compile (an `InvalidIRError`: updating a tuple of more than 32 elements
+# allocates). Returns the status to record, or `nothing` to compile the configuration.
+# Checked against the outcomes in four sweeps (November 2026 trial, February 2026,
+# December 2025): no configuration that compiled would have been rejected.
+function precheck_config(config; max_shmem)
+    (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel_str) = config
+    warps = WARPS_M * WARPS_N
+    rejected = "config_error_during_prepare"
+
+    # get_config: the block shape is too small
+    (BLOCK_M * BLOCK_K < 128 || BLOCK_K * BLOCK_N < 128 || BLOCK_K < 8) && return rejected
+    # get_config: mismatch between the block shape and the operator shape
+    (BLOCK_M < 2 * OP_M || BLOCK_N < 2 * OP_N || BLOCK_K < OP_K) && return rejected
+    # get_config: at least one element per thread for copying A, B and C
+    (BLOCK_M * BLOCK_K < 32 * warps || BLOCK_K * BLOCK_N < 32 * warps ||
+     BLOCK_M * BLOCK_N < 32 * warps) && return rejected
+    # get_config: the warp tile (BLOCK ÷ WARPS) must be a multiple of the operator shape
+    warp_m, warp_n = BLOCK_M ÷ WARPS_M, BLOCK_N ÷ WARPS_N
+    (warp_m == 0 || warp_n == 0 || warp_m % OP_M != 0 || warp_n % OP_N != 0) && return rejected
+    # plan_matmul: the pipelined kernel needs at least two stages
+    (kernel_str == "pipelined" && BLOCK_K < 2 * OP_K) && return rejected
+    # plan_matmul: shared memory. A and B are Float16 (padding only adds), D is Float32.
+    stages = kernel_str == "pipelined_ng" ? 2 :
+             startswith(kernel_str, "pipelined_async_") ? parse(Int, chopprefix(kernel_str, "pipelined_async_")) : 1
+    shmem_lower_bound = max(4 * BLOCK_M * BLOCK_N, stages * 2 * (BLOCK_M * BLOCK_K + BLOCK_K * BLOCK_N))
+    shmem_lower_bound > max_shmem && return rejected
+
+    # more than 32 accumulator fragments per warp do not compile
+    (warp_m ÷ OP_M) * (warp_n ÷ OP_N) > 32 && return "compilation_error"
+
+    return nothing
+end
+
 function select_configs(configs, problem)
     filter([:name, :extents] => (name, extents) -> name == problem.name && (length(extents) == length(problem.extents)) && all(extents .== problem.extents), configs; view=true)
 end
