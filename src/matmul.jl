@@ -25,6 +25,27 @@ end
 OVERRIDE_max_shmem = Ref{Any}(nothing)
 OVERRIDE_cap = Ref{Any}(nothing)
 
+is_identity_transform(::Transform.Elementwise{typeof(identity)}) = true
+is_identity_transform(_) = false
+
+# Throws a ConfigError if `kernel` cannot be used with this configuration.
+check_kernel(@nospecialize(conf::Config), kernel, cap, transforms) = nothing
+
+function check_kernel(@nospecialize(conf::Config), ::Kernel.MatmulPipelinedAsync, cap, transforms)
+    cap ≥ v"8.0" ||
+        throw(ConfigError("Asynchronous copies need compute capability 8.0 or higher, but the device has $cap"))
+    # An operand that can't be copied asynchronously is copied through registers instead
+    # (see Kernel.copies_async), but if neither can, the kernel has nothing to overlap.
+    async_a = Kernel.copies_async(conf.global_a_layout, conf.shared_a_layout, conf.mem_a_thread, transforms.global_to_shared_a)
+    async_b = Kernel.copies_async(conf.global_b_layout, conf.shared_b_layout, conf.mem_b_thread, transforms.global_to_shared_b)
+    async_a || async_b ||
+        throw(ConfigError("Neither A nor B can be copied asynchronously (A from $(conf.global_a_layout) in tiles of $(conf.mem_a_thread), B from $(conf.global_b_layout) in tiles of $(conf.mem_b_thread), or a global-to-shared transform)"))
+    # Diagonal layouts rely on the other kernels skipping K-tiles (Layout.threadblock_condition).
+    conf.global_a_layout <: Layout.Diagonal &&
+        throw(ConfigError("The asynchronous-copy kernel does not support Diagonal layouts"))
+    return
+end
+
 function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
                      transform_global_to_shared_a = Transform.Elementwise(),
                      transform_global_to_shared_b = Transform.Elementwise(),
@@ -51,6 +72,10 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
         conf.block_shape.K ≥ 2 * conf.compute_op_shape.K || throw(ConfigError("Need at least two stages to use a pipelined kernel, i.e. BLOCK_K ≥ 2 * OPERATOR_K"))
     end
 
+    cap = @something OVERRIDE_cap[] CUDA.capability(device())
+    check_kernel(conf, kernel, cap, (; global_to_shared_a = transform_global_to_shared_a,
+                                       global_to_shared_b = transform_global_to_shared_b))
+
     args = [transform_global_to_shared_a, transform_global_to_shared_b,
             transform_global_to_shared_c, transform_shared_to_global_d,
             transform_shared_to_regs_a, transform_shared_to_regs_b,
@@ -68,7 +93,6 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
     tt = Tuple{map(Core.Typeof, kernel_args)...}
     source = CUDA.GPUCompiler.methodinstance(F, tt)
     #config = CUDA.compiler_config(device())
-    cap = @something OVERRIDE_cap[] CUDA.capability(device())
     config = CUDA.compiler_config(nothing; cap, maxthreads=threads)
     job = CUDA.GPUCompiler.CompilerJob(source, config)
 
