@@ -292,10 +292,36 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
     )
 end
 
+is_packed_colmajor(desc::TensorDescriptor) =
+    desc.stride == cumprod([1; desc.extent[1:end-1]])
+
+# Reject contractions the GETT kernels would silently compute incorrectly.
+function check_gett_support(desc::ContractionDescriptor, β)
+    # The GETT layouts compute addresses from the extents only, assuming a dense
+    # column-major tensor.
+    for (name, tdesc) in (("A", desc.descA), ("B", desc.descB), ("C", desc.descC), ("D", desc.descD))
+        is_packed_colmajor(tdesc) ||
+            throw(ArgumentError("GETT contractions only support dense column-major tensors, but $name has extents $(tdesc.extent) and strides $(tdesc.stride)."))
+    end
+
+    # C is loaded using the layout of D (as in cuTENSOR, C and D must have identical
+    # modes, extents and data types).
+    if !iszero(β)
+        desc.modeC == desc.modeD ||
+            throw(ArgumentError("The modes of C ($(desc.modeC)) and D ($(desc.modeD)) must be identical."))
+        desc.descC.extent == desc.descD.extent ||
+            throw(ArgumentError("The extents of C ($(desc.descC.extent)) and D ($(desc.descD.extent)) must be identical."))
+        desc.descC.dataType == desc.descD.dataType ||
+            throw(ArgumentError("The data types of C ($(desc.descC.dataType)) and D ($(desc.descD.dataType)) must be identical."))
+    end
+end
+
 export setUpGETTKernel
 function setUpGETTKernel(desc::ContractionDescriptor, operator,
                          blockShape, warpsPerBlock, computeWarp,
                          α, β)
+    check_gett_support(desc, β)
+
     (
         gemmShape,
         TensorLayoutA, isColMajorA,
@@ -340,13 +366,16 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
                             Layout.UnsafeAlignedRowMajor{desc.accumulateType}
                         end
 
-    # TODO: conditionally use blockShape and other things.
-    gemmConf = GemmKernels.get_config(
-        gemm_shape = gemmShape,
-        block_shape = blockShape,
-        warps_per_block = warpsPerBlock,
+    # Only pass the parameters the user specified, so that get_config() falls back to its
+    # heuristics for the others (passing `nothing` would override those defaults).
+    user_params = (; block_shape = blockShape, warps_per_block = warpsPerBlock,
+                     compute_warp = computeWarp)
+    user_params = NamedTuple(k => v for (k, v) in pairs(user_params) if v !== nothing)
 
-        compute_warp = computeWarp,
+    gemmConf = GemmKernels.get_config(;
+        user_params...,
+
+        gemm_shape = gemmShape,
 
         operator = operator,
 
