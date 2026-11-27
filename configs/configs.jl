@@ -887,8 +887,10 @@ function execute_baseline(tc::TensorContraction, a, b, c, d; plan, elementwise_o
             # Leaky ReLU
             leaky_relu(x) = (x > 0) ? x : convert(typeof(x), 0.01) * x
 
-            a = leaky_relu.(a)
-            b = leaky_relu.(b)
+            # Apply the unfused elementwise operations in-place (assuming the inputs
+            # may be overwritten), and to the output buffer itself.
+            a .= leaky_relu.(a)
+            b .= leaky_relu.(b)
 
             cuTENSOR.contract!(
                 tc.alpha,
@@ -901,7 +903,7 @@ function execute_baseline(tc::TensorContraction, a, b, c, d; plan, elementwise_o
                 plan
             )
 
-            d = leaky_relu.(d)
+            d .= leaky_relu.(d)
         else
             @error "Unknown elementwise operation for cuTENSOR baseline."
         end
