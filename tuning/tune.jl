@@ -316,6 +316,15 @@ function measure_config(problem, config, max_time)
             @error "Unknown error\n$log"
             return "unknown_error_during_measure", Float64[], nothing, ()
         end
+
+        # compile every other GPU kernel this function launches *before* the first
+        # CUDA.@profile below. With CUDA.jl 5.11 / GPUCompiler 1.17, compiling a new kernel
+        # after CUDA.@profile within the same call fails with
+        # `AssertionError: haskey(compiled, job.source)`; in the tuner this hit the RNG
+        # kernels of `initialize_data` on the padded views, for the first configuration
+        # that passed the `slow` check. Running them here puts them in the compile cache.
+        initialize_data(problem, data...; params...)
+        adapt(Array, execute(problem, data...; args...))
         synchronize()
     end
 
