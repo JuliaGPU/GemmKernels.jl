@@ -19,6 +19,9 @@ mutable struct MatmulPlan
 
     const kernel
     const args
+
+    # with split-K: the workspace and the counters, allocated when the plan is first executed
+    workspace
 end
 
 # cache some device properties so that we can plan without a context
@@ -56,9 +59,25 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
                      transform_shared_to_regs_c = Transform.Elementwise(),
                      transform_regs_to_shared_d = Transform.Elementwise(),
                      epilogue = Epilogue.Default(),
-                     kernel = Kernel.matmul_singlestage)
+                     kernel = Kernel.matmul_singlestage,
+                     split_k::Integer = 1)
     threads = conf.warps_per_block * 32
     blocks = CTASwizzle.number_of_blocks(conf.cta_swizzle, conf.block_shape, conf.matmul_shape)
+
+    # Split-K: split_k thread blocks per output tile (blockIdx().z), each computing part of
+    # the K dimension, reduced by the split-K epilogue (see Epilogue.SplitK).
+    if split_k != 1
+        k_tiles = conf.matmul_shape.K ÷ conf.block_shape.K
+        1 ≤ split_k ≤ k_tiles ||
+            throw(ConfigError("split_k must be between 1 and the number of K-tiles ($k_tiles), but is $split_k"))
+        kernel isa typeof(Kernel.matmul_singlestage) || kernel isa Kernel.MatmulPipelinedAsync ||
+            throw(ConfigError("Split-K is only supported by matmul_singlestage and matmul_pipelined_async, not $kernel"))
+        # every part stores its partial sum to shared memory through this transform
+        is_identity_transform(transform_regs_to_shared_d) ||
+            throw(ConfigError("Split-K needs the identity as transform_regs_to_shared_d"))
+        epilogue = Epilogue.SplitK{Int(split_k), Layout.eltype(conf.shared_d_layout)}(epilogue)
+        blocks = ((blocks isa Integer ? (blocks, 1) : Tuple(blocks))..., Int(split_k))
+    end
 
     shmem = Kernel.shmem_size(conf, kernel)
     #max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
@@ -113,7 +132,7 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
         end
     end
 
-    return MatmulPlan(conf, job, compiled, nothing, threads, blocks, shmem, kernel, args)
+    return MatmulPlan(conf, job, compiled, nothing, threads, blocks, shmem, kernel, args, nothing)
 end
 
 function matmul(plan::MatmulPlan, a, b, c, d)
@@ -137,7 +156,25 @@ function matmul(plan::MatmulPlan, a, b, c, d)
         plan.linked = hostkernel
     end
 
-    plan.linked(plan.conf, a, b, c, d, plan.args...; plan.threads, plan.blocks, plan.shmem)
+    args = plan.args
+    epilogue = last(args)
+    if epilogue isa Epilogue.SplitK
+        # allocate the workspace (one partial tile per part and output tile, as laid out in
+        # shared memory) and the counters (zero, and reset to zero by every launch) once
+        if plan.workspace === nothing
+            conf = plan.conf
+            tiles = cld(conf.matmul_shape.M, conf.block_shape.M) * cld(conf.matmul_shape.N, conf.block_shape.N)
+            tile_size = prod(Layout.physical_size(conf.shared_d_layout,
+                                                  (; M = conf.block_shape.M, N = conf.block_shape.N)))
+            T = Layout.eltype(conf.shared_d_layout)
+            plan.workspace = (CuArray{T}(undef, Epilogue.split_count(epilogue) * tiles * tile_size),
+                              CUDA.zeros(Int32, tiles))
+        end
+        workspace, counters = plan.workspace
+        args = (args[1:end-1]..., typeof(epilogue)(pointer(workspace), pointer(counters), epilogue.inner))
+    end
+
+    plan.linked(plan.conf, a, b, c, d, args...; plan.threads, plan.blocks, plan.shmem)
 end
 
 function matmul(@nospecialize(conf::Config), a, b, c, d; kwargs...)

@@ -7,6 +7,26 @@ using GemmKernels.Tiling
 using GemmKernels: LocalArray, @immutable, CTASwizzle
 using LLVMLoopInfo: @loopinfo
 
+# The K range [k_begin, k_end) of the product that this thread block computes: all of it, or
+# with split-K (Epilogue.SplitK, blockIdx().z selects the part), an equal number of K-tiles
+# per part, with fewer (possibly none) in the last parts. Without split-K this folds to the
+# constant range (0, K), so those kernels are unchanged.
+@inline function k_range(conf, epilogue)
+    parts = Epilogue.split_count(epilogue)
+    parts == 1 && return 0, conf.matmul_shape.K
+    k_tiles = conf.matmul_shape.K ÷ conf.block_shape.K
+    per_part = cld(k_tiles, parts)
+    part = Int(blockIdx().z) - 1
+    return min(part * per_part, k_tiles) * conf.block_shape.K,
+           min((part + 1) * per_part, k_tiles) * conf.block_shape.K
+end
+
+# With split-K, only the first part adds C: the other parts start from zero.
+@inline function c_for_this_part(frag, tile, epilogue)
+    Epilogue.split_count(epilogue) == 1 && return frag
+    return blockIdx().z == 1 ? frag : Transform.Elementwise(zero)(frag, tile)
+end
+
 function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
                             transf_gl2sh_a, transf_gl2sh_b, transf_gl2sh_c, transf_sh2gl_d,
                             transf_sh2rf_a, transf_sh2rf_b, transf_sh2rf_c, transf_rf2sh_d,
@@ -45,7 +65,7 @@ function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
     @loopinfo unroll for i = 1 : num_fragments_m
         @loopinfo unroll for j = 1 : num_fragments_n
             tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
-            @inbounds @immutable c_frags[i, j] = transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile)
+            @inbounds @immutable c_frags[i, j] = c_for_this_part(transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile), tile, epilogue)
         end
     end
 
@@ -56,7 +76,8 @@ function matmul_singlestage(conf::GemmKernels.Config, a, b, c, d,
     shmem_b = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size),
                                   length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
-    @loopinfo unroll for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
+    k_begin, k_end = k_range(conf, epilogue)
+    @loopinfo unroll for block_k = k_begin : block_tile.size.K : k_end - 1
         if Layout.threadblock_condition(conf.global_a_layout, conf.global_b_layout, block_i, block_j, block_k, block_tile)
             # (3.1) Cooperatively load a block_shape.M x block_shape.K tile of A from global to shared memory within one threadblock
             @loopinfo unroll for warp_tile = parallelise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major)
@@ -670,7 +691,7 @@ function (::MatmulPipelinedAsync{STAGES})(conf::GemmKernels.Config, a, b, c, d,
     @loopinfo unroll for i = 1 : num_fragments_m
         @loopinfo unroll for j = 1 : num_fragments_n
             tile = translate_offset(warp_tile, (M = (i-1)*conf.compute_op_shape.M, N = (j-1)*conf.compute_op_shape.N))
-            @inbounds @immutable c_frags[i, j] = transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile)
+            @inbounds @immutable c_frags[i, j] = c_for_this_part(transf_sh2rf_c(Operator.load_c(conf.operator, conf.shared_c_layout, shmem_c, tile), tile), tile, epilogue)
         end
     end
 
@@ -682,13 +703,16 @@ function (::MatmulPipelinedAsync{STAGES})(conf::GemmKernels.Config, a, b, c, d,
     shmem_b = @inbounds CuDynamicSharedArray(Layout.eltype(conf.shared_b_layout), (Layout.physical_size(conf.shared_b_layout, block_tile.KN.size)..., STAGES),
                                              length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
-    NUM_K_TILES = gemm_sz.size.K ÷ block_tile.size.K
+    # the K-tiles of this block: all of them, or with split-K, those of its part
+    k_begin, k_end = k_range(conf, epilogue)
+    FIRST_K_TILE = k_begin ÷ block_tile.size.K
+    NUM_K_TILES = (k_end - k_begin) ÷ block_tile.size.K
 
     # Copy K-tile `kt` into stage buffer `stage`: asynchronously, or through registers. The
     # buffer was last read in iteration kt - STAGES, before the barrier that precedes this
     # call, and is next read after at least one more barrier, so plain stores are safe too.
     @inline function copy_tile(kt, stage)
-        block_k = kt * block_tile.size.K
+        block_k = (FIRST_K_TILE + kt) * block_tile.size.K
         shmem_a_stage = view(shmem_a, :, :, stage)
         shmem_b_stage = view(shmem_b, :, :, stage)
 

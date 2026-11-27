@@ -19,6 +19,7 @@ try
         include("examples.jl")
         include("contraction.jl")
         include("contraction-configs.jl")
+        include("split-k.jl")
     end
 finally
     if myid() == 1
