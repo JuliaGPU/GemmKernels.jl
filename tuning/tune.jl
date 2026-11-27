@@ -649,6 +649,22 @@ function main()
         Arrow.write("configs.arrow", df)
         mv(old_config_path, "$(old_config_path).old")
     end
+    ## results of earlier runs become stale when GemmKernels changes: e.g. a configuration
+    ## that failed because of a since-fixed bug would never be tried again. Remember the
+    ## code version (the module build id changes whenever GemmKernels or a dependency is
+    ## recompiled), and start a new sweep when it differs, unless GK_KEEP_CONFIGS=1.
+    code_version = string(Base.module_build_id(GemmKernels))
+    version_path = "$(config_path).version"
+    if isfile(config_path) && get(ENV, "GK_KEEP_CONFIGS", "0") != "1" &&
+       (!isfile(version_path) || readchomp(version_path) != code_version)
+        stale_path = "$(config_path).stale-$(Dates.format(now(), "yyyymmddHHMM"))"
+        @warn "$config_path was produced by another version of GemmKernels; moving it to $stale_path and starting a new sweep (set GK_KEEP_CONFIGS=1 to keep it)"
+        mv(config_path, stale_path)
+        # the best configurations benchmarked for the plots came from those results too
+        best_path = joinpath(@__DIR__, "best-configs.bin")
+        isfile(best_path) && mv(best_path, "$(best_path).stale-$(Dates.format(now(), "yyyymmddHHMM"))")
+    end
+    write(version_path, code_version)
     ## load the new format
     all_configs = create_configs()
     if isfile(config_path)
