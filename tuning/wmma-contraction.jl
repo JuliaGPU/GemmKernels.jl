@@ -74,17 +74,18 @@ const KERNEL_STRINGS = vcat(["singlestage", "pipelined", "pipelined_ng"],
                             TUNE_ASYNC ? ["pipelined_async_2", "pipelined_async_3", "pipelined_async_4"] : String[])
 
 # Split-K (several thread blocks per output tile, each computing part of K) only helps when
-# there are too few output tiles to fill the GPU, i.e. for a long K: it is tried for
-# contractions whose K is larger than both M and N (in the TCCG suite: TC13 and TC14), with
-# these numbers of parts (GK_SPLIT_K; "1" disables it). Only singlestage and the async
-# kernels support it; precheck_config rejects the other combinations without a worker.
+# there are too few output tiles to fill the GPU and K is long enough to divide: it is tried for
+# contractions with fewer than 256 output tiles of 128 × 128 (under two waves on a GPU with
+# 108-142 SMs) and K of at least 1024 (in the TCCG suite: TC13, TC14 and TC19), with these
+# numbers of parts (GK_SPLIT_K; "1" disables it). Only singlestage and the async kernels
+# support it; precheck_config rejects the other combinations without a worker.
 const SPLIT_K_VALUES = parse.(Int, split(get(ENV, "GK_SPLIT_K", "1,2,4,8,16"), ','))
 
 function split_k_values(problem)
     D, A, B = problem.modes
     extent(modes) = prod(problem.extents[m] for m in modes; init = 1)
     M, N, K = extent(intersect(D, A)), extent(intersect(D, B)), extent(intersect(A, B))
-    return (K > M && K > N) ? SPLIT_K_VALUES : [1]
+    return (cld(M, 128) * cld(N, 128) < 256 && K >= 1024) ? SPLIT_K_VALUES : [1]
 end
 
 function config_iterator(problem)
