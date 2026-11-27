@@ -21,9 +21,16 @@ const jsonData = JSON.parse(read(fp, String))
 
 include("../configs/configs.jl")
 
+# GK_PROBLEMS selects contractions by their number in the TCCG suite (1-48, the order of
+# test/benchmark-suite.json), e.g. GK_PROBLEMS=13,14,20; unset or empty means all of them.
 function generate_problems()
+    selection = strip(get(ENV, "GK_PROBLEMS", ""))
+    selected = isempty(selection) ? collect(eachindex(jsonData)) :
+                                    [parse(Int, strip(i)) for i in split(selection, ',')]
+    all(in(eachindex(jsonData)), selected) ||
+        error("GK_PROBLEMS=$selection: contraction numbers must be between 1 and $(length(jsonData))")
     problems = []
-    for el in jsonData
+    for el in jsonData[selected]
         push!(problems, WMMATensorContraction(; name=el["parseableName"], extents=el["extents"],
                                                 data_type, compute_type, accumulate_type, zero_c))
     end

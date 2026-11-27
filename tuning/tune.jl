@@ -641,6 +641,9 @@ function main()
     @assert (TARGET_PERF_FILE === "") || isfile(TARGET_PERF_FILE)
     if TARGET_PERF_FILE !== ""
         println("! Using reference times from old run instead of cuTENSOR times as baseline.")
+        # the reference times are stored per contraction number, for all of them
+        isempty(strip(get(ENV, "GK_PROBLEMS", ""))) ||
+            error("GK_TARGET_PERFS cannot be combined with GK_PROBLEMS")
 
         best_configs_reference = open(TARGET_PERF_FILE) do io
             deserialize(io)
