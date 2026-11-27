@@ -21,6 +21,50 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
         @test !Layout.can_copy_async(Layout.ColMajor{Float16}, F16_padded, (M = 8, K = 1))
     end
 
+    # check_kernel runs when planning, on the host: the async kernels must reject GPUs
+    # without cp.async and transforms they cannot apply, and other kernels must not.
+    @testcase "Rejections" begin
+        problem = WMMAMatrixMultiplication(; M = 512, N = 256, K = 1024, AB_type = Float16, CD_type = Float32,
+                                             transpose_a = false, transpose_b = false, zero_c = false)
+        (; config) = prepare(problem; BLOCK_M = 128, BLOCK_N = 64, BLOCK_K = 32, WARPS_M = 2, WARPS_N = 2,
+                                      OP_M = 16, OP_N = 16, OP_K = 16, zero_c = false,
+                                      kernel = Kernel.matmul_pipelined_async(3))
+        async = Kernel.matmul_pipelined_async(3)
+        identity_transforms = (; global_to_shared_a = Transform.Elementwise(), global_to_shared_b = Transform.Elementwise())
+        double_a = (; global_to_shared_a = Transform.Elementwise(x -> 2x), global_to_shared_b = Transform.Elementwise())
+        double_b = (; global_to_shared_a = Transform.Elementwise(), global_to_shared_b = Transform.Elementwise(x -> 2x))
+
+        @test GemmKernels.check_kernel(config, async, v"8.0", identity_transforms) === nothing
+        @test GemmKernels.check_kernel(config, async, v"8.9", identity_transforms) === nothing
+        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"7.5", identity_transforms)
+        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"7.0", identity_transforms)
+        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"8.9", double_a)
+        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"8.9", double_b)
+        for kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined, Kernel.matmul_pipelined_ng]
+            @test GemmKernels.check_kernel(config, kernel, v"7.0", double_a) === nothing
+        end
+    end
+
+    # plan_matmul must apply those checks, with the capability of the device it targets.
+    if CUDA.functional()
+        @testcase "Planning for a pre-Ampere GPU" begin
+            problem = WMMAMatrixMultiplication(; M = 512, N = 256, K = 1024, AB_type = Float16, CD_type = Float32,
+                                                 transpose_a = false, transpose_b = false, zero_c = false)
+            a, b, c, d = allocate_data(problem)
+            (; config) = prepare(problem; BLOCK_M = 128, BLOCK_N = 64, BLOCK_K = 32, WARPS_M = 2, WARPS_N = 2,
+                                          OP_M = 16, OP_N = 16, OP_K = 16, zero_c = false,
+                                          kernel = Kernel.matmul_pipelined_async(3))
+            old_cap = GemmKernels.OVERRIDE_cap[]
+            try
+                GemmKernels.OVERRIDE_cap[] = v"7.5"
+                @test_throws GemmKernels.ConfigError GemmKernels.plan_matmul(config, a, b, c, d;
+                                                                             kernel = Kernel.matmul_pipelined_async(3))
+            finally
+                GemmKernels.OVERRIDE_cap[] = old_cap
+            end
+        end
+    end
+
     if CUDA.functional() && capability(device()) ≥ v"8.0"
         @testcase "GEMM $(transpose_a ? 'T' : 'N')$(transpose_b ? 'T' : 'N'), $(stages) stages, K = $(K)" for
                 transpose_a in [false, true], transpose_b in [false, true], stages in [2, 3, 4], K in [32, 1024]
