@@ -34,12 +34,15 @@ check_kernel(@nospecialize(conf::Config), kernel, cap, transforms) = nothing
 function check_kernel(@nospecialize(conf::Config), ::Kernel.MatmulPipelinedAsync, cap, transforms)
     cap ≥ v"8.0" ||
         throw(ConfigError("Asynchronous copies need compute capability 8.0 or higher, but the device has $cap"))
-    Layout.can_copy_async(conf.global_a_layout, conf.shared_a_layout, conf.mem_a_thread) ||
-        throw(ConfigError("A cannot be copied asynchronously from $(conf.global_a_layout) to $(conf.shared_a_layout) in tiles of $(conf.mem_a_thread)"))
-    Layout.can_copy_async(conf.global_b_layout, conf.shared_b_layout, conf.mem_b_thread) ||
-        throw(ConfigError("B cannot be copied asynchronously from $(conf.global_b_layout) to $(conf.shared_b_layout) in tiles of $(conf.mem_b_thread)"))
-    is_identity_transform(transforms.global_to_shared_a) && is_identity_transform(transforms.global_to_shared_b) ||
-        throw(ConfigError("Asynchronous copies do not support global-to-shared transforms of A or B"))
+    # An operand that can't be copied asynchronously is copied through registers instead
+    # (see Kernel.copies_async), but if neither can, the kernel has nothing to overlap.
+    async_a = Kernel.copies_async(conf.global_a_layout, conf.shared_a_layout, conf.mem_a_thread, transforms.global_to_shared_a)
+    async_b = Kernel.copies_async(conf.global_b_layout, conf.shared_b_layout, conf.mem_b_thread, transforms.global_to_shared_b)
+    async_a || async_b ||
+        throw(ConfigError("Neither A nor B can be copied asynchronously (A from $(conf.global_a_layout) in tiles of $(conf.mem_a_thread), B from $(conf.global_b_layout) in tiles of $(conf.mem_b_thread), or a global-to-shared transform)"))
+    # Diagonal layouts rely on the other kernels skipping K-tiles (Layout.threadblock_condition).
+    conf.global_a_layout <: Layout.Diagonal &&
+        throw(ConfigError("The asynchronous-copy kernel does not support Diagonal layouts"))
     return
 end
 

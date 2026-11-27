@@ -592,21 +592,40 @@ end
 # Multi-stage pipelined kernel using asynchronous copies (sm_80+, PROTOTYPE)
 # --------------------------------------------------------------------
 
-# Tiles of A and B are copied from global to shared memory with cp.async, into a ring of
-# `Stages` buffers, so that the copies of the next `Stages - 1` K-tiles overlap with the
-# computation on the current one, without staging the data in registers.
+# Tiles of A and B are copied from global to shared memory into a ring of `Stages` buffers,
+# so that the copies of the next `Stages - 1` K-tiles overlap with the computation on the
+# current one. An operand is copied with cp.async, without staging it in registers, when
+#  - its element type is the same in global and shared memory,
+#  - every thread copies a contiguous 4, 8 or 16-byte piece of a tile (so not e.g. a strided
+#    GETT layout), and
+#  - its global-to-shared transform is the identity.
+# Otherwise it is copied through registers, like in the other kernels, into the same ring
+# of buffers; then only the other operand's copies overlap with the computation.
 #
-# Requirements (checked by `check_async_copy` when planning):
-#  - compute capability 8.0 or higher;
-#  - A and B have identical element types in global and shared memory, and every thread
-#    copies a contiguous 4, 8 or 16-byte piece of a tile (so e.g. strided GETT layouts are
-#    not supported);
-#  - the global-to-shared transforms of A and B are the identity (elementwise operations
-#    can be applied when loading from shared memory into registers instead).
+# Requirements (checked by `check_kernel` when planning): compute capability 8.0 or higher,
+# at least one of A and B copied with cp.async, and no Diagonal layout.
 #
 # Use as `kernel = Kernel.matmul_pipelined_async(stages)`.
 
 struct MatmulPipelinedAsync{Stages} end
+
+# Whether the async kernel copies an operand with cp.async (true) or through registers.
+# All arguments are compile-time constants (Config fields are type parameters), so the
+# kernel selects the copy method below by dispatching on Val(copies_async(...)).
+@inline copies_async(global_layout, shared_layout, thread_tile_size, transform) =
+    Layout.can_copy_async(global_layout, shared_layout, thread_tile_size) &&
+    GemmKernels.is_identity_transform(transform)
+
+@inline Base.@propagate_inbounds copy_operand!(::Val{true}, global_layout, shared_layout, shared_workspace,
+                                               global_workspace, transform, shared_tile, global_tile) =
+    Layout.copy_async!(global_layout, shared_layout, shared_workspace, global_workspace, shared_tile, global_tile)
+
+@inline Base.@propagate_inbounds function copy_operand!(::Val{false}, global_layout, shared_layout, shared_workspace,
+                                                        global_workspace, transform, shared_tile, global_tile)
+    x = Layout.load(global_layout, global_workspace, global_tile)
+    x = transform(x, shared_tile)
+    Layout.store!(shared_layout, shared_workspace, x, shared_tile)
+end
 
 function matmul_pipelined_async(stages::Integer = 3)
     2 ≤ stages ≤ 8 || throw(ArgumentError("The number of stages must be between 2 and 8"))
@@ -665,7 +684,9 @@ function (::MatmulPipelinedAsync{STAGES})(conf::GemmKernels.Config, a, b, c, d,
 
     NUM_K_TILES = gemm_sz.size.K ÷ block_tile.size.K
 
-    # Issue the asynchronous copies of K-tile `kt` into stage buffer `stage`.
+    # Copy K-tile `kt` into stage buffer `stage`: asynchronously, or through registers. The
+    # buffer was last read in iteration kt - STAGES, before the barrier that precedes this
+    # call, and is next read after at least one more barrier, so plain stores are safe too.
     @inline function copy_tile(kt, stage)
         block_k = kt * block_tile.size.K
         shmem_a_stage = view(shmem_a, :, :, stage)
@@ -673,15 +694,17 @@ function (::MatmulPipelinedAsync{STAGES})(conf::GemmKernels.Config, a, b, c, d,
 
         @loopinfo unroll for warp_tile = parallelise(block_tile.MK, Tile(conf.mem_a_warp), warpId, conf.warps_per_block, conf.is_a_col_major)
             @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_a_thread), laneId, 32, conf.is_a_col_major)
-                @inbounds Layout.copy_async!(conf.global_a_layout, conf.shared_a_layout, shmem_a_stage, a,
-                                             thread_tile, translate_base(thread_tile, (M = block_i, K = block_k)))
+                @inbounds copy_operand!(Val(copies_async(conf.global_a_layout, conf.shared_a_layout, conf.mem_a_thread, transf_gl2sh_a)),
+                                        conf.global_a_layout, conf.shared_a_layout, shmem_a_stage, a, transf_gl2sh_a,
+                                        thread_tile, translate_base(thread_tile, (M = block_i, K = block_k)))
             end
         end
 
         @loopinfo unroll for warp_tile = parallelise(block_tile.KN, Tile(conf.mem_b_warp), warpId, conf.warps_per_block, conf.is_b_col_major)
             @loopinfo unroll for thread_tile = parallelise(warp_tile, Tile(conf.mem_b_thread), laneId, 32, conf.is_b_col_major)
-                @inbounds Layout.copy_async!(conf.global_b_layout, conf.shared_b_layout, shmem_b_stage, b,
-                                             thread_tile, translate_base(thread_tile, (K = block_k, N = block_j)))
+                @inbounds copy_operand!(Val(copies_async(conf.global_b_layout, conf.shared_b_layout, conf.mem_b_thread, transf_gl2sh_b)),
+                                        conf.global_b_layout, conf.shared_b_layout, shmem_b_stage, b, transf_gl2sh_b,
+                                        thread_tile, translate_base(thread_tile, (K = block_k, N = block_j)))
             end
         end
     end

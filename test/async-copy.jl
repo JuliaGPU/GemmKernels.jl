@@ -22,7 +22,9 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
     end
 
     # check_kernel runs when planning, on the host: the async kernels must reject GPUs
-    # without cp.async and transforms they cannot apply, and other kernels must not.
+    # without cp.async, and configurations where neither A nor B can be copied
+    # asynchronously; an operand with a global-to-shared transform is copied through
+    # registers instead. Other kernels accept all of these.
     @testcase "Rejections" begin
         problem = WMMAMatrixMultiplication(; M = 512, N = 256, K = 1024, AB_type = Float16, CD_type = Float32,
                                              transpose_a = false, transpose_b = false, zero_c = false)
@@ -33,15 +35,19 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
         identity_transforms = (; global_to_shared_a = Transform.Elementwise(), global_to_shared_b = Transform.Elementwise())
         double_a = (; global_to_shared_a = Transform.Elementwise(x -> 2x), global_to_shared_b = Transform.Elementwise())
         double_b = (; global_to_shared_a = Transform.Elementwise(), global_to_shared_b = Transform.Elementwise(x -> 2x))
+        double_both = (; global_to_shared_a = Transform.Elementwise(x -> 2x), global_to_shared_b = Transform.Elementwise(x -> 2x))
 
         @test GemmKernels.check_kernel(config, async, v"8.0", identity_transforms) === nothing
         @test GemmKernels.check_kernel(config, async, v"8.9", identity_transforms) === nothing
         @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"7.5", identity_transforms)
         @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"7.0", identity_transforms)
-        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"8.9", double_a)
-        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"8.9", double_b)
+        @test GemmKernels.check_kernel(config, async, v"8.9", double_a) === nothing
+        @test GemmKernels.check_kernel(config, async, v"8.9", double_b) === nothing
+        @test_throws GemmKernels.ConfigError GemmKernels.check_kernel(config, async, v"8.9", double_both)
+        @test GemmKernels.Kernel.copies_async(config.global_a_layout, config.shared_a_layout, config.mem_a_thread, double_a.global_to_shared_a) == false
+        @test GemmKernels.Kernel.copies_async(config.global_b_layout, config.shared_b_layout, config.mem_b_thread, double_a.global_to_shared_b) == true
         for kernel in [Kernel.matmul_singlestage, Kernel.matmul_pipelined, Kernel.matmul_pipelined_ng]
-            @test GemmKernels.check_kernel(config, kernel, v"7.0", double_a) === nothing
+            @test GemmKernels.check_kernel(config, kernel, v"7.0", double_both) === nothing
         end
     end
 
@@ -106,9 +112,22 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
             result = Array(execute(problem, data...; args...))
             @test verify(problem, reference, result)
 
-            # PERM_M = [1, 2]: strided loads of A, which cannot be copied asynchronously.
+            # PERM_M = [1, 2]: strided loads of A, which cannot be copied asynchronously: A is
+            # copied through registers, B still with cp.async.
+            args = try
+                prepare(problem, data...; params..., PERM_M = [1, 2])
+            finally
+                GemmKernels.Tensors.OVERRIDE_do_override = false
+            end
+            initialize_data(problem, data...; params...)
+            result = Array(execute(problem, data...; args...))
+            @test verify(problem, reference, result)
+
+            # ... and with B row-major, B's loads are strided too: nothing left to copy
+            # asynchronously, so the configuration is rejected.
             try
-                @test_throws GemmKernels.ConfigError prepare(problem, data...; params..., PERM_M = [1, 2])
+                @test_throws GemmKernels.ConfigError prepare(problem, data...; params..., PERM_M = [1, 2],
+                                                             is_B_col_major = false)
             finally
                 GemmKernels.Tensors.OVERRIDE_do_override = false
             end

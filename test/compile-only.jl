@@ -210,8 +210,8 @@ for transpose_a in [false, true], transpose_b in [false, true],
 end
 
 # Tensor contraction abc-bda-dc (TC1, with padded extents), via the GETT plan, for a
-# non-strided (PERM_M = [2, 1]) and a strided (PERM_M = [1, 2]) layout of A. The async
-# kernels must reject the strided one with a ConfigError.
+# non-strided (PERM_M = [2, 1]) and a strided (PERM_M = [1, 2]) layout of A. With the
+# strided one, the async kernels copy A through registers and B with cp.async.
 let modes = ([1, 2, 3], [2, 4, 1], [4, 3]), extents = [320, 312, 32, 320]
     packed(ext) = cumprod([1; ext[1:end-1]])
     desc_for(mode, T) = Tensors.TensorDescriptor(length(mode), extents[mode], packed(extents[mode]), T, identity)
@@ -221,7 +221,6 @@ let modes = ([1, 2, 3], [2, 4, 1], [4, 3]), extents = [320, 312, 32, 320]
                                          descD, modes[1], descD, modes[1], Float16, Float32)
     for perm_m in [[2, 1], [1, 2]], (kname, kernel) in KERNELS
         QUICK && kname in ("pipelined", "async_2", "async_4") && continue
-        strided = perm_m == [1, 2]
         label = "TC abc-bda-dc, PERM_M = $perm_m, $kname"
         check(label) do
             Tensors.OVERRIDE_do_override = true
@@ -241,15 +240,6 @@ let modes = ([1, 2, 3], [2, 4, 1], [4, 3]), extents = [320, 312, 32, 320]
             a = devarray(Float16, extents[modes[2]]...)
             b = devarray(Float16, extents[modes[3]]...)
             d = devarray(Float16, extents[modes[1]]...)
-            if strided && kernel isa Kernel.MatmulPipelinedAsync
-                try
-                    codegen(plan.gemmConf, a, b, d, d; kernel)
-                catch err
-                    isa(err, GemmKernels.ConfigError) && return "rejected as expected"
-                    rethrow()
-                end
-                error("strided layout was not rejected")
-            end
             codegen(plan.gemmConf, a, b, d, d; kernel)
         end
     end
