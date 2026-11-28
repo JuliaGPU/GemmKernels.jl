@@ -1061,7 +1061,8 @@ function prepare(tc::TensorContraction, a, b, c, d;
                                         OP_M, OP_N, OP_K,
                                         kernel,
                                         is_A_col_major, is_B_col_major, is_D_col_major,
-                                        PERM_M, PERM_N, PERM_K, cta_swizzle, elementwise_op="none")
+                                        PERM_M, PERM_N, PERM_K, cta_swizzle, elementwise_op="none",
+                                        SPLIT_K=1)
     @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
     data_type = tc.a_type
 
@@ -1133,7 +1134,8 @@ function prepare(tc::TensorContraction, a, b, c, d;
         blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
         warpsPerBlock=WARPS_M * WARPS_N,
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
-        kernel = kernel
+        kernel = kernel,
+        splitK = SPLIT_K
     )
 
     (; plan, padded_a, padded_b, padded_c, padded_d, data_d)

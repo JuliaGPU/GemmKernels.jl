@@ -21,9 +21,16 @@ const jsonData = JSON.parse(read(fp, String))
 
 include("../configs/configs.jl")
 
+# GK_PROBLEMS selects contractions by their number in the TCCG suite (1-48, the order of
+# test/benchmark-suite.json), e.g. GK_PROBLEMS=13,14,20; unset or empty means all of them.
 function generate_problems()
+    selection = strip(get(ENV, "GK_PROBLEMS", ""))
+    selected = isempty(selection) ? collect(eachindex(jsonData)) :
+                                    [parse(Int, strip(i)) for i in split(selection, ',')]
+    all(in(eachindex(jsonData)), selected) ||
+        error("GK_PROBLEMS=$selection: contraction numbers must be between 1 and $(length(jsonData))")
     problems = []
-    for el in jsonData
+    for el in jsonData[selected]
         push!(problems, WMMATensorContraction(; name=el["parseableName"], extents=el["extents"],
                                                 data_type, compute_type, accumulate_type, zero_c))
     end
@@ -46,6 +53,7 @@ function create_configs()
         OP_N=Int[],
         OP_K=Int[],
         kernel_str=String[],
+        SPLIT_K=Int[],
         ## layout
         is_A_col_major=Bool[],
         is_B_col_major=Bool[],
@@ -58,6 +66,28 @@ function create_configs()
     )
 end
 
+# All kernels the GPU supports: the asynchronous-copy kernels need sm_80 or later. Exclude
+# them with GEMMKERNELS_TUNE_ASYNC=0 (e.g. to reproduce sweeps that didn't have them).
+const TUNE_ASYNC = get(ENV, "GEMMKERNELS_TUNE_ASYNC", "1") != "0" &&
+                   CUDA.functional() && CUDA.capability(device()) >= v"8.0"
+const KERNEL_STRINGS = vcat(["singlestage", "pipelined", "pipelined_ng"],
+                            TUNE_ASYNC ? ["pipelined_async_2", "pipelined_async_3", "pipelined_async_4"] : String[])
+
+# Split-K (several thread blocks per output tile, each computing part of K) only helps when
+# there are too few output tiles to fill the GPU and K is long enough to divide: it is tried for
+# contractions with fewer than 256 output tiles of 128 × 128 (under two waves on a GPU with
+# 108-142 SMs) and K of at least 1024 (in the TCCG suite: TC13, TC14 and TC19), with these
+# numbers of parts (GK_SPLIT_K; "1" disables it). Only singlestage and the async kernels
+# support it; precheck_config rejects the other combinations without a worker.
+const SPLIT_K_VALUES = parse.(Int, split(get(ENV, "GK_SPLIT_K", "1,2,4,8,16"), ','))
+
+function split_k_values(problem)
+    D, A, B = problem.modes
+    extent(modes) = prod(problem.extents[m] for m in modes; init = 1)
+    M, N, K = extent(intersect(D, A)), extent(intersect(D, B)), extent(intersect(A, B))
+    return (cld(M, 128) * cld(N, 128) < 256 && K >= 1024) ? SPLIT_K_VALUES : [1]
+end
+
 function config_iterator(problem)
     param_product = shuffle_product(
         2 .^ (3:9),
@@ -66,7 +96,8 @@ function config_iterator(problem)
         2 .^ (0:3),
         2 .^ (0:3),
         [(16, 16, 16), (8, 32, 16), (32, 8, 16)],
-        ["singlestage", "pipelined", "pipelined_ng"],
+        KERNEL_STRINGS,
+        split_k_values(problem),
 
         [false, true],
         [false, true],
@@ -90,6 +121,7 @@ function config_iterator(problem)
         WARPS_N,
         OP_M, OP_N, OP_K,
         kernel_str,
+        SPLIT_K,
 
         is_A_col_major,
         is_B_col_major,
@@ -101,10 +133,81 @@ function config_iterator(problem)
         cta_swizzle_str
     ) for (
         BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N,
-        (OP_M, OP_N, OP_K), kernel_str, is_A_col_major,
+        (OP_M, OP_N, OP_K), kernel_str, SPLIT_K, is_A_col_major,
         is_B_col_major, is_D_col_major, PERM_M, PERM_N,
         PERM_K, cta_swizzle_str
     ) in param_product)
+end
+
+# Julia's type inference only handles tuples of up to `max_tuple_splat` elements (32 by default)
+# precisely; beyond that, updating the tuple of accumulator fragments allocates, which a kernel
+# can't (an `InvalidIRError`). The paper's results used a GPUCompiler patched to raise the limit
+# (`max_tuple_splat = typemax(Int)` in its `inference_params`), so read the active value rather
+# than assume the default.
+const MAX_TUPLE_SPLAT = try
+    job = CUDA.GPUCompiler.CompilerJob(
+        CUDA.GPUCompiler.methodinstance(typeof(identity), Tuple{Int}),
+        CUDA.compiler_config(nothing; cap = v"8.0"))
+    CUDA.GPUCompiler.inference_params(job).max_tuple_splat
+catch err
+    @warn "Could not read GPUCompiler's max_tuple_splat; assuming Julia's default of 32" exception = err
+    32
+end
+
+# Reject configurations that GemmKernels is certain to reject, without sending them to a
+# compilation worker, where each costs over a second (setting up types and a plan). Every rule
+# implies an error that the worker would raise: the ConfigErrors of `get_config` (block shape,
+# operator shape, elements per thread, warp tile) and of `plan_matmul` (pipelined stages,
+# shared memory, with a lower bound of the kernels' `shmem_size`), for the parameters that
+# `prepare(::TensorContraction)` passes. Configurations with more accumulator fragments per warp
+# than MAX_TUPLE_SPLAT fail to compile (an `InvalidIRError`: updating the tuple of fragments
+# allocates). A split-K configuration whose split equals that of a smaller number of parts in
+# the search space is a "duplicate". Returns the status to record, or `nothing` to compile the
+# configuration.
+# Checked against the outcomes in four sweeps (November 2026 trial, February 2026,
+# December 2025): no configuration that compiled would have been rejected.
+function precheck_config(config; max_shmem)
+    (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel_str) = config
+    SPLIT_K = hasproperty(config, :SPLIT_K) ? config.SPLIT_K : 1
+    warps = WARPS_M * WARPS_N
+    rejected = "config_error_during_prepare"
+
+    # get_config: the block shape is too small
+    (BLOCK_M * BLOCK_K < 128 || BLOCK_K * BLOCK_N < 128 || BLOCK_K < 8) && return rejected
+    # get_config: mismatch between the block shape and the operator shape
+    (BLOCK_M < 2 * OP_M || BLOCK_N < 2 * OP_N || BLOCK_K < OP_K) && return rejected
+    # get_config: at least one element per thread for copying A, B and C
+    (BLOCK_M * BLOCK_K < 32 * warps || BLOCK_K * BLOCK_N < 32 * warps ||
+     BLOCK_M * BLOCK_N < 32 * warps) && return rejected
+    # get_config: the warp tile (BLOCK ÷ WARPS) must be a multiple of the operator shape
+    warp_m, warp_n = BLOCK_M ÷ WARPS_M, BLOCK_N ÷ WARPS_N
+    (warp_m == 0 || warp_n == 0 || warp_m % OP_M != 0 || warp_n % OP_N != 0) && return rejected
+    # plan_matmul: the pipelined kernel needs at least two stages
+    (kernel_str == "pipelined" && BLOCK_K < 2 * OP_K) && return rejected
+    # plan_matmul: split-K needs singlestage or an async kernel, and at most one part per K-tile
+    if SPLIT_K != 1
+        kernel_str in ("pipelined", "pipelined_ng") && return rejected
+        modes = [parse.(Int, split(m, '.')) for m in split(config.name, '-')]
+        padded = Configs.pad_extents(config.extents, modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+        k_tiles = prod(padded[intersect(modes[2], modes[3])]) ÷ BLOCK_K
+        (SPLIT_K < 1 || SPLIT_K > k_tiles) && return rejected
+        # each part computes cld(k_tiles, SPLIT_K) K-tiles, and the parts beyond K are empty:
+        # when a smaller number of parts in the search space gives the same split, only that
+        # one is worth measuring
+        per_part = cld(k_tiles, SPLIT_K)
+        any(s -> 1 <= s < SPLIT_K && cld(k_tiles, s) == per_part, SPLIT_K_VALUES) &&
+            return "duplicate"
+    end
+    # plan_matmul: shared memory. A and B are Float16 (padding only adds), D is Float32.
+    stages = kernel_str == "pipelined_ng" ? 2 :
+             startswith(kernel_str, "pipelined_async_") ? parse(Int, chopprefix(kernel_str, "pipelined_async_")) : 1
+    shmem_lower_bound = max(4 * BLOCK_M * BLOCK_N, stages * 2 * (BLOCK_M * BLOCK_K + BLOCK_K * BLOCK_N))
+    shmem_lower_bound > max_shmem && return rejected
+
+    # more accumulator fragments per warp than MAX_TUPLE_SPLAT do not compile
+    (warp_m ÷ OP_M) * (warp_n ÷ OP_N) > MAX_TUPLE_SPLAT && return "compilation_error"
+
+    return nothing
 end
 
 function select_configs(configs, problem)
@@ -130,7 +233,9 @@ function repr_row(row)
         print(io, "col-major")
     end
     print(io, ", $(row.cta_swizzle_str) swizzle")
-    print(io, ", $(row.kernel_str) kernel)")
+    print(io, ", $(row.kernel_str) kernel")
+    hasproperty(row, :SPLIT_K) && row.SPLIT_K != 1 && print(io, ", split-K $(row.SPLIT_K)")
+    print(io, ")")
 
     return String(take!(io))
 end
@@ -152,9 +257,11 @@ function create_params(row)
     PERM_N = row.PERM_N
     PERM_K = row.PERM_K
     cta_swizzle = cta_swizzle_string_to_function(row.cta_swizzle_str)
+    # configurations from before split-K have no SPLIT_K column
+    SPLIT_K = hasproperty(row, :SPLIT_K) ? row.SPLIT_K : 1
 
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
-       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle)
+       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle, SPLIT_K)
 end
 
 function kernel_string_to_function(str)
@@ -164,6 +271,8 @@ function kernel_string_to_function(str)
         return Kernel.matmul_pipelined
     elseif str == "pipelined_ng"
         return Kernel.matmul_pipelined_ng
+    elseif startswith(str, "pipelined_async_")
+        return Kernel.matmul_pipelined_async(parse(Int, chopprefix(str, "pipelined_async_")))
     else
         error("Unknown kernel string: $str")
     end
