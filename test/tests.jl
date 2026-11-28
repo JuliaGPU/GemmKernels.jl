@@ -12,6 +12,7 @@ t0 = now()
 try
     @testset runner=DistributedTestRunner() "GemmKernels.jl" begin
         include("tiling.jl")
+        include("block-shape.jl")
         include("matmul.jl")
         include("blas.jl")
         include("examples.jl")
