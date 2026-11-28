@@ -16,7 +16,7 @@ struct GETTPlan <: AbstractAlgorithmPlan
 end
 
 export createGETTContractionPlan
-function createGETTContractionPlan(desc::ContractionDescriptor)
+function createGETTContractionPlan(desc::ContractionDescriptor; indexing::Symbol=:default)
     # Get the modes from the contraction descriptor.
     modeA, modeB, modeC, modeD = desc.modeA, desc.modeB, desc.modeC, desc.modeD
 
@@ -270,18 +270,26 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         K = prod(desc.descA.extent[dimensionsAK]),
     )
 
+    # 32-bit address arithmetic only works if every offset fits
+    if indexing == :lean32
+        for (name, tdesc) in (("A", desc.descA), ("B", desc.descB), ("D", desc.descD))
+            prod(tdesc.extent) <= typemax(Int32) ||
+                throw(GemmKernels.ConfigError("indexing = :lean32 needs tensors with fewer than 2^31 elements, but $name has $(prod(tdesc.extent))"))
+        end
+    end
+
     TensorLayoutA =
         GETTLayout.createGETTLayout(desc.descA.dataType, desc.descA.extent,
                                     (dimensionsAM, dimensionsAK),
-                                    isColMajorA, isLoadStridedA, strideOverA)
+                                    isColMajorA, isLoadStridedA, strideOverA; indexing)
     TensorLayoutB =
         GETTLayout.createGETTLayout(desc.descB.dataType, desc.descB.extent,
                                     (dimensionsBK, dimensionsBN),
-                                    isColMajorB, isLoadStridedB, strideOverB)
+                                    isColMajorB, isLoadStridedB, strideOverB; indexing)
     TensorLayoutD =
         GETTLayout.createGETTLayout(desc.descD.dataType, desc.descD.extent,
                                     (dimensionsDM, dimensionsDN),
-                                    isColMajorD, isStoreStridedD, strideOverD)
+                                    isColMajorD, isStoreStridedD, strideOverD; indexing)
 
     return (
         gemmShape,
@@ -295,14 +303,14 @@ end
 export setUpGETTKernel
 function setUpGETTKernel(desc::ContractionDescriptor, operator,
                          blockShape, warpsPerBlock, computeWarp,
-                         α, β)
+                         α, β; indexing::Symbol=:default)
     (
         gemmShape,
         TensorLayoutA, isColMajorA,
         TensorLayoutB, isColMajorB,
         TensorLayoutC,
         TensorLayoutD, isColMajorD
-    ) = createGETTContractionPlan(desc)
+    ) = createGETTContractionPlan(desc; indexing)
 
     if (isColMajorA)
         SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descA.dataType},
