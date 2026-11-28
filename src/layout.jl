@@ -410,4 +410,92 @@ end
     end
 end
 
+# ----------------------------------------
+# Asynchronous global-to-shared memory copy
+# ----------------------------------------
+
+# On sm_80+, cp.async copies 4, 8 or 16 bytes from global to shared memory without going
+# through registers. Copies are grouped per thread: `cp_async_commit()` closes the current
+# group, and `cp_async_wait(Val(N))` blocks until at most N of the calling thread's groups
+# are still in flight. Other threads' copies only become visible after a barrier.
+#
+# A layout supports asynchronous copies if each thread's tile is a contiguous, suitably
+# aligned piece of memory: such layouts implement `contiguous_tiles(L) = true` and
+# `tile_pointer(L, workspace, tile)`, which returns a pointer to the first element of the
+# tile, using the same address computation as their `load`/`store!`.
+
+@inline @generated function cp_async!(dst::Core.LLVMPtr{T, AS.Shared}, src::Core.LLVMPtr{T, AS.Global},
+                                      ::Val{Bytes}) where {T, Bytes}
+    Bytes in (4, 8, 16) || return :(error("cp.async can only copy 4, 8 or 16 bytes, not ", $Bytes))
+    # .cg bypasses L1, which is preferable for streaming GEMM operands, but only exists for
+    # 16-byte copies.
+    intr = Bytes == 16 ? "llvm.nvvm.cp.async.cg.shared.global.16" :
+                         "llvm.nvvm.cp.async.ca.shared.global.$Bytes"
+    quote
+        $(Expr(:meta, :inline))
+        ccall($intr, llvmcall, Cvoid,
+              (Core.LLVMPtr{UInt8, AS.Shared}, Core.LLVMPtr{UInt8, AS.Global}),
+              reinterpret(Core.LLVMPtr{UInt8, AS.Shared}, dst),
+              reinterpret(Core.LLVMPtr{UInt8, AS.Global}, src))
+    end
+end
+
+@inline cp_async_commit() = ccall("llvm.nvvm.cp.async.commit.group", llvmcall, Cvoid, ())
+
+# cp.async.wait_group takes an immediate operand, so N must be a compile-time constant.
+@inline cp_async_wait(::Val{N}) where {N} =
+    ccall("llvm.nvvm.cp.async.wait.group", llvmcall, Cvoid, (Int32,), Int32(N))
+
+@inline cp_async_wait_all() = ccall("llvm.nvvm.cp.async.wait.all", llvmcall, Cvoid, ())
+
+contiguous_tiles(::Type) = false
+contiguous_tiles(::Type{<:Padded{L, P}}) where {L, P} = contiguous_tiles(L)
+contiguous_tiles(::Type{<:UnsafeAlignedColMajor}) = true
+contiguous_tiles(::Type{<:UnsafeAlignedRowMajor}) = true
+
+@inline Base.@propagate_inbounds tile_pointer(::Type{<:Padded{L, P}}, workspace, tile::Tile) where {L, P} =
+    tile_pointer(L, workspace, tile)
+
+@inline Base.@propagate_inbounds function tile_pointer(::Type{<:UnsafeAlignedColMajor{T}}, workspace, tile::Tile) where {T}
+    linear_base = linearise(tile.base, Base.size(workspace))
+    linear_offset = linearise(tile.offset, Base.size(workspace))
+    return pointer(workspace, linear_base + linear_offset - 1)
+end
+
+@inline Base.@propagate_inbounds function tile_pointer(::Type{<:UnsafeAlignedRowMajor{T}}, workspace, tile::Tile) where {T}
+    linear_base = linearise(reverse(Tuple(tile.base)), Base.size(workspace))
+    linear_offset = linearise(reverse(Tuple(tile.offset)), Base.size(workspace))
+    return pointer(workspace, linear_base + linear_offset - 1)
+end
+
+"""
+    can_copy_async(global_layout, shared_layout, thread_tile_size)
+
+Whether a tile of `thread_tile_size` elements can be copied from `global_layout` to
+`shared_layout` using `copy_async!`. Evaluated on the host when planning a kernel.
+"""
+function can_copy_async(global_layout, shared_layout, thread_tile_size)
+    eltype(global_layout) == eltype(shared_layout) || return false
+    contiguous_tiles(global_layout) && contiguous_tiles(shared_layout) || return false
+    return sizeof(eltype(global_layout)) * prod(Tuple(thread_tile_size)) in (4, 8, 16)
+end
+
+"""
+    copy_async!(global_layout, shared_layout, shared_workspace, global_workspace,
+                shared_tile, global_tile)
+
+Asynchronously copy `global_tile` of `global_workspace` to `shared_tile` of
+`shared_workspace`. Requires `can_copy_async(...)` to hold, and a later
+`cp_async_wait`/`cp_async_wait_all` and barrier before the data is read.
+"""
+@inline Base.@propagate_inbounds function copy_async!(global_layout, shared_layout,
+                                                      shared_workspace, global_workspace,
+                                                      shared_tile::Tile{size}, global_tile::Tile) where {size}
+    T = eltype(global_layout)
+    Bytes = sizeof(T) * size[1] * size[2]
+    dst = tile_pointer(shared_layout, shared_workspace, shared_tile)
+    src = tile_pointer(global_layout, global_workspace, global_tile)
+    cp_async!(dst, src, Val(Bytes))
+end
+
 end

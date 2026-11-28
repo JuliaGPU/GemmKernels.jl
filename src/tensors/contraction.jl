@@ -17,10 +17,11 @@ mutable struct ContractionPlan
     function ContractionPlan(desc::ContractionDescriptor, α, a, b, β, c, d;
                              algo::ALGO=ALGO_GETT, operator=Operator.WMMAOp,
                              blockShape=nothing, warpsPerBlock=nothing, computeWarp=nothing,
-                             kernel=Kernel.matmul_singlestage)
+                             kernel=Kernel.matmul_singlestage, splitK=1, indexing=:default)
         if algo == ALGO_GETT
             algorithmPlan =
-                setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp, α, β)
+                setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp, α, β;
+                                indexing)
 
             unaryOpA = desc.descA.unaryOp
             unaryOpB = desc.descB.unaryOp
@@ -36,7 +37,7 @@ mutable struct ContractionPlan
                 transform_shared_to_regs_b = Transform.Elementwise(x -> unaryOpB(x)),
                 transform_global_to_shared_c = Transform.Elementwise(x -> β * unaryOpC(x)),
                 transform_shared_to_global_d = Transform.Elementwise(x -> unaryOpD(x)),
-                kernel)
+                kernel, split_k = splitK)
             end
 
         return new(desc, algo, algorithmPlan, operator, matmulPlan, α, β)
@@ -56,7 +57,9 @@ mutable struct ContractionPlan
         blockShape=nothing,
         warpsPerBlock=nothing,
         computeWarp=nothing,
-        kernel=Kernel.matmul_singlestage
+        kernel=Kernel.matmul_singlestage,
+        splitK=1,
+        indexing=:default
     )
         desc = ContractionDescriptor(
             descA, modeA,
@@ -67,7 +70,7 @@ mutable struct ContractionPlan
             accumulateType
         )
         return ContractionPlan(desc, α, a, b, β, c, d; algo, operator, kernel,
-                               blockShape, warpsPerBlock, computeWarp)
+                               blockShape, warpsPerBlock, computeWarp, splitK, indexing)
     end
 
     function ContractionPlan(plan::ContractionPlan, operator)

@@ -19,11 +19,35 @@ mutable struct MatmulPlan
 
     const kernel
     const args
+
+    # with split-K: the workspace and the counters, allocated when the plan is first executed
+    workspace
 end
 
 # cache some device properties so that we can plan without a context
 OVERRIDE_max_shmem = Ref{Any}(nothing)
 OVERRIDE_cap = Ref{Any}(nothing)
+
+is_identity_transform(::Transform.Elementwise{typeof(identity)}) = true
+is_identity_transform(_) = false
+
+# Throws a ConfigError if `kernel` cannot be used with this configuration.
+check_kernel(@nospecialize(conf::Config), kernel, cap, transforms) = nothing
+
+function check_kernel(@nospecialize(conf::Config), ::Kernel.MatmulPipelinedAsync, cap, transforms)
+    cap ≥ v"8.0" ||
+        throw(ConfigError("Asynchronous copies need compute capability 8.0 or higher, but the device has $cap"))
+    # An operand that can't be copied asynchronously is copied through registers instead
+    # (see Kernel.copies_async), but if neither can, the kernel has nothing to overlap.
+    async_a = Kernel.copies_async(conf.global_a_layout, conf.shared_a_layout, conf.mem_a_thread, transforms.global_to_shared_a)
+    async_b = Kernel.copies_async(conf.global_b_layout, conf.shared_b_layout, conf.mem_b_thread, transforms.global_to_shared_b)
+    async_a || async_b ||
+        throw(ConfigError("Neither A nor B can be copied asynchronously (A from $(conf.global_a_layout) in tiles of $(conf.mem_a_thread), B from $(conf.global_b_layout) in tiles of $(conf.mem_b_thread), or a global-to-shared transform)"))
+    # Diagonal layouts rely on the other kernels skipping K-tiles (Layout.threadblock_condition).
+    conf.global_a_layout <: Layout.Diagonal &&
+        throw(ConfigError("The asynchronous-copy kernel does not support Diagonal layouts"))
+    return
+end
 
 function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
                      transform_global_to_shared_a = Transform.Elementwise(),
@@ -35,9 +59,25 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
                      transform_shared_to_regs_c = Transform.Elementwise(),
                      transform_regs_to_shared_d = Transform.Elementwise(),
                      epilogue = Epilogue.Default(),
-                     kernel = Kernel.matmul_singlestage)
+                     kernel = Kernel.matmul_singlestage,
+                     split_k::Integer = 1)
     threads = conf.warps_per_block * 32
     blocks = CTASwizzle.number_of_blocks(conf.cta_swizzle, conf.block_shape, conf.matmul_shape)
+
+    # Split-K: split_k thread blocks per output tile (blockIdx().z), each computing part of
+    # the K dimension, reduced by the split-K epilogue (see Epilogue.SplitK).
+    if split_k != 1
+        k_tiles = conf.matmul_shape.K ÷ conf.block_shape.K
+        1 ≤ split_k ≤ k_tiles ||
+            throw(ConfigError("split_k must be between 1 and the number of K-tiles ($k_tiles), but is $split_k"))
+        kernel isa typeof(Kernel.matmul_singlestage) || kernel isa Kernel.MatmulPipelinedAsync ||
+            throw(ConfigError("Split-K is only supported by matmul_singlestage and matmul_pipelined_async, not $kernel"))
+        # every part stores its partial sum to shared memory through this transform
+        is_identity_transform(transform_regs_to_shared_d) ||
+            throw(ConfigError("Split-K needs the identity as transform_regs_to_shared_d"))
+        epilogue = Epilogue.SplitK{Int(split_k), Layout.eltype(conf.shared_d_layout)}(epilogue)
+        blocks = ((blocks isa Integer ? (blocks, 1) : Tuple(blocks))..., Int(split_k))
+    end
 
     shmem = Kernel.shmem_size(conf, kernel)
     #max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
@@ -50,6 +90,10 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
     if kernel == Kernel.matmul_pipelined
         conf.block_shape.K ≥ 2 * conf.compute_op_shape.K || throw(ConfigError("Need at least two stages to use a pipelined kernel, i.e. BLOCK_K ≥ 2 * OPERATOR_K"))
     end
+
+    cap = @something OVERRIDE_cap[] CUDA.capability(device())
+    check_kernel(conf, kernel, cap, (; global_to_shared_a = transform_global_to_shared_a,
+                                       global_to_shared_b = transform_global_to_shared_b))
 
     args = [transform_global_to_shared_a, transform_global_to_shared_b,
             transform_global_to_shared_c, transform_shared_to_global_d,
@@ -68,7 +112,6 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
     tt = Tuple{map(Core.Typeof, kernel_args)...}
     source = CUDA.GPUCompiler.methodinstance(F, tt)
     #config = CUDA.compiler_config(device())
-    cap = @something OVERRIDE_cap[] CUDA.capability(device())
     config = CUDA.compiler_config(nothing; cap, maxthreads=threads)
     job = CUDA.GPUCompiler.CompilerJob(source, config)
 
@@ -89,7 +132,7 @@ function plan_matmul(@nospecialize(conf::Config), a, b, c, d;
         end
     end
 
-    return MatmulPlan(conf, job, compiled, nothing, threads, blocks, shmem, kernel, args)
+    return MatmulPlan(conf, job, compiled, nothing, threads, blocks, shmem, kernel, args, nothing)
 end
 
 function matmul(plan::MatmulPlan, a, b, c, d)
@@ -113,7 +156,25 @@ function matmul(plan::MatmulPlan, a, b, c, d)
         plan.linked = hostkernel
     end
 
-    plan.linked(plan.conf, a, b, c, d, plan.args...; plan.threads, plan.blocks, plan.shmem)
+    args = plan.args
+    epilogue = last(args)
+    if epilogue isa Epilogue.SplitK
+        # allocate the workspace (one partial tile per part and output tile, as laid out in
+        # shared memory) and the counters (zero, and reset to zero by every launch) once
+        if plan.workspace === nothing
+            conf = plan.conf
+            tiles = cld(conf.matmul_shape.M, conf.block_shape.M) * cld(conf.matmul_shape.N, conf.block_shape.N)
+            tile_size = prod(Layout.physical_size(conf.shared_d_layout,
+                                                  (; M = conf.block_shape.M, N = conf.block_shape.N)))
+            T = Layout.eltype(conf.shared_d_layout)
+            plan.workspace = (CuArray{T}(undef, Epilogue.split_count(epilogue) * tiles * tile_size),
+                              CUDA.zeros(Int32, tiles))
+        end
+        workspace, counters = plan.workspace
+        args = (args[1:end-1]..., typeof(epilogue)(pointer(workspace), pointer(counters), epilogue.inner))
+    end
+
+    plan.linked(plan.conf, a, b, c, d, args...; plan.threads, plan.blocks, plan.shmem)
 end
 
 function matmul(@nospecialize(conf::Config), a, b, c, d; kwargs...)

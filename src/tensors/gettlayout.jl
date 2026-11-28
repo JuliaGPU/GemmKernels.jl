@@ -96,6 +96,42 @@ Base.@propagate_inbounds @inline function Layout.store!(
 end
 
 
+# Asynchronous copies (see Layout.copy_async!): only non-strided GETT layouts store the
+# elements of a thread's tile contiguously.
+Layout.contiguous_tiles(
+        ::Union{
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
+        }
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent} =
+    isLoadOrStoreStrided == false
+
+Base.@propagate_inbounds @inline function Layout.tile_pointer(
+        ::Union{
+            Type{GETTLayoutColMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}},
+            Type{GETTLayoutRowMajor{T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}}
+        },
+        workspace, tile::Tile
+    ) where {T, divT1, modT1, strides1, divT2, modT2, strides2, isLoadOrStoreStrided, strideOverExtent}
+
+    G1 = tile.base[1] + tile.offset[1]
+    G2 = tile.base[2] + tile.offset[2]
+
+    offset = 1
+
+    @loopinfo unroll for i in eachindex(divT1)
+        stride_offset = (G1 ÷ divT1[i]) % modT1[i]
+        offset += stride_offset * strides1[i]
+    end
+
+    @loopinfo unroll for i in eachindex(divT2)
+        stride_offset = (G2 ÷ divT2[i]) % modT2[i]
+        offset += stride_offset * strides2[i]
+    end
+
+    return pointer(workspace) + (offset - 1) * sizeof(T)
+end
+
 # TODO: Write test. One example given below.
 # precomputeGETTLayoutConstants([16, 512, 32], ([1, 3], [2]))
 # result: ((1, 3), (2,), (1, 16), (1,), (16, 512, 32), (1, 8192), (16,))
@@ -186,13 +222,117 @@ function precomputeGETTLayoutConstants(
     )
 end
 
+# Leaner address arithmetic (opt-in, see `createGETTLayout`'s `indexing`). The layouts above
+# compute every element offset as a sum over the tensor modes of
+# `(G ÷ divisor) % extent * stride`, in signed 64-bit arithmetic. The GPU has no 64-bit
+# multiply, so each division or modulo by a constant takes several instructions, and in
+# kernels like TCCG TC22 they make up most of the main loop. These layouts compute the same
+# offsets in unsigned 32-bit arithmetic (for tensors with fewer than 2^31 elements) and without
+# the modulo of the last mode of each dimension, which is redundant: G is smaller than the
+# product of the extents, so the last quotient is smaller than its extent. The original layouts
+# stay the default, as the generated code is sensitive to such changes: on an RTX 6000 Ada,
+# these made 8 of 9 TCCG contractions 2-27% faster but one 7% slower, so the tuner chooses.
+# (Unsigned 64-bit arithmetic was tried too: it was erratic, up to 25x slower.)
+abstract type GETTLayoutLeanColMajor{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                                     isLoadOrStoreStrided, strideOverExtent
+                                    } <: Layout.UnsafeAlignedColMajor{T} end
+
+abstract type GETTLayoutLeanRowMajor{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                                     isLoadOrStoreStrided, strideOverExtent
+                                    } <: Layout.UnsafeAlignedRowMajor{T} end
+
+const GETTLayoutLean{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                     isLoadOrStoreStrided, strideOverExtent} = Union{
+    Type{GETTLayoutLeanColMajor{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                                isLoadOrStoreStrided, strideOverExtent}},
+    Type{GETTLayoutLeanRowMajor{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                                isLoadOrStoreStrided, strideOverExtent}}}
+
+# The 1-based element offset of logical position (G1, G2), as straight-line code in IT.
+@generated function lean_offset(::Type{IT}, G1, G2, ::Val{divT1}, ::Val{modT1}, ::Val{strides1},
+                                ::Val{divT2}, ::Val{modT2}, ::Val{strides2}) where
+                                {IT, divT1, modT1, strides1, divT2, modT2, strides2}
+    ex = quote
+        g1 = G1 % $IT
+        g2 = G2 % $IT
+        offset = one($IT)
+    end
+    for (g, divT, modT, strides) in ((:g1, divT1, modT1, strides1), (:g2, divT2, modT2, strides2))
+        n = length(divT)
+        for i in 1:n
+            q = divT[i] == 1 ? g : :(div($g, $(IT(divT[i]))))
+            t = i == n ? q : :(rem($q, $(IT(modT[i]))))
+            term = strides[i] == 1 ? t : :($t * $(IT(strides[i])))
+            push!(ex.args, :(offset += $term))
+        end
+    end
+    push!(ex.args, :(return Int(offset)))
+    return ex
+end
+
+@inline lean_offset(::GETTLayoutLean{T, IT, divT1, modT1, strides1, divT2, modT2, strides2},
+                    tile) where {T, IT, divT1, modT1, strides1, divT2, modT2, strides2} =
+    lean_offset(IT, tile.base[1] + tile.offset[1], tile.base[2] + tile.offset[2],
+                Val(divT1), Val(modT1), Val(strides1), Val(divT2), Val(modT2), Val(strides2))
+
+Base.@propagate_inbounds @inline function Layout.load(
+        L::GETTLayoutLean{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                          isLoadOrStoreStrided, strideOverExtent},
+        workspace, tile::Tile{size}
+    ) where {T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+             isLoadOrStoreStrided, strideOverExtent, size}
+    NUMEL = size[1] * size[2]
+    offset = lean_offset(L, tile)
+    if (isLoadOrStoreStrided == false)
+        return Layout.vloada(Layout.Vec{NUMEL, T}, pointer(workspace), offset)
+    else
+        return GETTLayout.sloada(Layout.Vec{NUMEL, T}, workspace, offset, strideOverExtent)
+    end
+end
+
+Base.@propagate_inbounds @inline function Layout.store!(
+        L::GETTLayoutLean{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                          isLoadOrStoreStrided, strideOverExtent},
+        workspace, value, tile::Tile{size}
+    ) where {T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+             isLoadOrStoreStrided, strideOverExtent, size}
+    NUMEL = size[1] * size[2]
+    offset = lean_offset(L, tile)
+    if (isLoadOrStoreStrided == false)
+        return Layout.vstorea!(Layout.Vec{NUMEL, T}, pointer(workspace), value, offset)
+    else
+        GETTLayout.sstorea!(Layout.Vec{NUMEL, T}, workspace, value, offset, strideOverExtent)
+    end
+end
+
+Layout.contiguous_tiles(
+        ::GETTLayoutLean{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                         isLoadOrStoreStrided, strideOverExtent}
+    ) where {T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+             isLoadOrStoreStrided, strideOverExtent} =
+    isLoadOrStoreStrided == false
+
+Base.@propagate_inbounds @inline Layout.tile_pointer(
+        L::GETTLayoutLean{T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                          isLoadOrStoreStrided, strideOverExtent},
+        workspace, tile::Tile
+    ) where {T, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+             isLoadOrStoreStrided, strideOverExtent} =
+    pointer(workspace) + (lean_offset(L, tile) - 1) * sizeof(T)
+
+# The address arithmetic of the GETT layouts (see GETTLayoutLean):
+#   :default   the original layouts
+#   :lean32    unsigned 32-bit, without the redundant modulos (tensors < 2^31 elements)
+const GETT_INDEXING = (:default, :lean32)
+
 function createGETTLayout(
     DT::DataType,
     extent::Vector{Int},
     dimensions::Tuple{Vector{Int}, Vector{Int}},
     isColMajor::Bool,
     isLoadOrStoreStrided::Bool,
-    strideOver::Union{Vector{Int}, Nothing} = nothing,
+    strideOver::Union{Vector{Int}, Nothing} = nothing;
+    indexing::Symbol = :default,
 )
     (
         divT1, divT2,
@@ -201,12 +341,25 @@ function createGETTLayout(
         isLoadOrStoreStrided, strideOverExtent
     ) = precomputeGETTLayoutConstants(extent, dimensions, isLoadOrStoreStrided, strideOver)
 
-    if (isColMajor == true)
-        GETTLayoutColMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2,
-                           isLoadOrStoreStrided, strideOverExtent}
+    if indexing == :default
+        if (isColMajor == true)
+            GETTLayoutColMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2,
+                               isLoadOrStoreStrided, strideOverExtent}
+        else
+            GETTLayoutRowMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2,
+                               isLoadOrStoreStrided, strideOverExtent}
+        end
     else
-        GETTLayoutRowMajor{DT, divT1, modT1, strides1, divT2, modT2, strides2,
-                           isLoadOrStoreStrided, strideOverExtent}
+        indexing in GETT_INDEXING ||
+            throw(ArgumentError("indexing must be one of $(GETT_INDEXING), but is :$indexing"))
+        IT = UInt32
+        if (isColMajor == true)
+            GETTLayoutLeanColMajor{DT, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                                   isLoadOrStoreStrided, strideOverExtent}
+        else
+            GETTLayoutLeanRowMajor{DT, IT, divT1, modT1, strides1, divT2, modT2, strides2,
+                                   isLoadOrStoreStrided, strideOverExtent}
+        end
     end
 end
 
