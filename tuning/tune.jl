@@ -704,6 +704,11 @@ function main()
                 insertcols!(all_configs, findfirst(==("SPLIT_K"), names(all_configs)) + 1,
                             :INDEXING => fill("default", nrow(all_configs)))
             end
+            # configurations from before the EDGE dimension: add it, after INDEXING
+            if !("EDGE" in names(all_configs)) && "INDEXING" in names(all_configs)
+                insertcols!(all_configs, findfirst(==("INDEXING"), names(all_configs)) + 1,
+                            :EDGE => fill("pad", nrow(all_configs)))
+            end
 
             @info "Loaded $(size(all_configs, 1)) configurations in $(prettytime(read_time))."
         catch err

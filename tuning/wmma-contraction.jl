@@ -55,6 +55,7 @@ function create_configs()
         kernel_str=String[],
         SPLIT_K=Int[],
         INDEXING=String[],
+        EDGE=String[],
         ## layout
         is_A_col_major=Bool[],
         is_B_col_major=Bool[],
@@ -97,6 +98,15 @@ end
 # from before).
 const INDEXING_VALUES = String.(strip.(split(get(ENV, "GK_INDEXING", "default,lean32"), ',')))
 
+# How the M and N dimensions are covered when they are not multiples of the block shape
+# (GETTPlan's `edge`): "pad" (pad modes until they are, as before) or "mask" (partial edge
+# tiles: the layouts skip the out-of-bounds copy tiles, so only K is padded; see
+# GETTLayout.GETTLayoutMasked). Neither is faster for every contraction (with the thesis
+# configurations on an RTX 6000 Ada, "mask" made 11 of 15 TCCG contractions 2-21% faster, but
+# three pipelined ones 3-34% slower), so both are tuned (GK_EDGE; "pad" restores the search
+# space from before).
+const EDGE_VALUES = String.(strip.(split(get(ENV, "GK_EDGE", "pad,mask"), ',')))
+
 function config_iterator(problem)
     param_product = shuffle_product(
         2 .^ (3:9),
@@ -108,6 +118,7 @@ function config_iterator(problem)
         KERNEL_STRINGS,
         split_k_values(problem),
         INDEXING_VALUES,
+        EDGE_VALUES,
 
         [false, true],
         [false, true],
@@ -133,6 +144,7 @@ function config_iterator(problem)
         kernel_str,
         SPLIT_K,
         INDEXING,
+        EDGE,
 
         is_A_col_major,
         is_B_col_major,
@@ -144,7 +156,7 @@ function config_iterator(problem)
         cta_swizzle_str
     ) for (
         BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N,
-        (OP_M, OP_N, OP_K), kernel_str, SPLIT_K, INDEXING, is_A_col_major,
+        (OP_M, OP_N, OP_K), kernel_str, SPLIT_K, INDEXING, EDGE, is_A_col_major,
         is_B_col_major, is_D_col_major, PERM_M, PERM_N,
         PERM_K, cta_swizzle_str
     ) in param_product)
@@ -181,6 +193,7 @@ function precheck_config(config; max_shmem)
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel_str) = config
     SPLIT_K = hasproperty(config, :SPLIT_K) ? config.SPLIT_K : 1
     INDEXING = hasproperty(config, :INDEXING) ? config.INDEXING : "default"
+    EDGE = hasproperty(config, :EDGE) ? config.EDGE : "pad"
     warps = WARPS_M * WARPS_N
     rejected = "config_error_during_prepare"
 
@@ -196,11 +209,16 @@ function precheck_config(config; max_shmem)
     (warp_m == 0 || warp_n == 0 || warp_m % OP_M != 0 || warp_n % OP_N != 0) && return rejected
     # plan_matmul: the pipelined kernel needs at least two stages
     (kernel_str == "pipelined" && BLOCK_K < 2 * OP_K) && return rejected
+    # createGETTContractionPlan: known edge handling. The tensors are padded as `prepare` pads
+    # them: with partial edge tiles only K is (setUpGETTKernel also requires M and N to be
+    # multiples of the copy tiles, which is left to the worker: in the TCCG suite they are)
+    EDGE in ("pad", "mask") || return rejected
+    multiples = Configs.padding_multiples(BLOCK_M, BLOCK_N, BLOCK_K, EDGE)
     # plan_matmul: split-K needs singlestage or an async kernel, and at most one part per K-tile
     if SPLIT_K != 1
         kernel_str in ("pipelined", "pipelined_ng") && return rejected
         modes = [parse.(Int, split(m, '.')) for m in split(config.name, '-')]
-        padded = Configs.pad_extents(config.extents, modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+        padded = Configs.pad_extents(config.extents, modes, multiples)
         k_tiles = prod(padded[intersect(modes[2], modes[3])]) ÷ BLOCK_K
         (SPLIT_K < 1 || SPLIT_K > k_tiles) && return rejected
         # each part computes cld(k_tiles, SPLIT_K) K-tiles, and the parts beyond K are empty:
@@ -215,7 +233,7 @@ function precheck_config(config; max_shmem)
     INDEXING in ("default", "lean32") || return rejected
     if INDEXING == "lean32"
         modes = [parse.(Int, split(m, '.')) for m in split(config.name, '-')]
-        padded = Configs.pad_extents(config.extents, modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+        padded = Configs.pad_extents(config.extents, modes, multiples)
         any(m -> prod(padded[m]) > typemax(Int32), modes) && return rejected
     end
     # plan_matmul: shared memory. A and B are Float16 (padding only adds), D is Float32.
@@ -256,6 +274,7 @@ function repr_row(row)
     print(io, ", $(row.kernel_str) kernel")
     hasproperty(row, :SPLIT_K) && row.SPLIT_K != 1 && print(io, ", split-K $(row.SPLIT_K)")
     hasproperty(row, :INDEXING) && row.INDEXING != "default" && print(io, ", $(row.INDEXING) indexing")
+    hasproperty(row, :EDGE) && row.EDGE != "pad" && print(io, ", $(row.EDGE) edge")
     print(io, ")")
 
     return String(take!(io))
@@ -283,10 +302,13 @@ function create_params(row)
     # the address arithmetic of the GETT layouts (see INDEXING_VALUES); configurations from
     # before that dimension have no INDEXING column
     INDEXING = hasproperty(row, :INDEXING) ? row.INDEXING : "default"
+    # partial edge tiles instead of padding M and N (see EDGE_VALUES); configurations from
+    # before that dimension have no EDGE column
+    EDGE = hasproperty(row, :EDGE) ? row.EDGE : "pad"
 
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
        is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle, SPLIT_K,
-       INDEXING)
+       INDEXING, EDGE)
 end
 
 function kernel_string_to_function(str)
