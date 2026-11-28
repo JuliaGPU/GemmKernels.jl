@@ -58,6 +58,13 @@ function create_configs()
     )
 end
 
+# All kernels the GPU supports: the asynchronous-copy kernels need sm_80 or later. Exclude
+# them with GEMMKERNELS_TUNE_ASYNC=0 (e.g. to reproduce sweeps that didn't have them).
+const TUNE_ASYNC = get(ENV, "GEMMKERNELS_TUNE_ASYNC", "1") != "0" &&
+                   CUDA.functional() && CUDA.capability(device()) >= v"8.0"
+const KERNEL_STRINGS = vcat(["singlestage", "pipelined", "pipelined_ng"],
+                            TUNE_ASYNC ? ["pipelined_async_2", "pipelined_async_3", "pipelined_async_4"] : String[])
+
 function config_iterator(problem)
     param_product = shuffle_product(
         2 .^ (3:9),
@@ -66,7 +73,7 @@ function config_iterator(problem)
         2 .^ (0:3),
         2 .^ (0:3),
         [(16, 16, 16), (8, 32, 16), (32, 8, 16)],
-        ["singlestage", "pipelined", "pipelined_ng"],
+        KERNEL_STRINGS,
 
         [false, true],
         [false, true],
@@ -164,6 +171,8 @@ function kernel_string_to_function(str)
         return Kernel.matmul_pipelined
     elseif str == "pipelined_ng"
         return Kernel.matmul_pipelined_ng
+    elseif startswith(str, "pipelined_async_")
+        return Kernel.matmul_pipelined_async(parse(Int, chopprefix(str, "pipelined_async_")))
     else
         error("Unknown kernel string: $str")
     end
