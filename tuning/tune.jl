@@ -18,6 +18,10 @@ using Scratch
 using Profile
 using ProfileSVG
 
+# Total time of the kernels in a CUDA.@profile result. Older CUDA.jl versions return the
+# device events as a DataFrame, newer ones as a NamedTuple of columns; DataFrame() takes both.
+device_time(prof) = (events = DataFrame(prof.device); sum(events.stop .- events.start))
+
 if myid() == 1
     using Plots
 end
@@ -85,6 +89,16 @@ const SWEEP_TIME_LIMIT = 24*3600
 
 # The time limit for each single step (preparation, measurement, verification), in seconds.
 const CONFIG_TIME_LIMIT = 60
+
+# The time limit for compiling a configuration on a compilation worker, in seconds. Higher than
+# CONFIG_TIME_LIMIT: with many workers compiling at the same time, a compilation can take over
+# a minute (a time-out restarts the worker and records the configuration as crashed).
+const COMPILE_TIME_LIMIT = 180
+
+# The number of compilation workers: at most this many (default: half the CPU threads, as
+# compilations share the CPU, and the single measurement worker limits the throughput anyway),
+# and further limited by memory and by the number of configurations to try.
+const MAX_COMPILE_WORKERS = parse(Int, get(ENV, "GK_COMPILE_WORKERS", string(max(1, Sys.CPU_THREADS ÷ 2))))
 
 # Retry configurations with these categories.
 const RETRY_STATUSSES = ["oom", "crashed_during_compile", "crashed_during_measure"]
@@ -312,6 +326,15 @@ function measure_config(problem, config, max_time)
             @error "Unknown error\n$log"
             return "unknown_error_during_measure", Float64[], nothing, ()
         end
+
+        # compile every other GPU kernel this function launches *before* the first
+        # CUDA.@profile below. With CUDA.jl 5.11 / GPUCompiler 1.17, compiling a new kernel
+        # after CUDA.@profile within the same call fails with
+        # `AssertionError: haskey(compiled, job.source)`; in the tuner this hit the RNG
+        # kernels of `initialize_data` on the padded views, for the first configuration
+        # that passed the `slow` check. Running them here puts them in the compile cache.
+        initialize_data(problem, data...; params...)
+        adapt(Array, execute(problem, data...; args...))
         synchronize()
     end
 
@@ -319,7 +342,7 @@ function measure_config(problem, config, max_time)
     measurements = Float64[]
     measuring = @elapsed begin
         prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        cur_time = device_time(prof)
     end
     push!(measurements, cur_time)
     if cur_time > max_time
@@ -337,7 +360,7 @@ function measure_config(problem, config, max_time)
         prof = CUDA.@profile concurrent=false begin
             result = execute(problem, data...; args...)
         end
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        cur_time = device_time(prof)
         push!(measurements, cur_time)
     end
     copying = @elapsed begin
@@ -350,7 +373,7 @@ function measure_config(problem, config, max_time)
     measuring += @elapsed begin
         while need_more_measurements(measurements)
             prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+            cur_time = device_time(prof)
             push!(measurements, cur_time)
         end
     end
@@ -435,7 +458,7 @@ function benchmark_configs(all_configs)
 
                 for i in 1:BENCHMARK_SAMPLES
                     prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                    cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                    cur_time = device_time(prof)
                     push!(baseline_times, cur_time)
                     next!(p)
                 end
@@ -454,7 +477,7 @@ function benchmark_configs(all_configs)
             times = []
             for i in 1:BENCHMARK_SAMPLES
                 prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                cur_time = device_time(prof)
                 push!(times, cur_time)
                 next!(p)
             end
@@ -528,6 +551,8 @@ end
 
 function main()
     @info "Started tuning script."
+    @isdefined(MAX_TUPLE_SPLAT) &&
+        @info "GPUCompiler's max_tuple_splat is $MAX_TUPLE_SPLAT: configurations with more accumulator fragments per warp are not compiled."
 
     #
     # Phase 1: Prepare
@@ -595,7 +620,7 @@ function main()
                 measurements = []
                 while need_more_measurements(measurements)
                     prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                    cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                    cur_time = device_time(prof)
                     push!(measurements, cur_time)
                 end
 
@@ -628,6 +653,9 @@ function main()
     @assert (TARGET_PERF_FILE === "") || isfile(TARGET_PERF_FILE)
     if TARGET_PERF_FILE !== ""
         println("! Using reference times from old run instead of cuTENSOR times as baseline.")
+        # the reference times are stored per contraction number, for all of them
+        isempty(strip(get(ENV, "GK_PROBLEMS", ""))) ||
+            error("GK_TARGET_PERFS cannot be combined with GK_PROBLEMS")
 
         best_configs_reference = open(TARGET_PERF_FILE) do io
             deserialize(io)
@@ -664,6 +692,22 @@ function main()
                 if eltype(all_configs[!, col]) <: SubArray
                     all_configs[!, col] = map(Vector, all_configs[!, col])
                 end
+            end
+
+            # configurations from before split-K: add the column, after kernel_str
+            if !("SPLIT_K" in names(all_configs)) && "kernel_str" in names(all_configs)
+                insertcols!(all_configs, findfirst(==("kernel_str"), names(all_configs)) + 1,
+                            :SPLIT_K => ones(Int, nrow(all_configs)))
+            end
+            # configurations from before the INDEXING dimension: add it, after SPLIT_K
+            if !("INDEXING" in names(all_configs)) && "SPLIT_K" in names(all_configs)
+                insertcols!(all_configs, findfirst(==("SPLIT_K"), names(all_configs)) + 1,
+                            :INDEXING => fill("default", nrow(all_configs)))
+            end
+            # configurations from before the EDGE dimension: add it, after INDEXING
+            if !("EDGE" in names(all_configs)) && "INDEXING" in names(all_configs)
+                insertcols!(all_configs, findfirst(==("INDEXING"), names(all_configs)) + 1,
+                            :EDGE => fill("pad", nrow(all_configs)))
             end
 
             @info "Loaded $(size(all_configs, 1)) configurations in $(prettytime(read_time))."
@@ -732,6 +776,9 @@ function main()
     for problem in problems
         time_limits[problem] = SWEEP_TIME_LIMIT * weights[problem] / total_weight
     end
+
+    # For precheck_config: the shared memory a kernel can use on this GPU.
+    max_shmem = attribute(device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)
 
     # Get rid of the CUDA context on the master process
     # NOTE: don't use CUDA API's after this point!
@@ -802,7 +849,7 @@ function main()
                 cpu_mem_limit = 2500*2^20   # compilation headroom
 
                 max_workers_cpu_mem = floor(Int, problem_cpu_memory_available / cpu_mem_limit)
-                max_workers_cpu_threads = Sys.CPU_THREADS
+                max_workers_cpu_threads = MAX_COMPILE_WORKERS
                 max_workers_njobs = njobs+1
 
                 max_workers = min(
@@ -813,7 +860,7 @@ function main()
 
                 println(" - max # of compilation workers: $max_workers")
                 println("   limit determined by CPU memory: $max_workers_cpu_mem")
-                println("   limit determined by #CPU threads: $max_workers_cpu_threads")
+                println("   limit determined by #CPU threads (GK_COMPILE_WORKERS): $max_workers_cpu_threads")
                 println("   limit determined by #jobs: $max_workers_njobs")
 
                 max_workers, (X) -> begin
@@ -860,7 +907,15 @@ function main()
                             # only process new configurations
                             if !in(hash_config(config), seen_configs)
                                 push!(all_configs, (config..., "pending", Inf, -Inf))
-                                put!(initial_jobs, size(all_configs, 1))
+                                i = size(all_configs, 1)
+                                # reject what is certain to fail here, without a worker
+                                prechecked = precheck_config(config; max_shmem)
+                                if prechecked === nothing
+                                    put!(initial_jobs, i)
+                                else
+                                    all_configs[i, :status] = prechecked
+                                    push!(results, ("master (pre-check)", i))
+                                end
                             end
                         catch err
                             isa(err, EOFError) || rethrow()
@@ -913,7 +968,7 @@ function main()
                             status = try
                                 # prepare
                                 preparing, status = @something(
-                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true),
+                                    remotecall_until(prepare_config, worker, problem, NamedTuple(config), true; timeout=COMPILE_TIME_LIMIT),
                                     error("Time-out preparing configuration")
                                 )
                                 worker_elapsed += note_time(compilation_times_worker, :preparing, preparing)

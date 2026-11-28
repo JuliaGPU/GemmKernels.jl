@@ -687,6 +687,11 @@ function find_minimal_padding(extents, multiple)
     res[idx]
 end
 
+# The multiples to pad the M, N and K dimensions to: the block shape, or with partial edge
+# tiles (EDGE = "mask") only K.
+padding_multiples(BLOCK_M, BLOCK_N, BLOCK_K, EDGE) =
+    EDGE == "mask" ? (M = 1, N = 1, K = BLOCK_K) : (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K)
+
 function pad_extents(extents, modes, multiples=(M=512,N=512,K=128))
     padded_extents = [extents...]
 
@@ -775,7 +780,9 @@ function initialize_data(tc::TensorContraction, a, b, c, d; kwargs...)
     else
         # use the params to get appropriately padded tensors
         padding_multiple = max(kwargs[:BLOCK_M], kwargs[:BLOCK_N], kwargs[:BLOCK_K])
-        padded_extents = pad_extents(tc.extents, tc.modes, (M = kwargs[:BLOCK_M], N = kwargs[:BLOCK_N], K = kwargs[:BLOCK_K]))
+        padded_extents = pad_extents(tc.extents, tc.modes,
+                                     padding_multiples(kwargs[:BLOCK_M], kwargs[:BLOCK_N], kwargs[:BLOCK_K],
+                                                       get(kwargs, :EDGE, "pad")))
         padded_a = padded_view(a, padded_extents[tc.modes[2]])
         padded_b = padded_view(b, padded_extents[tc.modes[3]])
         padded_c = padded_view(c, padded_extents[tc.modes[1]])
@@ -1061,12 +1068,13 @@ function prepare(tc::TensorContraction, a, b, c, d;
                                         OP_M, OP_N, OP_K,
                                         kernel,
                                         is_A_col_major, is_B_col_major, is_D_col_major,
-                                        PERM_M, PERM_N, PERM_K, cta_swizzle, elementwise_op="none")
+                                        PERM_M, PERM_N, PERM_K, cta_swizzle, elementwise_op="none",
+                                        SPLIT_K=1, INDEXING="default", EDGE="pad")
     @assert tc.a_type == tc.b_type == tc.c_type == tc.d_type
     data_type = tc.a_type
 
-    # get padded tensors
-    padded_extents = pad_extents(tc.extents, tc.modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+    # get padded tensors (with partial edge tiles, EDGE = "mask", only K is padded)
+    padded_extents = pad_extents(tc.extents, tc.modes, padding_multiples(BLOCK_M, BLOCK_N, BLOCK_K, EDGE))
     padded_a = padded_view(a, padded_extents[tc.modes[2]])
     padded_b = padded_view(b, padded_extents[tc.modes[3]])
     padded_c = padded_view(c, padded_extents[tc.modes[1]])
@@ -1133,7 +1141,10 @@ function prepare(tc::TensorContraction, a, b, c, d;
         blockShape=(M = BLOCK_M, N = BLOCK_N, K = BLOCK_K),
         warpsPerBlock=WARPS_M * WARPS_N,
         computeWarp=(M = BLOCK_M ÷ WARPS_M, N = BLOCK_N ÷ WARPS_N, K = OP_K),
-        kernel = kernel
+        kernel = kernel,
+        splitK = SPLIT_K,
+        indexing = Symbol(INDEXING),
+        edge = Symbol(EDGE)
     )
 
     (; plan, padded_a, padded_b, padded_c, padded_d, data_d)
