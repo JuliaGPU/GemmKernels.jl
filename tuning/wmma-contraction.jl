@@ -100,11 +100,11 @@ const INDEXING_VALUES = String.(strip.(split(get(ENV, "GK_INDEXING", "default,le
 
 # How the M and N dimensions are covered when they are not multiples of the block shape
 # (GETTPlan's `edge`): "pad" (pad modes until they are, as before) or "mask" (partial edge
-# tiles: the layouts skip the out-of-bounds copy tiles, so only K is padded; see
-# GETTLayout.GETTLayoutMasked). Neither is faster for every contraction (with the thesis
-# configurations on an RTX 6000 Ada, "mask" made 11 of 15 TCCG contractions 2-21% faster, but
-# three pipelined ones 3-34% slower), so both are tuned (GK_EDGE; "pad" restores the search
-# space from before).
+# tiles: the layouts skip the stores beyond the edge and clamp the loads, so only K is padded;
+# see GETTLayout.GETTLayoutMasked). Neither is faster for every contraction (with the thesis
+# configurations on an RTX 6000 Ada, "mask" made 9 of 11 TCCG contractions 4-27% faster, but
+# TC12 and TC13, which gain no tiles, 1-3% slower), so both are tuned (GK_EDGE; "pad"
+# restores the search space from before).
 const EDGE_VALUES = String.(strip.(split(get(ENV, "GK_EDGE", "pad,mask"), ',')))
 
 function config_iterator(problem)
