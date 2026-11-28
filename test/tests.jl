@@ -20,6 +20,7 @@ try
         include("contraction.jl")
         include("contraction-configs.jl")
         include("split-k.jl")
+        include("gett-indexing.jl")
     end
 finally
     if myid() == 1
