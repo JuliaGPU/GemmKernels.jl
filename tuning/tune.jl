@@ -18,6 +18,10 @@ using Scratch
 using Profile
 using ProfileSVG
 
+# Total time of the kernels in a CUDA.@profile result. Older CUDA.jl versions return the
+# device events as a DataFrame, newer ones as a NamedTuple of columns; DataFrame() takes both.
+device_time(prof) = (events = DataFrame(prof.device); sum(events.stop .- events.start))
+
 if myid() == 1
     using Plots
 end
@@ -319,7 +323,7 @@ function measure_config(problem, config, max_time)
     measurements = Float64[]
     measuring = @elapsed begin
         prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        cur_time = device_time(prof)
     end
     push!(measurements, cur_time)
     if cur_time > max_time
@@ -337,7 +341,7 @@ function measure_config(problem, config, max_time)
         prof = CUDA.@profile concurrent=false begin
             result = execute(problem, data...; args...)
         end
-        cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+        cur_time = device_time(prof)
         push!(measurements, cur_time)
     end
     copying = @elapsed begin
@@ -350,7 +354,7 @@ function measure_config(problem, config, max_time)
     measuring += @elapsed begin
         while need_more_measurements(measurements)
             prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-            cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+            cur_time = device_time(prof)
             push!(measurements, cur_time)
         end
     end
@@ -435,7 +439,7 @@ function benchmark_configs(all_configs)
 
                 for i in 1:BENCHMARK_SAMPLES
                     prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                    cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                    cur_time = device_time(prof)
                     push!(baseline_times, cur_time)
                     next!(p)
                 end
@@ -454,7 +458,7 @@ function benchmark_configs(all_configs)
             times = []
             for i in 1:BENCHMARK_SAMPLES
                 prof = CUDA.@profile concurrent=false execute(problem, data...; args...)
-                cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                cur_time = device_time(prof)
                 push!(times, cur_time)
                 next!(p)
             end
@@ -595,7 +599,7 @@ function main()
                 measurements = []
                 while need_more_measurements(measurements)
                     prof = CUDA.@profile concurrent=false execute_baseline(problem, data...; args...)
-                    cur_time = sum(prof.device[!, "stop"] - prof.device[!, "start"])
+                    cur_time = device_time(prof)
                     push!(measurements, cur_time)
                 end
 

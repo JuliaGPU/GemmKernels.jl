@@ -11,12 +11,16 @@ OVERRIDE_perm_N = nothing
 OVERRIDE_perm_K = nothing
 OVERRIDE_cta_swizzle = nothing
 
+# the masked layouts handle dimensions that are not multiples of the block shape
+GemmKernels.require_tile_sized_global(::Type{<:GETTLayout.GETTLayoutMasked}) = false
+
 struct GETTPlan <: AbstractAlgorithmPlan
     gemmConf
 end
 
 export createGETTContractionPlan
-function createGETTContractionPlan(desc::ContractionDescriptor)
+function createGETTContractionPlan(desc::ContractionDescriptor; indexing::Symbol=:default,
+                                   edge::Symbol=:pad)
     # Get the modes from the contraction descriptor.
     modeA, modeB, modeC, modeD = desc.modeA, desc.modeB, desc.modeC, desc.modeD
 
@@ -270,18 +274,36 @@ function createGETTContractionPlan(desc::ContractionDescriptor)
         K = prod(desc.descA.extent[dimensionsAK]),
     )
 
+    # Partial edge tiles (edge = :mask): the M and N dimensions need not be multiples of the
+    # block shape; the layouts skip the stores of the tiles beyond them, and clamp their loads
+    # (see GETTLayout.GETTLayoutMasked).
+    edge in (:pad, :mask) || throw(ArgumentError("edge must be :pad or :mask, but is :$edge"))
+    boundsA, boundsB, boundsD = edge == :mask ?
+        ((gemmShape.M, 0), (0, gemmShape.N), (gemmShape.M, gemmShape.N)) : ((0, 0), (0, 0), (0, 0))
+
+    # 32-bit address arithmetic only works if every offset fits
+    if indexing == :lean32
+        for (name, tdesc) in (("A", desc.descA), ("B", desc.descB), ("D", desc.descD))
+            prod(tdesc.extent) <= typemax(Int32) ||
+                throw(GemmKernels.ConfigError("indexing = :lean32 needs tensors with fewer than 2^31 elements, but $name has $(prod(tdesc.extent))"))
+        end
+    end
+
     TensorLayoutA =
         GETTLayout.createGETTLayout(desc.descA.dataType, desc.descA.extent,
                                     (dimensionsAM, dimensionsAK),
-                                    isColMajorA, isLoadStridedA, strideOverA)
+                                    isColMajorA, isLoadStridedA, strideOverA; indexing,
+                                    bounds = boundsA)
     TensorLayoutB =
         GETTLayout.createGETTLayout(desc.descB.dataType, desc.descB.extent,
                                     (dimensionsBK, dimensionsBN),
-                                    isColMajorB, isLoadStridedB, strideOverB)
+                                    isColMajorB, isLoadStridedB, strideOverB; indexing,
+                                    bounds = boundsB)
     TensorLayoutD =
         GETTLayout.createGETTLayout(desc.descD.dataType, desc.descD.extent,
                                     (dimensionsDM, dimensionsDN),
-                                    isColMajorD, isStoreStridedD, strideOverD)
+                                    isColMajorD, isStoreStridedD, strideOverD; indexing,
+                                    bounds = boundsD)
 
     return (
         gemmShape,
@@ -295,14 +317,14 @@ end
 export setUpGETTKernel
 function setUpGETTKernel(desc::ContractionDescriptor, operator,
                          blockShape, warpsPerBlock, computeWarp,
-                         α, β)
+                         α, β; indexing::Symbol=:default, edge::Symbol=:pad)
     (
         gemmShape,
         TensorLayoutA, isColMajorA,
         TensorLayoutB, isColMajorB,
         TensorLayoutC,
         TensorLayoutD, isColMajorD
-    ) = createGETTContractionPlan(desc)
+    ) = createGETTContractionPlan(desc; indexing, edge)
 
     if (isColMajorA)
         SharedLayoutA = Layout.Padded{Layout.UnsafeAlignedColMajor{desc.descA.dataType},
@@ -366,6 +388,18 @@ function setUpGETTKernel(desc::ContractionDescriptor, operator,
 
         cta_swizzle = OVERRIDE_do_override ? OVERRIDE_cta_swizzle : CTASwizzle.Identity
     )
+
+    # Partial edge tiles: get_config does not check the masked layouts' dimensions. K must
+    # still be a multiple of the block shape (the kernels' K loops assume it), and no thread's
+    # copy tile may straddle the edge of M or N (the layouts mask whole tiles).
+    if edge == :mask
+        (; M, N, K) = gemmConf.matmul_shape
+        K % gemmConf.block_shape.K == 0 ||
+            throw(GemmKernels.ConfigError("With edge = :mask, K ($K) must still be a multiple of BLOCK_K ($(gemmConf.block_shape.K))"))
+        (M % gemmConf.mem_a_thread.M == 0 && M % gemmConf.mem_cd_thread.M == 0 &&
+         N % gemmConf.mem_b_thread.N == 0 && N % gemmConf.mem_cd_thread.N == 0) ||
+            throw(GemmKernels.ConfigError("With edge = :mask, M ($M) and N ($N) must be multiples of the copy tiles ($(gemmConf.mem_a_thread), $(gemmConf.mem_b_thread), $(gemmConf.mem_cd_thread))"))
+    end
 
     return GETTPlan(gemmConf)
 end
