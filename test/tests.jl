@@ -21,6 +21,7 @@ try
         include("contraction-configs.jl")
         include("split-k.jl")
         include("gett-indexing.jl")
+        include("gett-edge.jl")
     end
 finally
     if myid() == 1
