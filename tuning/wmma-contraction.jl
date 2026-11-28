@@ -139,13 +139,28 @@ function config_iterator(problem)
     ) in param_product)
 end
 
+# Julia's type inference only handles tuples of up to `max_tuple_splat` elements (32 by default)
+# precisely; beyond that, updating the tuple of accumulator fragments allocates, which a kernel
+# can't (an `InvalidIRError`). The paper's results used a GPUCompiler patched to raise the limit
+# (`max_tuple_splat = typemax(Int)` in its `inference_params`), so read the active value rather
+# than assume the default.
+const MAX_TUPLE_SPLAT = try
+    job = CUDA.GPUCompiler.CompilerJob(
+        CUDA.GPUCompiler.methodinstance(typeof(identity), Tuple{Int}),
+        CUDA.compiler_config(nothing; cap = v"8.0"))
+    CUDA.GPUCompiler.inference_params(job).max_tuple_splat
+catch err
+    @warn "Could not read GPUCompiler's max_tuple_splat; assuming Julia's default of 32" exception = err
+    32
+end
+
 # Reject configurations that GemmKernels is certain to reject, without sending them to a
 # compilation worker, where each costs over a second (setting up types and a plan). Every rule
 # implies an error that the worker would raise: the ConfigErrors of `get_config` (block shape,
 # operator shape, elements per thread, warp tile) and of `plan_matmul` (pipelined stages,
 # shared memory, with a lower bound of the kernels' `shmem_size`), for the parameters that
-# `prepare(::TensorContraction)` passes. Configurations with more than 32 accumulator fragments
-# per warp fail to compile (an `InvalidIRError`: updating a tuple of more than 32 elements
+# `prepare(::TensorContraction)` passes. Configurations with more accumulator fragments per warp
+# than MAX_TUPLE_SPLAT fail to compile (an `InvalidIRError`: updating the tuple of fragments
 # allocates). A split-K configuration whose split equals that of a smaller number of parts in
 # the search space is a "duplicate". Returns the status to record, or `nothing` to compile the
 # configuration.
@@ -189,8 +204,8 @@ function precheck_config(config; max_shmem)
     shmem_lower_bound = max(4 * BLOCK_M * BLOCK_N, stages * 2 * (BLOCK_M * BLOCK_K + BLOCK_K * BLOCK_N))
     shmem_lower_bound > max_shmem && return rejected
 
-    # more than 32 accumulator fragments per warp do not compile
-    (warp_m ÷ OP_M) * (warp_n ÷ OP_N) > 32 && return "compilation_error"
+    # more accumulator fragments per warp than MAX_TUPLE_SPLAT do not compile
+    (warp_m ÷ OP_M) * (warp_n ÷ OP_N) > MAX_TUPLE_SPLAT && return "compilation_error"
 
     return nothing
 end

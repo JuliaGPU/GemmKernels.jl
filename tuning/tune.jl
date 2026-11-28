@@ -551,6 +551,8 @@ end
 
 function main()
     @info "Started tuning script."
+    @isdefined(MAX_TUPLE_SPLAT) &&
+        @info "GPUCompiler's max_tuple_splat is $MAX_TUPLE_SPLAT: configurations with more accumulator fragments per warp are not compiled."
 
     #
     # Phase 1: Prepare
