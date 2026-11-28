@@ -697,6 +697,11 @@ function main()
                 insertcols!(all_configs, findfirst(==("kernel_str"), names(all_configs)) + 1,
                             :SPLIT_K => ones(Int, nrow(all_configs)))
             end
+            # configurations from before the INDEXING dimension: add it, after SPLIT_K
+            if !("INDEXING" in names(all_configs)) && "SPLIT_K" in names(all_configs)
+                insertcols!(all_configs, findfirst(==("SPLIT_K"), names(all_configs)) + 1,
+                            :INDEXING => fill("default", nrow(all_configs)))
+            end
 
             @info "Loaded $(size(all_configs, 1)) configurations in $(prettytime(read_time))."
         catch err

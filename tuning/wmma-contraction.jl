@@ -54,6 +54,7 @@ function create_configs()
         OP_K=Int[],
         kernel_str=String[],
         SPLIT_K=Int[],
+        INDEXING=String[],
         ## layout
         is_A_col_major=Bool[],
         is_B_col_major=Bool[],
@@ -88,6 +89,14 @@ function split_k_values(problem)
     return (cld(M, 128) * cld(N, 128) < 256 && K >= 1024) ? SPLIT_K_VALUES : [1]
 end
 
+# The address arithmetic of the GETT layouts (GETTLayout.createGETTLayout's `indexing`):
+# "default" (the original layouts) or "lean32" (32-bit, without redundant modulos; only for
+# tensors with fewer than 2^31 elements, which precheck_config checks). Neither is faster for
+# every contraction (on an RTX 6000 Ada, lean32 made 8 of 9 TCCG contractions 2-27% faster
+# and one 7% slower), so both are tuned (GK_INDEXING; "default" restores the search space
+# from before).
+const INDEXING_VALUES = String.(strip.(split(get(ENV, "GK_INDEXING", "default,lean32"), ',')))
+
 function config_iterator(problem)
     param_product = shuffle_product(
         2 .^ (3:9),
@@ -98,6 +107,7 @@ function config_iterator(problem)
         [(16, 16, 16), (8, 32, 16), (32, 8, 16)],
         KERNEL_STRINGS,
         split_k_values(problem),
+        INDEXING_VALUES,
 
         [false, true],
         [false, true],
@@ -122,6 +132,7 @@ function config_iterator(problem)
         OP_M, OP_N, OP_K,
         kernel_str,
         SPLIT_K,
+        INDEXING,
 
         is_A_col_major,
         is_B_col_major,
@@ -133,7 +144,7 @@ function config_iterator(problem)
         cta_swizzle_str
     ) for (
         BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N,
-        (OP_M, OP_N, OP_K), kernel_str, SPLIT_K, is_A_col_major,
+        (OP_M, OP_N, OP_K), kernel_str, SPLIT_K, INDEXING, is_A_col_major,
         is_B_col_major, is_D_col_major, PERM_M, PERM_N,
         PERM_K, cta_swizzle_str
     ) in param_product)
@@ -154,6 +165,7 @@ end
 function precheck_config(config; max_shmem)
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel_str) = config
     SPLIT_K = hasproperty(config, :SPLIT_K) ? config.SPLIT_K : 1
+    INDEXING = hasproperty(config, :INDEXING) ? config.INDEXING : "default"
     warps = WARPS_M * WARPS_N
     rejected = "config_error_during_prepare"
 
@@ -182,6 +194,14 @@ function precheck_config(config; max_shmem)
         per_part = cld(k_tiles, SPLIT_K)
         any(s -> 1 <= s < SPLIT_K && cld(k_tiles, s) == per_part, SPLIT_K_VALUES) &&
             return "duplicate"
+    end
+    # createGETTLayout: known address arithmetic; lean32 only for (padded) tensors with fewer
+    # than 2^31 elements
+    INDEXING in ("default", "lean32") || return rejected
+    if INDEXING == "lean32"
+        modes = [parse.(Int, split(m, '.')) for m in split(config.name, '-')]
+        padded = Configs.pad_extents(config.extents, modes, (M = BLOCK_M, N = BLOCK_N, K = BLOCK_K))
+        any(m -> prod(padded[m]) > typemax(Int32), modes) && return rejected
     end
     # plan_matmul: shared memory. A and B are Float16 (padding only adds), D is Float32.
     stages = kernel_str == "pipelined_ng" ? 2 :
@@ -220,6 +240,7 @@ function repr_row(row)
     print(io, ", $(row.cta_swizzle_str) swizzle")
     print(io, ", $(row.kernel_str) kernel")
     hasproperty(row, :SPLIT_K) && row.SPLIT_K != 1 && print(io, ", split-K $(row.SPLIT_K)")
+    hasproperty(row, :INDEXING) && row.INDEXING != "default" && print(io, ", $(row.INDEXING) indexing")
     print(io, ")")
 
     return String(take!(io))
@@ -244,9 +265,13 @@ function create_params(row)
     cta_swizzle = cta_swizzle_string_to_function(row.cta_swizzle_str)
     # configurations from before split-K have no SPLIT_K column
     SPLIT_K = hasproperty(row, :SPLIT_K) ? row.SPLIT_K : 1
+    # the address arithmetic of the GETT layouts (see INDEXING_VALUES); configurations from
+    # before that dimension have no INDEXING column
+    INDEXING = hasproperty(row, :INDEXING) ? row.INDEXING : "default"
 
     (; BLOCK_M, BLOCK_N, BLOCK_K, WARPS_M, WARPS_N, OP_M, OP_N, OP_K, kernel,
-       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle, SPLIT_K)
+       is_A_col_major, is_B_col_major, is_D_col_major, PERM_M, PERM_N, PERM_K, cta_swizzle, SPLIT_K,
+       INDEXING)
 end
 
 function kernel_string_to_function(str)
