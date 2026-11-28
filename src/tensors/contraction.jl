@@ -17,11 +17,12 @@ mutable struct ContractionPlan
     function ContractionPlan(desc::ContractionDescriptor, α, a, b, β, c, d;
                              algo::ALGO=ALGO_GETT, operator=Operator.WMMAOp,
                              blockShape=nothing, warpsPerBlock=nothing, computeWarp=nothing,
-                             kernel=Kernel.matmul_singlestage, splitK=1, indexing=:default)
+                             kernel=Kernel.matmul_singlestage, splitK=1, indexing=:default,
+                             edge=:pad)
         if algo == ALGO_GETT
             algorithmPlan =
                 setUpGETTKernel(desc, operator, blockShape, warpsPerBlock, computeWarp, α, β;
-                                indexing)
+                                indexing, edge)
 
             unaryOpA = desc.descA.unaryOp
             unaryOpB = desc.descB.unaryOp
@@ -59,7 +60,8 @@ mutable struct ContractionPlan
         computeWarp=nothing,
         kernel=Kernel.matmul_singlestage,
         splitK=1,
-        indexing=:default
+        indexing=:default,
+        edge=:pad
     )
         desc = ContractionDescriptor(
             descA, modeA,
@@ -70,7 +72,7 @@ mutable struct ContractionPlan
             accumulateType
         )
         return ContractionPlan(desc, α, a, b, β, c, d; algo, operator, kernel,
-                               blockShape, warpsPerBlock, computeWarp, splitK, indexing)
+                               blockShape, warpsPerBlock, computeWarp, splitK, indexing, edge)
     end
 
     function ContractionPlan(plan::ContractionPlan, operator)
