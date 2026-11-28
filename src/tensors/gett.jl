@@ -275,7 +275,8 @@ function createGETTContractionPlan(desc::ContractionDescriptor; indexing::Symbol
     )
 
     # Partial edge tiles (edge = :mask): the M and N dimensions need not be multiples of the
-    # block shape; the layouts mask the tiles beyond them (see GETTLayout.GETTLayoutMasked).
+    # block shape; the layouts skip the stores of the tiles beyond them, and clamp their loads
+    # (see GETTLayout.GETTLayoutMasked).
     edge in (:pad, :mask) || throw(ArgumentError("edge must be :pad or :mask, but is :$edge"))
     boundsA, boundsB, boundsD = edge == :mask ?
         ((gemmShape.M, 0), (0, gemmShape.N), (gemmShape.M, gemmShape.N)) : ((0, 0), (0, 0), (0, 0))
