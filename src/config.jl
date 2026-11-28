@@ -206,6 +206,12 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         throw(ConfigError("The block shape is too small. The dimensions of the block shape must adhere to the following constraints: BLOCK_M * BLOCK_K ≥ 128, BLOCK_K * BLOCK_N ≥ 128, BLOCK_K ≥ 8."))
     end
 
+    # Block shapes with other dimensions silently give wrong results (e.g. BLOCK_M = 72 or 80
+    # in tensor contractions), so reject them until they are supported.
+    if !all(ispow2, Tuple(block_shape))
+        throw(ConfigError("Unsupported block shape $(block_shape): BLOCK_M, BLOCK_N and BLOCK_K must be powers of two."))
+    end
+
     op_shape = Operator.shape(operator)
 
     if block_shape.M < 2 * op_shape.M || block_shape.N < 2 * op_shape.N || block_shape.K < op_shape.K
