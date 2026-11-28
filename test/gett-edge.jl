@@ -5,7 +5,8 @@ using GemmKernels.Tensors.GETTLayout
 isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
 
 # Partial edge tiles (createGETTLayout's `bounds`, the configs' EDGE = "mask"): M and N need
-# not be multiples of the block shape; the layouts mask the tiles beyond them.
+# not be multiples of the block shape; the layouts skip the stores of the tiles beyond them,
+# and clamp their loads to the last tile within them.
 
 @testset "GETT partial edge tiles" begin
     @testcase "layout types" begin
@@ -16,6 +17,12 @@ isdefined(@__MODULE__, :Configs) || include("../configs/configs.jl")
         @test !GemmKernels.require_tile_sized_global(masked)
         @test GETTLayout.createGETTLayout(args...; indexing = :lean32, bounds = (0, 5184)) <:
               GETTLayout.GETTLayoutMasked{Float16, <:GETTLayout.GETTLayoutLeanColMajor}
+        # loads beyond the bound are clamped to the last tile within it
+        tile = GemmKernels.Tiling.Tile{(M = 8, K = 1), (:M, :K), Tuple{Int, Int}}((M = 5184, K = 3), (M = 8, K = 0))
+        @test GETTLayout.clamp_tile(masked, tile).base.M + 8 == 5176
+        @test GETTLayout.clamp_tile(masked, tile).base.K == 3
+        tile = GemmKernels.Tiling.Tile{(M = 8, K = 1), (:M, :K), Tuple{Int, Int}}((M = 64, K = 3), (M = 8, K = 0))
+        @test GETTLayout.clamp_tile(masked, tile) == tile
     end
 
     if CUDA.functional()

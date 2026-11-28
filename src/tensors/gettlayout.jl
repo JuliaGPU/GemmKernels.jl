@@ -320,15 +320,24 @@ Base.@propagate_inbounds @inline Layout.tile_pointer(
              isLoadOrStoreStrided, strideOverExtent} =
     pointer(workspace) + (lean_offset(L, tile) - 1) * sizeof(T)
 
-# Partial edge tiles (opt-in, see `createGETTLayout`'s `edge`). The layouts above require the
-# GEMM dimensions to be multiples of the block shape, so the tensors are padded: whole modes,
-# which for a 128-wide tile over two modes of 72 means padding one to 80, i.e. 11% more work
-# per dimension. GETTLayoutMasked instead lets the last row and column of thread blocks extend
-# past the edge: it wraps a GETT layout, loads zeros for the tiles of each thread whose
-# logical coordinate lies beyond `bound1` (first dimension) or `bound2` (second dimension),
-# and skips their stores. A bound of 0 means that dimension is not masked. A thread's tile
-# never straddles a bound: `setUpGETTKernel` requires the bounds to be multiples of the tile
-# sizes of the copies.
+# Partial edge tiles (opt-in, see `createGETTLayout`'s `bounds`). The layouts above require
+# the GEMM dimensions to be multiples of the block shape, so the tensors are padded: whole
+# modes, which for a 128-wide tile over two modes of 72 means padding one to 80, i.e. 11% more
+# work per dimension. GETTLayoutMasked instead lets the last row and column of thread blocks
+# extend past the edge: it wraps a GETT layout, and skips the stores of the tiles of each
+# thread whose logical coordinate lies beyond `bound1` (first dimension) or `bound2` (second
+# dimension). A bound of 0 means that dimension is not masked. A thread's tile never straddles
+# a bound: `setUpGETTKernel` requires the bounds to be multiples of the tile sizes of the
+# copies.
+#
+# Loads beyond a bound need no zeros: a row of A beyond M (a column of B beyond N) only
+# contributes to rows (columns) of D beyond M (N), which are never stored. So instead of
+# masking them, such loads read the last tile within the bound again ("clamped"). Unlike
+# masked loads, that needs no branch and no zero values, and keeps the generated code close to
+# that of the padded layouts. With masked loads, LLVM restructured the main loops of the
+# pipelined kernels, and pipelined_ng spilled registers (TCCG TC13, TC19 and TC24 became
+# 16-34% slower than with padding); with clamped loads, TC19 and TC24 are 4% and 16% faster
+# than with padding.
 abstract type GETTLayoutMasked{T, L, bound1, bound2} <: Layout.LayoutBase{T} end
 
 @inline function in_bounds(::Type{GETTLayoutMasked{T, L, bound1, bound2}}, tile) where {T, L, bound1, bound2}
@@ -336,16 +345,20 @@ abstract type GETTLayoutMasked{T, L, bound1, bound2} <: Layout.LayoutBase{T} end
         (bound2 == 0 || tile.base[2] + tile.offset[2] < bound2)
 end
 
-Base.@propagate_inbounds @inline function Layout.load(
-        M::Type{GETTLayoutMasked{T, L, bound1, bound2}}, workspace, tile::Tile{size}
-    ) where {T, L, bound1, bound2, size}
-    NUMEL = size[1] * size[2]
-    if in_bounds(M, tile)
-        return Layout.load(L, workspace, tile)
-    else
-        return ntuple(_ -> VecElement{T}(zero(T)), Val(NUMEL))
-    end
+# the tile, moved back to the last tile within the bounds if it lies beyond them
+@inline function clamp_tile(::Type{GETTLayoutMasked{T, L, bound1, bound2}},
+                            tile::Tile{size, names, TT}) where {T, L, bound1, bound2, size, names, TT}
+    G1 = tile.base[1] + tile.offset[1]
+    G2 = tile.base[2] + tile.offset[2]
+    C1 = bound1 == 0 ? G1 : min(G1, oftype(G1, bound1 - size[1]))
+    C2 = bound2 == 0 ? G2 : min(G2, oftype(G2, bound2 - size[2]))
+    return Tile{size, names, TT}(NamedTuple{names}((C1 - tile.offset[1], C2 - tile.offset[2])), tile.offset)
 end
+
+Base.@propagate_inbounds @inline Layout.load(
+        M::Type{GETTLayoutMasked{T, L, bound1, bound2}}, workspace, tile::Tile
+    ) where {T, L, bound1, bound2} =
+    Layout.load(L, workspace, clamp_tile(M, tile))
 
 Base.@propagate_inbounds @inline function Layout.store!(
         M::Type{GETTLayoutMasked{T, L, bound1, bound2}}, workspace, value, tile::Tile
@@ -360,23 +373,16 @@ end
 @inline Layout.fragtype(::Type{GETTLayoutMasked{T, L, bound1, bound2}}, tile_size::NamedTuple) where {T, L, bound1, bound2} =
     Layout.fragtype(L, tile_size)
 
-# Asynchronous copies: the tiles within the edges are copied with cp.async, and those beyond
-# them get zeros with a plain store to shared memory, which the asynchronous-copy kernel
-# allows (see its copy_tile: the stage buffer is only read after a later barrier).
+# asynchronous copies: clamped like the loads
 Layout.contiguous_tiles(::Type{GETTLayoutMasked{T, L, bound1, bound2}}) where {T, L, bound1, bound2} =
     Layout.contiguous_tiles(L)
 
 Base.@propagate_inbounds @inline function Layout.copy_async!(
         M::Type{GETTLayoutMasked{T, L, bound1, bound2}}, shared_layout,
-        shared_workspace, global_workspace, shared_tile::Tile{size}, global_tile::Tile
-    ) where {T, L, bound1, bound2, size}
-    if in_bounds(M, global_tile)
-        Layout.copy_async!(L, shared_layout, shared_workspace, global_workspace, shared_tile, global_tile)
-    else
-        zeros = ntuple(_ -> VecElement{T}(zero(T)), Val(size[1] * size[2]))
-        Layout.store!(shared_layout, shared_workspace, zeros, shared_tile)
-    end
-    return
+        shared_workspace, global_workspace, shared_tile::Tile, global_tile::Tile
+    ) where {T, L, bound1, bound2}
+    Layout.copy_async!(L, shared_layout, shared_workspace, global_workspace, shared_tile,
+                       clamp_tile(M, global_tile))
 end
 
 # The address arithmetic of the GETT layouts (see GETTLayoutLean):
